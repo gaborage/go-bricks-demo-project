@@ -1,0 +1,23 @@
+# Prometheus Configuration for go-bricks Observability
+# Scrapes metrics from OpenTelemetry Collector
+
+global:
+  scrape_interval: 15s      # How often to scrape targets
+  evaluation_interval: 15s  # How often to evaluate rules
+  external_labels:
+    environment: 'development'
+    cluster: 'local'
+
+# Scrape configurations
+scrape_configs:
+  # Scrape OpenTelemetry Collector's Prometheus exporter (application metrics)
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector-local:8889']
+        labels:
+          service: 'otel-collector'
+
+  # Scrape Prometheus itself (for monitoring)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,0 +1,108 @@
+# OpenTelemetry Collector Configuration for DataDog Integration
+# This collector acts as an intermediary between your application and DataDog
+# Application -> OTel Collector (OTLP) -> DataDog (native protocol)
+
+receivers:
+  # OTLP receiver - accepts traces and metrics from your application
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor - batches telemetry before export for efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Resource detection processor - adds cloud/host metadata
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 2s
+
+  # Resource processor - explicitly sets service metadata for DataDog
+  resource:
+    attributes:
+      - key: service.name
+        value: go-bricks-demo-project
+        action: upsert
+      - key: deployment.environment
+        value: development
+        action: upsert
+      - key: service.version
+        value: 1.0.0
+        action: upsert
+
+connectors:
+  # DataDog connector - computes APM stats (hits, errors, duration) from traces
+  # Required for traces to appear in DataDog APM UI (since OTel Collector v0.95.0+)
+  datadog/connector:
+    traces:
+      compute_stats_by_span_kind: true
+      peer_tags_aggregation: true
+      compute_top_level_by_span_kind: true
+
+exporters:
+  # DataDog exporter - sends data to DataDog using their native protocol
+  datadog:
+    api:
+      site: ${DD_SITE}
+      key: ${DD_API_KEY}
+      fail_on_invalid_key: true  # Fail fast if API key is invalid
+
+    # Host metadata
+    host_metadata:
+      enabled: true
+      hostname_source: config_or_system
+
+    # Trace configuration
+    traces:
+      span_name_as_resource_name: true
+      # Note: compute_stats_by_span_kind is now handled by datadog/connector
+      # since OTel Collector v0.95.0+
+
+    # Metrics configuration
+    metrics:
+      resource_attributes_as_tags: true
+      instrumentation_scope_metadata_as_tags: true
+
+  # Debug exporter - logs telemetry to console for troubleshooting
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  pipelines:
+    # ========== TRACE PIPELINES ==========
+    # Stage 1: Receive traces from application and send to connector for APM stats computation
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [datadog/connector]
+
+    # Stage 2: Send processed traces (with APM stats) to DataDog
+    traces/2:
+      receivers: [datadog/connector]
+      processors: [batch]
+      exporters: [datadog, debug]
+
+    # ========== METRICS PIPELINES ==========
+    # Application metrics: OTLP receiver -> DataDog exporter
+    metrics:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [datadog]
+
+    # APM metrics: Computed by connector from traces -> DataDog exporter
+    metrics/2:
+      receivers: [datadog/connector]
+      processors: [batch]
+      exporters: [datadog]
+
+  # Telemetry configuration for the collector itself
+  telemetry:
+    logs:
+      level: debug  # Enable verbose logging to see DataDog export details

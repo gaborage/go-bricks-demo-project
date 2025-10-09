@@ -1,0 +1,191 @@
+# Go Bricks Demo Project - Docker Compose Setup
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: go-bricks-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: go-bricks-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
+  # Flyway migration service
+  flyway:
+    image: flyway/flyway:10-alpine
+    container_name: go-bricks-flyway
+    command: info  # Default command (can be overridden)
+    environment:
+      - FLYWAY_URL=jdbc:postgresql://postgres:5432/postgres
+      - FLYWAY_USER=postgres
+      - FLYWAY_PASSWORD=postgres
+      - FLYWAY_SCHEMAS=public
+      - FLYWAY_TABLE=flyway_schema_history
+      - FLYWAY_BASELINE_ON_MIGRATE=true
+    volumes:
+      - ../../migrations:/flyway/sql:ro
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - migrations  # Only start with --profile migrations
+
+  # ========== OBSERVABILITY STACKS ==========
+  # Use docker-compose profiles to switch between DataDog and Prometheus stacks
+  # DataDog:    docker-compose --profile datadog up -d
+  # Prometheus: docker-compose --profile local up -d
+
+  # OpenTelemetry Collector - DataDog variant (exports to DataDog Cloud)
+  otel-collector-datadog:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: go-bricks-otel-collector-datadog
+    command: ["--config=/etc/otel-collector-datadog.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Prometheus metrics (collector's own metrics)
+      - "13133:13133" # Health check
+    environment:
+      - DD_API_KEY=${DD_API_KEY:?DD_API_KEY environment variable is required}
+      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
+    volumes:
+      - ./otel/otel-collector-datadog.yaml:/etc/otel-collector-datadog.yaml:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - datadog
+
+  # OpenTelemetry Collector - Prometheus variant (exports to local Prometheus + Jaeger)
+  otel-collector-local:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: go-bricks-otel-collector-local
+    command: ["--config=/etc/otel-collector-prometheus.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Collector's own metrics
+      - "8889:8889"   # Prometheus exporter (application metrics)
+      - "13133:13133" # Health check
+    volumes:
+      - ./otel/otel-collector-prometheus.yaml:/etc/otel-collector-prometheus.yaml:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - local
+
+  # Prometheus - metrics storage and query engine (local stack only)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: go-bricks-prometheus
+    ports:
+      - "9090:9090"   # Prometheus UI
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - app-network
+    depends_on:
+      - otel-collector-local
+    profiles:
+      - local
+
+  # Grafana - metrics visualization (local stack only)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: go-bricks-grafana
+    ports:
+      - "3000:3000"   # Grafana UI
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - app-network
+    depends_on:
+      - prometheus
+    profiles:
+      - local
+
+  # Jaeger - distributed tracing UI (local stack only)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: go-bricks-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14250:14250" # gRPC receiver (for OTel Collector)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - app-network
+    profiles:
+      - local
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
