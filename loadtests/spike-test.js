@@ -18,7 +18,7 @@
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Rate, Trend, Counter, Gauge } from 'k6/metrics';
+import { Rate, Trend, Gauge } from 'k6/metrics';
 import { config, getURL, getRandomProduct, getRandomPage, headers } from './config.js';
 
 // Custom metrics

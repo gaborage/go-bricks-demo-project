@@ -77,7 +77,7 @@ export default function () {
     if (response.status === 0 || response.error_code === 1050) {
       connectionIssues.add(1);
     }
-    if (response.status === 0 && response.error && response.error.includes('timeout')) {
+    if (response.status === 0 && response.error?.includes('timeout')) {
       timeouts.add(1);
     }
 
