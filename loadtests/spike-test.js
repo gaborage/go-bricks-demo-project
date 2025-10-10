@@ -354,8 +354,4 @@ export function handleSummary(data) {
   console.log(`  Spike handling:        ${acceptableSpike ? '✅ Good' : '❌ Poor - too many errors'}`);
   console.log(`  Recovery speed:        ${goodRecovery ? '✅ Good' : '❌ Poor - slow recovery'}`);
   console.log('');
-
-  return {
-    'stdout': data,
-  };
 }

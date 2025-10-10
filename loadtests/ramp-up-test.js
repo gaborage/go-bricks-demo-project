@@ -314,8 +314,4 @@ export function handleSummary(data) {
   console.log('');
   console.log(passed ? '✅ TEST PASSED' : '❌ TEST FAILED - Review thresholds');
   console.log('');
-
-  return {
-    'stdout': data,
-  };
 }
