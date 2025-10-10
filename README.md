@@ -163,7 +163,9 @@ go-bricks-demo-project/
 
 ## License
 
-Part of the go-bricks framework.
+MIT License - see [LICENSE](LICENSE) file for details.
+
+This project is fully open source and free to use, modify, and distribute.
 
 ---
 
