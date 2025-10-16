@@ -11,7 +11,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Multi-tenant capable (currently running in single-tenant mode)
 - PostgreSQL + RabbitMQ infrastructure
 - REST API with Echo web framework
-- Dual observability stacks: Prometheus/Grafana/Jaeger (local) + DataDog (cloud)
+- Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + DataDog (cloud)
 - Comprehensive load testing with k6
 
 **Requirements:**
@@ -40,11 +40,11 @@ curl http://localhost:8080/api/v1/products
 
 ### Development Workflow
 ```bash
+make dev            # Full dev environment: docker-up + migrate (recommended first step)
 make build          # Build application binary to bin/go-bricks-demo-project
 make run            # Build + run (requires services to be running)
 make test           # Run all tests with race detector
 make check          # Run fmt + lint + test (pre-commit checks)
-make dev            # Start docker-up + migrate (full dev environment setup)
 ```
 
 ### Docker Infrastructure
@@ -73,7 +73,7 @@ make coverage       # Generate HTML coverage report
 ### Load Testing
 ```bash
 make loadtest-install    # Install k6 load testing tool
-make loadtest-smoke      # Quick validation (30 seconds)
+make loadtest-smoke      # Quick validation (30 seconds) - run this first!
 make loadtest-crud       # Realistic CRUD mix test (~15 min)
 make loadtest-read       # Read-only baseline test (~12 min)
 make loadtest-ramp       # Find breaking points (~17 min)
@@ -159,14 +159,26 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 ```
 
-**In handlers/services:**
+**In repository methods:**
 ```go
-func (h *Handler) GetProduct(ctx context.Context, id string) (*Product, error) {
-    db, err := h.getDB(ctx)  // Get DB for this request's context
+func (r *Repository) GetByID(ctx context.Context, id string) (*Product, error) {
+    db, err := r.getDB(ctx)  // Get DB for this request's context
     if err != nil {
         return nil, err
     }
-    return h.repo.FindByID(ctx, db, id)
+
+    // Use type-safe Filter API
+    qb := database.NewQueryBuilder(database.PostgreSQL)
+    f := qb.Filter()
+    query, args, err := qb.Select("id", "name", "price").
+        From("products").
+        Where(f.Eq("id", id)).
+        ToSQL()
+    if err != nil {
+        return nil, err
+    }
+
+    // Execute query...
 }
 ```
 
@@ -186,7 +198,7 @@ func (h *Handler) GetProduct(ctx context.Context, id string) (*Product, error) {
 
 The project supports **two observability stacks** that can be switched using Docker Compose profiles:
 
-### Local Stack (Prometheus + Grafana + Jaeger)
+### Local Stack (Prometheus + Grafana + Tempo + Loki)
 
 **Best for:** Local development with immediate feedback (< 30 seconds vs. 10-15 min cloud delay)
 
@@ -197,15 +209,67 @@ docker-compose --profile local up -d
 ```
 
 **Access:**
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (admin/admin)
-- Jaeger: http://localhost:16686
+- Prometheus: http://localhost:9090 (metrics storage)
+- Grafana: http://localhost:3000 (admin/admin) - **Dashboards pre-loaded!**
+- Tempo: http://localhost:3200 (distributed tracing backend)
+- Grafana Drilldown → Traces: DataDog-like trace exploration (queryless!)
+- Loki: http://localhost:3100 (log aggregation)
 
 **Features:**
-- Metrics scraped from OTel Collector on port 8889
-- Distributed tracing with Jaeger
-- Auto-provisioned Grafana datasources
+- **Metrics** scraped from OTel Collector on port 8889
+- **Distributed tracing** with Tempo (DataDog APM-like capabilities)
+- **APM metrics generation** - Automatic RED metrics from traces (like DataDog!)
+- **Service graphs** - Visual service topology and dependencies
+- **TraceQL** - Powerful query language for trace analysis
+- **Log aggregation** with Loki (via Grafana Alloy)
+- **Pre-built dashboards** (see Dashboard section below)
+- Auto-provisioned Grafana datasources with **log ↔ trace correlation**
 - No cloud dependency (work offline)
+
+### Pre-built Grafana Dashboards
+
+The local stack includes two production-ready dashboards:
+
+**1. Application Overview** (`Go Bricks - Application Overview`)
+- **Golden Signals:** Request rate, P95 latency, error rate, DB query time
+- **Response Time Percentiles:** p50, p95, p99 over time
+- **Request Rate by Endpoint:** Track traffic distribution
+- **Database Performance:** Query latency by operation type (select, insert, update, delete)
+- **HTTP Status Distribution:** Visualize 2xx, 4xx, 5xx responses
+- **Live Application Logs:** Tail logs directly in the dashboard
+- **Go Runtime Metrics (OTel):** Memory usage, goroutines, CPU, GC performance, file descriptors
+- **Advanced Go Metrics:** GOMEMLIMIT, GOMAXPROCS, GOGC config, GC heap goal, scheduler latency, allocation rates
+
+**OTel Runtime Metrics Support:**
+The dashboard now uses OpenTelemetry semantic conventions for Go runtime metrics:
+- Memory metrics: `gobricks_go_memory_used` (with type labels), `gobricks_go_memory_limit`, `gobricks_go_memory_allocated`
+- Goroutine metrics: `gobricks_go_goroutine_count`
+- GC metrics: `gobricks_go_memory_gc_goal`, existing `go_gc_duration_seconds`
+- Config metrics: `gobricks_go_processor_limit` (GOMAXPROCS), `gobricks_go_config_gogc`
+- Scheduler metrics: `gobricks_go_schedule_duration` (histogram)
+- Allocation metrics: `gobricks_go_memory_allocations` (count)
+- All panels include fallback to legacy `go_memstats_*` metrics for backward compatibility
+
+**2. Error Analysis** (`Go Bricks - Error Analysis`)
+- **HTTP Error Rate:** Track 4xx/5xx errors by endpoint over time
+- **Error Count by Status Code:** Bar chart of total errors
+- **Success Rate Gauge:** Real-time SLA tracking
+- **Error Logs Stream:** Live error-level logs with JSON parsing
+- **Top Error Endpoints:** Identify problematic routes
+- **Log Volume by Level:** Visualize log distribution (info, warn, error)
+
+**Access dashboards:**
+1. Open Grafana: http://localhost:3000
+2. Navigate to **Dashboards** → **Go Bricks** folder
+3. Or use direct links:
+   - Overview: http://localhost:3000/d/go-bricks-overview
+   - Errors: http://localhost:3000/d/go-bricks-errors
+
+**Dashboard features:**
+- **Auto-refresh:** Every 10 seconds
+- **Log → Trace correlation:** Click trace_id in logs to jump to Tempo trace
+- **Trace → Log correlation:** Navigate from trace to related logs seamlessly
+- **Customizable:** Edit and save your own versions
 
 ### Cloud Stack (DataDog)
 
@@ -235,11 +299,54 @@ docker-compose --profile local up -d
 cd etc/docker && docker-compose down
 
 # Start desired stack
-docker-compose --profile local up -d      # For Prometheus/Grafana
+docker-compose --profile local up -d      # For Prometheus/Grafana/Loki/Tempo
 docker-compose --profile datadog up -d    # For DataDog
 ```
 
 **Note:** Application doesn't need restart when switching - it always sends to `localhost:4317`.
+
+### Log Collection Architecture
+
+**Planned implementation (OTLP export via Grafana Alloy):**
+```
+Application (zerolog) → OTel SDK → Grafana Alloy → Loki → Grafana
+                                  ↓
+                              (also exports to Tempo & Prometheus)
+```
+
+**Current Status:**
+- ⚠️ **OTLP log export is NOT working yet** - go-bricks framework may not have fully implemented OTLP log export
+- Configuration shows `mode="stdout+OTLP"` but logs are only going to stdout
+- Grafana Alloy is configured and ready to receive OTLP logs on port 4317
+- Loki is configured with `volume_enabled: true` and ready to ingest logs
+
+**When OTLP logs work, you'll get:**
+- Better log ↔ trace correlation (trace_id automatically linked)
+- Structured log attributes as Loki labels
+- Dual-mode logging: action logs (HTTP summaries) + trace logs (debug)
+
+### Querying Logs in Grafana
+
+**LogQL query examples:**
+
+```logql
+# All error-level logs
+{container_name=~".*"} |= "level" | json | level="error"
+
+# Logs for a specific trace
+{container_name=~".*"} |= "trace_id" | json | trace_id="abc123"
+
+# HTTP errors (status >= 400)
+{container_name=~".*"} | json | http_status >= 400
+
+# Search for specific text in messages
+{container_name=~".*"} |= "database connection failed"
+
+# Rate of error logs (errors per second)
+sum(rate({container_name=~".*"} | json | level="error" [5m]))
+```
+
+**Tip:** Use **Explore** view in Grafana for ad-hoc log queries, or use pre-built dashboard panels.
 
 ### Available Metrics
 
@@ -405,12 +512,34 @@ m.logger.Info().
 ```
 
 ### Database Queries
-Use Squirrel query builder (imported by go-bricks):
+Use go-bricks type-safe Filter API for all queries:
+
 ```go
-query := squirrel.Select("*").
+qb := database.NewQueryBuilder(database.PostgreSQL)
+f := qb.Filter()
+
+// SELECT with filters
+query, args, err := qb.Select("id", "name", "price").
     From("products").
-    Where(squirrel.Eq{"id": id})
+    Where(f.Eq("status", "active")).
+    Where(f.Gt("price", 10.0)).
+    ToSQL()
+
+// UPDATE with filters
+query, args, err := qb.Update("products").
+    Set("status", "inactive").
+    Where(f.Eq("id", productID)).
+    ToSQL()
+
+// DELETE with filters
+query, args, err := qb.Delete("products").
+    Where(f.Eq("id", productID)).
+    ToSQL()
 ```
+
+**Filter methods:** `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
+
+**Important:** Always use `ToSQL()` (uppercase) not `ToSql()` for consistent API.
 
 ### Migrations
 - Place SQL files in [migrations/](migrations/) directory
@@ -423,10 +552,16 @@ All Docker-related files are in [etc/docker/](etc/docker/) directory:
 - `docker-compose.yml` - Main compose file with service profiles
 - `otel/` - OpenTelemetry Collector configurations (Prometheus vs. DataDog)
 - `prometheus/` - Prometheus scrape configuration
-- `grafana/` - Grafana datasource auto-provisioning
+- `promtail/` - Promtail log collection configuration
+- `loki/` - Loki log storage configuration
+- `grafana/provisioning/` - Auto-provisioning configs
+  - `datasources/` - Prometheus, Tempo, Loki datasources
+  - `dashboards/` - Dashboard provider configuration
+  - `dashboards/json/` - Pre-built dashboard JSON files
+- `alloy/` - (Reserved for future Grafana Alloy integration)
 
 **Service profiles:**
-- `--profile local` - Prometheus + Grafana + Jaeger (local development)
+- `--profile local` - Prometheus + Grafana + Tempo + Loki (local development)
 - `--profile datadog` - DataDog Cloud integration (production-like)
 - `--profile migrations` - Flyway migration runner
 
@@ -462,4 +597,29 @@ database.query.slow.enabled: true
 
 # Run application and check logs for slow queries
 make run
+```
+
+### Grafana Not Showing Logs
+```bash
+# Symptom: Loki datasource works but no logs appear in dashboards
+# Solution 1: Check Promtail is running and collecting logs
+docker logs go-bricks-promtail
+
+# Solution 2: Verify Loki is receiving data
+curl http://localhost:3100/ready
+curl http://localhost:3100/metrics | grep loki_ingester_streams_created_total
+
+# Solution 3: Ensure application is running and generating logs
+docker ps | grep go-bricks
+
+# Solution 4: Test Loki query manually
+curl -G -s "http://localhost:3100/loki/api/v1/query" --data-urlencode 'query={container_name=~".*"}' | jq
+```
+
+### OTel Collector Unhealthy Status
+```bash
+# This is expected behavior - collector may show "unhealthy" but still works
+# Check if it's actually processing telemetry:
+curl http://localhost:8889/metrics | grep gobricks_  # Should show metrics
+docker logs go-bricks-otel-collector-local | tail -20  # Should show trace/metric processing
 ```

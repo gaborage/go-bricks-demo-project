@@ -71,9 +71,11 @@ func (r *ProductRepository) GetByID(ctx context.Context, id string) (*domain.Pro
 	}
 
 	qb := database.NewQueryBuilder(database.PostgreSQL)
+	f := qb.Filter()
+
 	query, args, err := qb.Select("id", "name", "description", "price", "image_url", "created_date", "updated_date").
 		From("products").
-		WhereEq("id", id).
+		Where(f.Eq("id", id)).
 		ToSQL()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build select query: %w", err)
@@ -180,6 +182,7 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	}
 
 	qb := database.NewQueryBuilder(database.PostgreSQL)
+	f := qb.Filter()
 	updateBuilder := qb.Update("products")
 
 	// Add each field to update
@@ -188,8 +191,8 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	}
 
 	query, args, err := updateBuilder.
-		Where("id = ?", id).
-		ToSql()
+		Where(f.Eq("id", id)).
+		ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build update query: %w", err)
 	}
@@ -219,9 +222,10 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 	}
 
 	qb := database.NewQueryBuilder(database.PostgreSQL)
+	f := qb.Filter()
 	query, args, err := qb.Delete("products").
-		Where("id = ?", id).
-		ToSql()
+		Where(f.Eq("id", id)).
+		ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build delete query: %w", err)
 	}

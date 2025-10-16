@@ -1,5 +1,6 @@
 # Prometheus Configuration for go-bricks Observability
-# Scrapes metrics from OpenTelemetry Collector
+# Receives metrics from Grafana Alloy via remote_write API
+# Note: Application metrics are now pushed via remote_write instead of scraping
 
 global:
   scrape_interval: 15s      # How often to scrape targets
@@ -10,14 +11,26 @@ global:
 
 # Scrape configurations
 scrape_configs:
-  # Scrape OpenTelemetry Collector's Prometheus exporter (application metrics)
-  - job_name: 'otel-collector'
-    static_configs:
-      - targets: ['otel-collector-local:8889']
-        labels:
-          service: 'otel-collector'
-
   # Scrape Prometheus itself (for monitoring)
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
+
+  # Optional: Scrape Alloy's own metrics (for monitoring the collector)
+  - job_name: 'alloy'
+    static_configs:
+      - targets: ['grafana-alloy:12345']
+        labels:
+          service: 'grafana-alloy'
+
+  # Scrape application metrics directly (for load testing and real-time monitoring)
+  # Note: On macOS, use host.docker.internal to reach host processes from containers
+  - job_name: 'go-bricks-demo-project'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+        labels:
+          service: 'go-bricks-demo-project'
+          environment: 'development'

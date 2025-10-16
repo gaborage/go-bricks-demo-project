@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-down logs status check-deps deps fmt lint coverage check migrate test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all
+.PHONY: help build run test clean docker-up docker-down logs status check-deps deps fmt lint coverage check migrate test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -34,13 +34,16 @@ help:
 	@echo "  test-products-api Test products API endpoints"
 	@echo ""
 	@echo "Load Testing:"
-	@echo "  loadtest-install  Install k6 load testing tool"
-	@echo "  loadtest-crud     Run CRUD mix load test"
-	@echo "  loadtest-read     Run read-only baseline test"
-	@echo "  loadtest-ramp     Run ramp-up test (find limits)"
-	@echo "  loadtest-spike    Run spike test (traffic bursts)"
-	@echo "  loadtest-sustained Run sustained load test (15min)"
-	@echo "  loadtest-all      Run all load tests in sequence"
+	@echo "  loadtest-install          Install k6 load testing tool"
+	@echo "  loadtest-crud             Run CRUD mix load test"
+	@echo "  loadtest-read             Run read-only baseline test"
+	@echo "  loadtest-ramp             Run ramp-up test (find limits)"
+	@echo "  loadtest-spike            Run spike test (traffic bursts)"
+	@echo "  loadtest-sustained        Run sustained load test (15min)"
+	@echo "  loadtest-all              Run all load tests in sequence"
+	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
+	@echo "  loadtest-monitor          Start manual monitoring"
+	@echo "  loadtest-analyze FILE=... Analyze metrics file"
 
 # Check if required dependencies are installed
 check-deps:
@@ -265,3 +268,31 @@ loadtest-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/products-crud.js
 	@echo ""
 	@echo "✅ Smoke test completed"
+
+# Run all load tests with monitoring and automated analysis
+loadtest-all-monitored:
+	@echo "🔍 Running load tests with monitoring..."
+	@echo "This will:"
+	@echo "  - Monitor goroutines, memory, and DB connections"
+	@echo "  - Run all 5 load tests (~60 minutes)"
+	@echo "  - Generate automated analysis report"
+	@echo ""
+	@./scripts/run-loadtest-all-monitored.sh
+
+# Start load test monitoring manually
+loadtest-monitor:
+	@echo "📊 Starting load test monitoring..."
+	@echo "Metrics will be saved to loadtest-results/"
+	@echo "Press Ctrl+C to stop"
+	@echo ""
+	@mkdir -p loadtest-results
+	@./scripts/monitor-loadtest.sh loadtest-results/metrics-$$(date +%Y%m%d-%H%M%S).csv 10
+
+# Analyze load test results
+loadtest-analyze:
+	@echo "📈 Analyzing load test results..."
+	@if [ -z "$(FILE)" ]; then \
+		echo "Usage: make loadtest-analyze FILE=loadtest-results/metrics-TIMESTAMP.csv"; \
+		exit 1; \
+	fi
+	@./scripts/analyze-loadtest-results.sh $(FILE)

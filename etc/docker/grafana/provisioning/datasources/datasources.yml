@@ -1,5 +1,11 @@
 # Grafana Datasource Provisioning
-# Auto-configures Prometheus and Jaeger datasources
+# Auto-configures Prometheus, Jaeger, and Loki datasources
+#
+# Log Collection Architecture (Dual-Mode Logging):
+# Application → OTLP → OTel Collector → Loki
+#   - Action logs (log.type="action"): 100% sampled HTTP request summaries
+#   - Trace logs (log.type="trace"): WARN+ application debug logs only
+#   - Promtail removed - using native OTLP ingestion
 
 apiVersion: 1
 
@@ -8,6 +14,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
+    uid: prometheus
     url: http://prometheus:9090
     isDefault: true
     editable: true
@@ -15,9 +22,71 @@ datasources:
       timeInterval: '15s'
       httpMethod: POST
 
-  # Jaeger datasource for distributed tracing
-  - name: Jaeger
-    type: jaeger
+  # Tempo datasource for distributed tracing
+  # Tempo provides DataDog APM-like features: TraceQL queries, service graphs, APM metrics
+  - name: Tempo
+    type: tempo
     access: proxy
-    url: http://jaeger:16686
+    uid: tempo
+    url: http://tempo:3200
     editable: true
+    jsonData:
+      # Trace to logs correlation (jump from trace to related logs)
+      tracesToLogsV2:
+        datasourceUid: 'loki'
+        tags: ['trace_id', 'traceID']
+        mappedTags: [{ key: 'service.name', value: 'service_name' }]
+        mapTagNamesEnabled: true
+        spanStartTimeShift: '-1h'
+        spanEndTimeShift: '1h'
+        filterByTraceID: true
+        filterBySpanID: false
+
+      # Trace to metrics correlation (jump from trace to related metrics)
+      tracesToMetrics:
+        datasourceUid: 'prometheus'
+        tags: [{ key: 'service.name', value: 'service_name' }, { key: 'http.method', value: 'method' }]
+        queries:
+          - name: 'Request rate'
+            query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))'
+          - name: 'Error rate'
+            query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags,status_code="STATUS_CODE_ERROR"}[5m]))'
+          - name: 'Duration'
+            query: 'histogram_quantile(0.9, sum(rate(traces_spanmetrics_latency_bucket{$$__tags}[5m])) by (le))'
+
+      # Service graph (shows service dependencies from traces)
+      serviceMap:
+        datasourceUid: 'prometheus'
+
+      # Node graph (topology view of services)
+      nodeGraph:
+        enabled: true
+
+      # TraceQL search configuration
+      search:
+        hide: false
+
+      # Loki search for trace discovery via logs
+      lokiSearch:
+        datasourceUid: 'loki'
+
+  # Loki datasource for log aggregation (OTLP-based)
+  # Logs are enriched with OpenTelemetry resource attributes:
+  #   - service_name: "go-bricks-demo-project"
+  #   - log_type: "action" or "trace"
+  #   - severity_text: "info", "warn", "error"
+  - name: Loki
+    type: loki
+    access: proxy
+    uid: loki
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # Extract trace_id from logs and link to Tempo
+        - datasourceUid: 'tempo'
+          matcherRegex: '"trace_id":"(\w+)"'
+          name: 'TraceID'
+          url: '$${__value.raw}'
+          urlDisplayLabel: 'View Trace in Tempo'

@@ -1,0 +1,158 @@
+// Grafana Alloy Configuration for Go Bricks Demo Project
+// Replaces OpenTelemetry Collector with native Loki support
+//
+// Architecture:
+// Application → Alloy (OTLP receiver) → {Prometheus, Loki, Tempo}
+//   - Metrics → Prometheus (via remote_write)
+//   - Logs → Loki (via otelcol.exporter.loki with dual-mode support)
+//   - Traces → Tempo (via OTLP) - Generates APM metrics like DataDog
+
+// ============================================================================
+// OTLP Receiver - Accept telemetry from application
+// ============================================================================
+otelcol.receiver.otlp "default" {
+  // gRPC receiver on port 4317
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  // HTTP receiver on port 4318
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  // Route telemetry to processors
+  output {
+    metrics = [otelcol.processor.transform.add_resource_attrs.input]  // Convert resource attrs to datapoint attrs
+    logs    = [otelcol.processor.attributes.logs.input]               // Process logs for label mapping
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+// ============================================================================
+// Transform Processor - Convert resource attributes to metric datapoint attributes
+// ============================================================================
+// This processor copies resource attributes (service.name, etc.) to metric datapoint
+// attributes so they become Prometheus labels. The otelcol.exporter.prometheus
+// component automatically converts datapoint attributes to Prometheus labels.
+otelcol.processor.transform "add_resource_attrs" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context = "datapoint"
+    statements = [
+      "set(datapoint.attributes[\"service_name\"], resource.attributes[\"service.name\"])",
+      "set(datapoint.attributes[\"service_version\"], resource.attributes[\"service.version\"])",
+      "set(datapoint.attributes[\"deployment_environment\"], resource.attributes[\"deployment.environment\"])",
+    ]
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+  }
+}
+
+// ============================================================================
+// Attribute Processor for Logs - Map resource attributes to Loki labels
+// ============================================================================
+// This enables dual-mode logging by converting the log.type resource attribute
+// to a Loki label, allowing Grafana queries to filter by log type:
+//   - log_type="action": HTTP request summaries (100% sampled)
+//   - log_type="trace": Application debug logs (WARN+ only)
+otelcol.processor.attributes "logs" {
+  // Map resource attributes to Loki labels
+  action {
+    key    = "loki.resource.labels"
+    value  = "service.name, service.instance.id, deployment.environment, log.type"
+    action = "insert"
+  }
+
+  // Map log attributes to Loki labels (optional, for additional filtering)
+  action {
+    key    = "loki.attribute.labels"
+    value  = "level"
+    action = "insert"
+  }
+
+  output {
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+// ============================================================================
+// Batch Processor - Improve efficiency and reduce network overhead
+// ============================================================================
+otelcol.processor.batch "default" {
+  // Batch configuration
+  timeout          = "5s"
+  send_batch_size  = 512
+
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    logs    = [otelcol.exporter.loki.default.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// ============================================================================
+// Prometheus Exporter - Export metrics via remote_write
+// ============================================================================
+// Converts OpenTelemetry metrics to Prometheus format and sends via remote_write
+// By default, otelcol.exporter.prometheus automatically includes resource attributes
+// as metric labels, so service.name becomes service_name, etc.
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+
+    // Optional: Add queue configuration for reliability
+    queue_config {
+      capacity             = 10000
+      max_shards           = 50
+      min_shards           = 1
+      max_samples_per_send = 500
+      batch_send_deadline  = "5s"
+      min_backoff          = "30ms"
+      max_backoff          = "5s"
+    }
+  }
+}
+
+// ============================================================================
+// Loki Exporter - Convert OTLP logs to Loki format
+// ============================================================================
+// This component converts OpenTelemetry logs to Loki-formatted log entries
+// and forwards them to the loki.write component. Resource attributes specified
+// in the attributes processor (e.g., service.name, log.type) become Loki labels.
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    cluster = "local",
+    env     = "development",
+  }
+}
+
+// ============================================================================
+// Tempo Exporter - Forward traces via OTLP
+// ============================================================================
+// Tempo will automatically generate APM metrics (RED metrics) and service graphs
+// matching DataDog APM's capabilities
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+
+    tls {
+      insecure = true  // Disable TLS for local development
+    }
+  }
+}

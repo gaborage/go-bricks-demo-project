@@ -54,6 +54,17 @@ exporters:
     tls:
       insecure: true
 
+  # Loki exporter - sends logs to Loki using native push API
+  # Converts OpenTelemetry logs to Loki format with proper label mapping
+  # Note: Using otlphttp to send to Loki's OTLP endpoint (requires Loki 2.9+)
+  # Alternative: Use Grafana's lokiexporter if available in contrib collector
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+    # Send all log attributes as structured metadata
+    # Loki will automatically extract resource attributes as labels
+
   # Debug exporter - logs telemetry to console for troubleshooting
   debug:
     verbosity: detailed
@@ -73,6 +84,15 @@ service:
       receivers: [otlp]
       processors: [resourcedetection, resource, batch]
       exporters: [prometheus]
+
+    # Logs pipeline: OTLP receiver -> processors -> Loki exporter
+    # ACTIVE: go-bricks exports dual-mode logs via OTLP (enabled in config.development.yaml)
+    # - Action logs (log.type="action"): 100% sampled HTTP request summaries
+    # - Trace logs (log.type="trace"): WARN+ application debug logs
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp/loki, debug]
 
   # Telemetry configuration for the collector itself
   telemetry:

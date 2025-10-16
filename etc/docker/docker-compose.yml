@@ -96,23 +96,28 @@ services:
     profiles:
       - datadog
 
-  # OpenTelemetry Collector - Prometheus variant (exports to local Prometheus + Jaeger)
-  otel-collector-local:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: go-bricks-otel-collector-local
-    command: ["--config=/etc/otel-collector-prometheus.yaml"]
+  # Grafana Alloy - OpenTelemetry Collector with native Loki support
+  # Replaces otel-collector-local with built-in otelcol.exporter.loki
+  # Supports dual-mode logging by mapping log.type resource attribute to Loki labels
+  grafana-alloy:
+    image: grafana/alloy:latest
+    container_name: go-bricks-alloy
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
     ports:
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
-      - "8888:8888"   # Collector's own metrics
-      - "8889:8889"   # Prometheus exporter (application metrics)
-      - "13133:13133" # Health check
+      - "4317:4317"   # OTLP gRPC receiver (same as OTel Collector)
+      - "4318:4318"   # OTLP HTTP receiver (same as OTel Collector)
+      - "12345:12345" # Alloy UI (new!)
     volumes:
-      - ./otel/otel-collector-prometheus.yaml:/etc/otel-collector-prometheus.yaml:ro
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:13133/"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/ready"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -135,12 +140,15 @@ services:
       - '--storage.tsdb.retention.time=15d'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-remote-write-receiver'  # Enable remote_write API for Alloy
     networks:
       - app-network
     depends_on:
-      - otel-collector-local
+      - grafana-alloy
     profiles:
       - local
+    # Note: Prometheus now receives metrics via remote_write from Alloy
+    # Enable remote_write API with: --web.enable-remote-write-receiver (already enabled in Prometheus 2.x+)
 
   # Grafana - metrics visualization (local stack only)
   grafana:
@@ -162,15 +170,37 @@ services:
     profiles:
       - local
 
-  # Jaeger - distributed tracing UI (local stack only)
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: go-bricks-jaeger
+  # Tempo - distributed tracing backend (local stack only)
+  # Tempo provides DataDog APM-like capabilities: TraceQL queries, service graphs, and RED metrics generation
+  # Note: OTLP ports (4317, 4318) are only exposed internally - Alloy handles external OTLP ingestion
+  tempo:
+    image: grafana/tempo:latest
+    container_name: go-bricks-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "16686:16686" # Jaeger UI
-      - "14250:14250" # gRPC receiver (for OTel Collector)
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
+      - "3200:3200"   # Tempo HTTP API (for Grafana datasource and TraceQL queries)
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - app-network
+    profiles:
+      - local
+
+  # Loki - log aggregation database (local stack only)
+  # Receives logs via OTLP from OTel Collector (dual-mode logging)
+  # - Action logs (log.type="action"): 100% sampled HTTP request summaries
+  # - Trace logs (log.type="trace"): WARN+ application debug logs (~95% volume reduction)
+  loki:
+    image: grafana/loki:latest
+    container_name: go-bricks-loki
+    ports:
+      - "3100:3100"   # Loki API / OTLP HTTP
+      - "9096:9096"   # Loki gRPC
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
     networks:
       - app-network
     profiles:
@@ -184,6 +214,12 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  alloy_data:
+    driver: local
+  tempo_data:
     driver: local
 
 networks:
