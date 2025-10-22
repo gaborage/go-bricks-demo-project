@@ -49,5 +49,7 @@ node_modules/
 
 !tsconfig.json
 
+!.specify/**/*
+
 # ...even if they are in subdirectories
 !*/

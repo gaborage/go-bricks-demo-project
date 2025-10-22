@@ -19,6 +19,28 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Docker & Docker Compose
 - Make
 
+## Framework Philosophy
+
+This repository is the **public showcase for GoBricks**. It exists so external engineers can clone the project, run it locally, and experience core framework capabilities—configuration, observability, secrets, jobs, messaging—without reverse engineering. Every contribution should sharpen that first-hour experience.
+
+**GoBricks** is a production-grade framework for building MVPs fast. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
+
+**Success Criteria:** Visitors should be able to say, "I stood up a tenant-aware API with tracing, secrets, jobs, and database access in under an hour using GoBricks," and they should leave confident they can repeat that pattern in their own domain.
+
+## Core Development Principles
+
+When working in this codebase, follow these principles from the [developer manifesto](wiki/developer.manifesto.md):
+
+- **Framework First** → Reach for shipped bricks (config loader, module wiring, telemetry helpers, secrets store) before inventing bespoke plumbing
+- **Explicit > Implicit** → Code must be clear. No hidden defaults, no magic configuration
+- **Type Safety > Dynamic Hacks** → Refactor-friendly code. Breaking changes prioritized for compile-time safety
+- **Deterministic > Dynamic Flow** → Predictable, testable logic. Same inputs always produce same outputs
+- **Composition > Inheritance** → Flexible, simple structures. Use interfaces and embedding over class hierarchies
+- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. No global variables for tenant IDs or trace IDs—always thread context through calls
+- **Security First** → Input validation mandatory at all boundaries. Secrets from env/vault only. Audit `WhereRaw()` usage with required annotations
+- **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks)
+- **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`)
+
 ## Quick Start
 
 ```bash
@@ -365,6 +387,21 @@ See [wiki/PROMETHEUS_GRAFANA_SETUP.md](wiki/PROMETHEUS_GRAFANA_SETUP.md) for com
 
 ## Testing
 
+### Testing Philosophy
+
+This is a **demo application** built with GoBricks, not production code. Testing strategy reflects this:
+
+**Coverage Target:** 60-70% on core business logic (repository queries, service methods, HTTP handlers)
+
+**Testing Focus:**
+- **Always test:** Database queries, HTTP handlers, messaging consumers
+- **Happy paths** + critical error scenarios (validation failures, DB errors, not found cases)
+- **Demo coverage:** Each showcased brick (telemetry spans, repository queries, scheduled jobs, secrets handling) has at least one runnable integration or acceptance example
+- **Defer:** Exotic configuration combinations, rare edge cases
+- **Iterate:** Some code may be throwaway/refactored as requirements evolve while refining the demo
+
+**Quality Gate:** Run `make check` (fmt + lint + tests) before pushing to keep main branch green.
+
 ### Unit Tests
 ```bash
 go test ./internal/modules/products/...          # Test specific module
@@ -514,6 +551,32 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 
 ## Important Patterns
 
+### Development Practices
+
+Follow these engineering principles when contributing:
+
+- **SOLID** - Encapsulate behavior behind narrow interfaces (see [internal/modules/products/repository/repository.go](internal/modules/products/repository/repository.go)) so services remain testable and swappable
+- **Fail Fast** - Abort startup when initialization misbehaves ([cmd/api/main.go](cmd/api/main.go) uses fatal logging for module registration failures)
+- **DRY** - Share cross-cutting capabilities via bricks in [internal/modules/shared/](internal/modules/shared/) instead of copy-pasting helpers
+- **CQS** (Command Query Separation) - Split reads and writes where clarity improves ([internal/modules/products/http/](internal/modules/products/http/) handlers call query and command-specific service methods)
+- **KISS** - Prefer the defaults that GoBricks provides before layering additional frameworks or wrappers
+- **YAGNI** - Only build flows the showcase actively demonstrates today; defer speculative features to ADRs before investing
+  - **Exceptions:** Abstractions for vendor differences (databases, cloud providers) are justified. Test utilities justified only if actively used
+
+### Security Requirements
+
+Security is mandatory, not optional:
+
+- **Input validation** is **REQUIRED** at all boundaries (HTTP handlers, messaging consumers, database queries)
+- **WhereRaw() audit requirement:** Any use of `WhereRaw()` must include this annotation:
+  ```go
+  // SECURITY: Manual SQL review completed - identifier quoting verified
+  query := qb.WhereRaw("custom_condition")
+  ```
+- **Secrets management:** Only load secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault). See [internal/modules/shared/secrets/](internal/modules/shared/secrets/)
+- **No hardcoded credentials** - Never commit secrets. No secrets in logs or error messages
+- **Audit logging** - Log sensitive operations (access control changes, data modifications) with trace IDs for correlation
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -578,6 +641,140 @@ All Docker-related files are in [etc/docker/](etc/docker/) directory:
 - `--profile local` - Prometheus + Grafana + Tempo + Loki (local development)
 - `--profile datadog` - DataDog Cloud integration (production-like)
 - `--profile migrations` - Flyway migration runner
+
+## Contribution Guidelines
+
+When contributing to this showcase project, follow this workflow to maintain quality and consistency:
+
+### Planning Changes
+
+- **Framework-impacting changes:** Capture decisions in ADRs or the [wiki/](wiki/) directory so first-time readers see the latest guidance
+- **Breaking changes:** Document in ADRs when changes improve safety/correctness (type safety, security)
+- **New features:** Only add flows that actively demonstrate GoBricks capabilities
+
+### Development Workflow
+
+1. **Make your changes** following the Core Development Principles above
+2. **Add examples** - When extending functionality, add example requests, scripts, or documentation showing how to experience it
+3. **Keep demo fresh** - Ensure new capabilities are discoverable and runnable
+4. **Update touchpoints** - Update relevant files when configuration or dependencies change:
+   - [README.md](README.md) - If quick start or features change
+   - `.env.example` - If new environment variables are needed
+   - [config.development.yaml](config.development.yaml) - If new config options are added
+   - [CLAUDE.md](CLAUDE.md) - If architecture or workflows change
+   - Onboarding steps - If setup process changes
+
+### Validation (Quality Gate)
+
+Before pushing to `main`, run the quality gate:
+
+```bash
+make check  # Runs: fmt + lint + test
+```
+
+**Required checks:**
+- `make fmt` - Code formatting with gofmt
+- `make lint` - Static analysis with golangci-lint (must pass with no errors)
+- `make test` - All tests pass with race detector
+
+**Recommended checks:**
+- `make coverage` - Review HTML coverage report, aim for 60-70% on business logic
+- Integration tests - Add or update when introducing new database queries, HTTP endpoints, or messaging flows
+- Load tests - Run `make loadtest-smoke` to validate performance hasn't regressed
+
+### Testing Requirements
+
+- **Always add tests for:** Database repository methods, HTTP handlers, service business logic
+- **Integration tests:** Each new brick or capability should have at least one runnable example
+- **Update existing tests:** When changing signatures or behavior, update affected tests
+
+## Code & Runtime Tour
+
+New to this codebase? Follow this tour to understand how everything fits together.
+
+### Code Tour (15-20 minutes)
+
+Explore the code in this order:
+
+1. **[cmd/api/main.go](cmd/api/main.go)** - Application entry point
+   - See how `app.New()` bootstraps the framework
+   - Note `getModulesToLoad()` - how modules are registered
+   - Observe fail-fast pattern with fatal logging
+
+2. **[internal/modules/products/module.go](internal/modules/products/module.go)** - Module implementation
+   - How modules implement `app.Module` interface
+   - Dependency injection via `Init(deps *app.ModuleDeps)`
+   - Module wiring: repository → service → handler chain
+   - Route registration in `RegisterRoutes()`
+
+3. **[internal/modules/products/http/](internal/modules/products/http/)** - HTTP handlers
+   - Request validation
+   - Service method calls
+   - Error handling and status codes
+   - Structured logging
+
+4. **[internal/modules/products/repository/](internal/modules/products/repository/)** - Data access layer
+   - Context-aware database access via `getDB(ctx)`
+   - Type-safe Filter API usage
+   - Query builder patterns (`Select`, `Where`, `ToSQL()`)
+
+5. **[internal/modules/shared/](internal/modules/shared/)** - Shared bricks
+   - `secrets/` - Multi-tenant AWS Secrets Manager integration
+   - Reusable cross-cutting capabilities
+
+6. **[config.development.yaml](config.development.yaml)** - Configuration
+   - Extensively commented config showing all options
+   - Database pool settings
+   - Observability configuration
+   - Multi-tenant settings
+
+### Runtime Tour (15-20 minutes)
+
+Experience the application running:
+
+1. **Bootstrap environment:**
+   ```bash
+   make dev  # Starts docker-up + runs migrations
+   ```
+
+2. **Start application:**
+   ```bash
+   make run  # Build and start the API server
+   ```
+
+3. **Exercise endpoints:**
+   ```bash
+   # Health checks
+   curl http://localhost:8080/health
+   curl http://localhost:8080/ready
+
+   # Products CRUD
+   curl http://localhost:8080/api/v1/products
+   curl http://localhost:8080/api/v1/products/1
+
+   # Or use the test script
+   make test-products-api
+   ```
+
+4. **Review telemetry:**
+   - **Logs:** Check terminal for structured JSON logs with trace IDs
+   - **Metrics:** Open http://localhost:9090 (Prometheus) → Graph → search `gobricks_`
+   - **Traces:** Open http://localhost:3000 (Grafana) → Explore → Tempo → search recent traces
+   - **Dashboards:** http://localhost:3000/d/go-bricks-overview
+
+5. **Inspect generated metrics:**
+   ```bash
+   # See what metrics are being emitted
+   curl http://localhost:8889/metrics | grep gobricks_
+   ```
+
+6. **Run load test:**
+   ```bash
+   make loadtest-smoke  # 30-second quick validation
+   # Watch metrics in Grafana update in real-time
+   ```
+
+After this tour, you'll understand the module system, dependency injection, observability integration, and how to extend the showcase with new capabilities.
 
 ## Common Troubleshooting
 
