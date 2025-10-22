@@ -414,6 +414,20 @@ make loadtest-crud
 - **Spike** - Validate resilience under sudden traffic spikes
 - **Sustained** - Detect memory/connection leaks over 15 minutes
 
+**TypeScript Support:**
+All load tests are written in TypeScript for better type safety and IDE support. k6 v1.3.0+ has native TypeScript support, so tests run directly without any build step:
+
+```bash
+# Type check tests (optional - for catching errors before running)
+npm run type-check
+
+# Run tests directly - k6 handles TypeScript transpilation
+k6 run loadtests/products-crud.ts
+make loadtest-smoke
+
+# No webpack or build step needed!
+```
+
 **Performance tuning:**
 - Database pool: `config.development.yaml` → `database.pool.max.connections`
 - Rate limiting: `config.development.yaml` → `app.rate.limit/burst`

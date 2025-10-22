@@ -1,4 +1,4 @@
-// products-read-only.js - Read-Only Baseline Load Test
+// products-read-only.ts - Read-Only Baseline Load Test
 //
 // This test focuses purely on read operations to establish baseline performance
 // for the most common operations:
@@ -12,13 +12,15 @@
 // - Measure query optimization impact
 //
 // Usage:
-//   k6 run loadtests/products-read-only.js
-//   k6 run --vus 100 --duration 5m loadtests/products-read-only.js
+//   k6 run loadtests/products-read-only.ts
+//   k6 run --vus 100 --duration 5m loadtests/products-read-only.ts
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
-import { config, getURL, getRandomPage, headers, loadProfiles } from './config.js';
+import type { Options } from 'k6/options';
+import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles } from './config.ts';
+import type { ProductResponse, ProductListResponse, Product } from './types/index.ts';
 
 // Custom metrics
 const listProductsSuccess = new Rate('list_products_success');
@@ -28,7 +30,7 @@ const getProductDuration = new Trend('get_product_duration');
 const totalRequests = new Counter('total_requests');
 
 // Test configuration - use sustained load profile
-export const options = {
+export const options: Options = {
   stages: loadProfiles.sustained.stages,
   thresholds: {
     // Stricter thresholds for read-only operations
@@ -47,10 +49,10 @@ export const options = {
 };
 
 // Store product IDs discovered during list operations
-const knownProductIDs = [];
+const knownProductIDs: string[] = [];
 
 // Main test function
-export default function () {
+export default function (): void {
   totalRequests.add(1);
 
   // 70% list, 30% get
@@ -64,7 +66,7 @@ export default function () {
   sleep(Math.random() * 0.8 + 0.2);
 }
 
-function listProducts() {
+function listProducts(): void {
   const page = getRandomPage();
   const pageSize = config.testData.pageSize;
   const url = getURL(`/products?page=${page}&pageSize=${pageSize}`);
@@ -79,12 +81,12 @@ function listProducts() {
     'list: response time < 500ms': (r) => r.timings.duration < 500,
     'list: has products array': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductListResponse;
         // go-bricks wraps response in data object
         const products = body.data?.products || body.products;
         // Store product IDs for use in get operations
         if (Array.isArray(products)) {
-          products.forEach(p => {
+          products.forEach((p: Product) => {
             if (p.id && knownProductIDs.indexOf(p.id) === -1) {
               knownProductIDs.push(p.id);
               // Limit array size
@@ -102,7 +104,7 @@ function listProducts() {
     },
     'list: has pagination info': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductListResponse;
         // go-bricks wraps response in data object
         const data = body.data || body;
         return data.page !== undefined && data.pageSize !== undefined && data.total !== undefined;
@@ -112,19 +114,19 @@ function listProducts() {
     },
   });
 
-  listProductsSuccess.add(success);
+  listProductsSuccess.add(success ? 1 : 0);
   listProductsDuration.add(response.timings.duration);
 }
 
-function getProduct() {
-  let productID;
+function getProduct(): void {
+  let productID: string;
 
   if (knownProductIDs.length > 0) {
     // Use a known product ID from list operations
     productID = knownProductIDs[Math.floor(Math.random() * knownProductIDs.length)];
   } else {
-    // Fallback: use a predictable ID (assumes seeded data)
-    productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    productID = getSeededProductID();
   }
 
   const url = getURL(`/products/${productID}`);
@@ -139,32 +141,32 @@ function getProduct() {
     'get: response time < 400ms': (r) => r.timings.duration < 400,
     'get: has valid product': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object
         const product = body.data || body;
-        return product.id && product.name && product.price !== undefined;
+        return !!(product.id && product.name && product.price !== undefined);
       } catch (e) {
         return false;
       }
     },
     'get: has timestamps': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object
         const product = body.data || body;
-        return product.createdDate && product.updatedDate;
+        return !!(product.createdDate && product.updatedDate);
       } catch (e) {
         return false;
       }
     },
   });
 
-  getProductSuccess.add(success);
+  getProductSuccess.add(success ? 1 : 0);
   getProductDuration.add(response.timings.duration);
 }
 
 // Setup function
-export function setup() {
+export function setup(): void {
   console.log('🚀 Starting Read-Only Load Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('📈 Operation Distribution:');
@@ -196,11 +198,11 @@ export function setup() {
     const resp = http.get(url, { headers });
     if (resp.status === 200) {
       try {
-        const body = JSON.parse(resp.body);
+        const body = JSON.parse(resp.body as string) as ProductListResponse;
         // go-bricks wraps response in data object
         const products = body.data?.products || body.products;
         if (Array.isArray(products)) {
-          products.forEach(p => {
+          products.forEach((p: Product) => {
             if (p.id) knownProductIDs.push(p.id);
           });
         }
@@ -212,24 +214,22 @@ export function setup() {
 
   console.log(`✅ Warmed up with ${knownProductIDs.length} product IDs`);
   console.log('');
-
-  return { knownProductCount: knownProductIDs.length };
 }
 
 // Teardown function
-export function teardown(data) {
+export function teardown(): void {
   console.log('');
   console.log('✅ Read-only load test completed');
   console.log(`📊 Discovered ${knownProductIDs.length} unique product IDs`);
   console.log('');
   console.log('💡 Next steps:');
-  console.log('   - Compare these results with products-crud.js results');
+  console.log('   - Compare these results with products-crud.ts results');
   console.log('   - Check if read performance degrades under write load');
   console.log('   - Consider caching strategies for frequently accessed products');
 }
 
 // Custom summary
-export function handleSummary(data) {
+export function handleSummary(data: any): { stdout: string } {
   const listSuccess = data.metrics.list_products_success?.values?.rate || 0;
   const getSuccess = data.metrics.get_product_success?.values?.rate || 0;
   const avgDuration = data.metrics.http_req_duration?.values?.avg || 0;
@@ -237,19 +237,22 @@ export function handleSummary(data) {
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
   const totalReqs = data.metrics.total_requests?.values?.count || 0;
 
-  console.log('');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('                   READ-ONLY TEST SUMMARY                   ');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log(`Total Requests:          ${totalReqs}`);
-  console.log(`List Success Rate:       ${(listSuccess * 100).toFixed(2)}%`);
-  console.log(`Get Success Rate:        ${(getSuccess * 100).toFixed(2)}%`);
-  console.log(`Avg Response Time:       ${avgDuration.toFixed(2)}ms`);
-  console.log(`P95 Response Time:       ${p95Duration.toFixed(2)}ms`);
-  console.log(`P99 Response Time:       ${p99Duration.toFixed(2)}ms`);
-  console.log('═══════════════════════════════════════════════════════════');
+  const summary = `
+═══════════════════════════════════════════════════════════
+                   READ-ONLY TEST SUMMARY
+═══════════════════════════════════════════════════════════
+Total Requests:          ${totalReqs}
+List Success Rate:       ${(listSuccess * 100).toFixed(2)}%
+Get Success Rate:        ${(getSuccess * 100).toFixed(2)}%
+Avg Response Time:       ${avgDuration.toFixed(2)}ms
+P95 Response Time:       ${p95Duration.toFixed(2)}ms
+P99 Response Time:       ${p99Duration.toFixed(2)}ms
+═══════════════════════════════════════════════════════════
+`;
+
+  console.log(summary);
 
   return {
-    'stdout': data,
+    stdout: summary,
   };
 }

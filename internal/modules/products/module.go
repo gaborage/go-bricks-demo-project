@@ -2,8 +2,10 @@ package products
 
 import (
 	"context"
+	"time"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/http"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/job"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/service"
 	"github.com/gaborage/go-bricks/app"
@@ -36,11 +38,11 @@ func (m *Module) Name() string {
 
 // Init initializes the module with application dependencies
 func (m *Module) Init(deps *app.ModuleDeps) error {
-	m.logger = deps.Logger.WithFields(map[string]interface{}{
+	m.logger = deps.Logger.WithFields(map[string]any{
 		"module": "products",
 	})
 
-	// Almacenar las funciones para acceso contexto-dependiente a recursos
+	// Setup functions to get context-dependent resources
 	m.getDB = deps.GetDB
 	m.getMessaging = deps.GetMessaging
 
@@ -48,7 +50,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	m.logger.Info().Msg("Using existing database schema for products")
 
-	// Crear repositorio y servicio con funciones de acceso contexto-dependiente
+	// Initialize repository, service, jobs and handler
 	m.repo = *repository.NewSQLProductRepository(m.getDB)
 	m.service = service.NewService(&m.repo, m.logger)
 	m.handler = http.NewProductHandler(m.service, m.logger)
@@ -67,6 +69,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // DeclareMessaging declares messaging infrastructure for this module
 func (m *Module) DeclareMessaging(_ *messaging.Declarations) {
 	// No messaging needed for this example
+}
+
+func (m *Module) RegisterJobs(scheduler app.JobRegistrar) error {
+	// Register scheduled jobs
+	return scheduler.FixedRate("test-job", &job.ReportJob{}, 30*time.Second)
 }
 
 // Shutdown performs cleanup when the module is stopped

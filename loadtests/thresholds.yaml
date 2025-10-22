@@ -1,0 +1,291 @@
+# Load Test Thresholds Configuration
+#
+# This file defines acceptable resource usage ranges for each test phase
+# Used by analyze-loadtest-results.sh for automated pass/fail determination
+#
+# Thresholds are based on expected behavior analysis in CLAUDE.md
+
+# Goroutine thresholds
+goroutines:
+  # Warning threshold - higher than expected but not critical
+  warning: 1000
+
+  # Critical threshold - indicates severe leak or framework issue
+  critical: 2000
+
+  # Per-test-phase expected ranges
+  phases:
+    read_only:
+      min: 50
+      max: 250
+      description: "50 VUs, read-only workload"
+
+    crud_mix_10vu:
+      min: 50
+      max: 150
+      description: "10 VUs, mixed CRUD operations"
+
+    crud_mix_50vu:
+      min: 100
+      max: 300
+      description: "50 VUs, mixed CRUD operations"
+
+    crud_mix_100vu:
+      min: 200
+      max: 500
+      description: "100 VUs, mixed CRUD operations"
+
+    spike_baseline:
+      min: 50
+      max: 150
+      description: "10 VUs baseline before spike"
+
+    spike_peak:
+      min: 800
+      max: 1500
+      description: "300 VUs during spike (temporary high allowed)"
+
+    spike_recovery:
+      min: 50
+      max: 200
+      description: "10 VUs after spike (should recover quickly)"
+
+    ramp_200vu:
+      min: 600
+      max: 1200
+      description: "200 VUs maximum load"
+
+    sustained_50vu:
+      min: 150
+      max: 350
+      description: "50 VUs sustained for 15 minutes"
+      trend: "stable"  # Must not increase over time
+
+# Memory thresholds (in MB)
+memory:
+  heap:
+    warning: 300
+    critical: 600
+
+    phases:
+      read_only:
+        min: 30
+        max: 150
+
+      crud_mix_50vu:
+        min: 80
+        max: 150
+
+      crud_mix_100vu:
+        min: 120
+        max: 250
+
+      spike_peak:
+        min: 200
+        max: 450
+        description: "Temporary spike allowed"
+
+      spike_recovery:
+        min: 50
+        max: 180
+        recovery_time_minutes: 5
+
+      ramp_200vu:
+        min: 250
+        max: 500
+
+      sustained_50vu:
+        min: 100
+        max: 200
+        trend: "stable"  # Critical: must not grow
+
+  rss:
+    warning: 400
+    critical: 800
+
+    # RSS typically 1.5-2x heap size
+    phases:
+      sustained_50vu:
+        max_growth_mb: 50
+        description: "Maximum allowed growth during 15-min sustained test"
+
+# Database connection thresholds
+database:
+  connections:
+    # Maximum configured in config.development.yaml
+    max_configured: 50
+
+    # Warning when approaching max
+    warning: 40
+
+    # Critical if at max for extended period
+    critical: 48
+
+    phases:
+      read_only:
+        min: 10
+        max: 30
+        description: "Read-only workload, low connection usage"
+
+      crud_mix_50vu:
+        min: 15
+        max: 35
+
+      crud_mix_100vu:
+        min: 30
+        max: 50
+        description: "May hit pool limit, some waits acceptable"
+
+      spike_peak:
+        min: 45
+        max: 50
+        description: "Pool saturation expected during spike"
+
+      spike_recovery:
+        min: 5
+        max: 15
+        recovery_time_minutes: 2
+        description: "Must drop quickly after spike"
+
+      ramp_200vu:
+        min: 48
+        max: 50
+        description: "Pool fully saturated at high load"
+
+      sustained_50vu:
+        min: 15
+        max: 35
+        trend: "stable"  # Must not leak
+
+  # Connection leak detection
+  leak_detection:
+    sustained_test:
+      max_increase_percent: 20
+      description: "Max 20% increase from start to end of sustained test"
+
+# HTTP performance thresholds
+http:
+  latency:
+    p95_warning_ms: 500
+    p95_critical_ms: 1000
+    p99_warning_ms: 1000
+    p99_critical_ms: 2000
+
+    phases:
+      read_only:
+        p95_max_ms: 400
+        p99_max_ms: 800
+
+      crud_mix:
+        p95_max_ms: 600
+        p99_max_ms: 1200
+
+      spike_peak:
+        p95_max_ms: 1500
+        p99_max_ms: 3000
+        description: "Higher latency acceptable during spike"
+
+      ramp_200vu:
+        p95_max_ms: 1000
+        p99_max_ms: 2000
+
+  error_rate:
+    # Overall test error rate
+    warning_percent: 1.0
+    critical_percent: 5.0
+
+    phases:
+      baseline:
+        max_percent: 1.0
+
+      spike_peak:
+        max_percent: 10.0
+        description: "Higher error rate acceptable during spike"
+
+      sustained:
+        max_percent: 1.0
+
+# Leak detection criteria
+leak_detection:
+  # Trend analysis for sustained test
+  # Compares first 25% vs last 25% of sustained test data
+  sustained_test:
+    goroutines:
+      max_increase_percent: 20
+      trend: "stable_or_decreasing"
+
+    memory:
+      max_increase_percent: 20
+      trend: "stable_or_decreasing"
+
+    connections:
+      max_increase_percent: 20
+      trend: "stable_or_decreasing"
+
+  # Recovery analysis after spike
+  spike_recovery:
+    goroutines:
+      recovery_time_minutes: 3
+      max_final_percent_of_baseline: 150
+
+    memory:
+      recovery_time_minutes: 5
+      max_final_percent_of_baseline: 150
+
+    connections:
+      recovery_time_minutes: 2
+      max_final_percent_of_baseline: 120
+
+# Test-specific configurations
+test_phases:
+  # Phase detection based on time windows
+  # These help the analysis script identify which phase metrics belong to
+
+  duration_minutes:
+    read_only: 12
+    crud_mix: 15
+    spike: 6
+    ramp_up: 17
+    sustained: 17
+
+  # Expected total duration
+  total_duration_minutes: 67  # ~60 min actual + buffer
+
+# Pass/fail criteria
+pass_fail:
+  # Number of critical violations to fail the test
+  max_critical_issues: 1
+
+  # Number of warnings before investigation recommended
+  max_warnings: 5
+
+  # Required checks
+  required_checks:
+    - "goroutine_peak_under_critical"
+    - "memory_peak_under_critical"
+    - "no_sustained_leaks"
+    - "spike_recovery_successful"
+    - "connection_pool_not_exhausted_below_100vu"
+
+# Notes for framework issue identification
+framework_issues:
+  indicators:
+    goroutine_leak:
+      - "Goroutines increasing during sustained test"
+      - "Goroutines not recovering after load drop"
+      - "Goroutines > 2x VU count under steady load"
+
+    memory_leak:
+      - "Heap memory continuously growing"
+      - "Memory not recovering after GC cycles"
+      - "RSS continuously growing during sustained test"
+
+    connection_leak:
+      - "Connections not returning to pool after requests"
+      - "Connection count increasing during sustained test"
+      - "Idle connections decreasing to zero"
+
+    poor_backpressure:
+      - "System crash during spike"
+      - "Connection pool allows > max_configured connections"
+      - "No rate limiting evidence during overload"

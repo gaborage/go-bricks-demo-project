@@ -1,4 +1,4 @@
-// ramp-up-test.js - Gradual Load Increase Test
+// ramp-up-test.ts - Gradual Load Increase Test
 //
 // This test gradually increases load to find the system's breaking point.
 // It helps identify:
@@ -13,13 +13,16 @@
 // - Throughput plateaus
 //
 // Usage:
-//   k6 run loadtests/ramp-up-test.js
-//   k6 run --out json=results.json loadtests/ramp-up-test.js
+//   k6 run loadtests/ramp-up-test.ts
+//   k6 run --out json=results.json loadtests/ramp-up-test.ts
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
-import { config, getURL, getRandomProduct, getRandomPage, headers } from './config.js';
+import type { Options } from 'k6/options';
+import type { RefinedResponse, ResponseType } from 'k6/http';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
 const errorRate = new Rate('errors');
@@ -28,7 +31,7 @@ const requestDuration = new Trend('request_duration');
 const requestsPerStage = new Counter('requests_per_stage');
 
 // Test configuration - aggressive ramp-up to find limits
-export const options = {
+export const options: Options = {
   stages: [
     { duration: '1m', target: 10 },    // Stage 1: Baseline
     { duration: '1m', target: 25 },    // Stage 2: Light load
@@ -57,7 +60,15 @@ export const options = {
 };
 
 // Operation weights - balanced mix
-const OPERATION_WEIGHTS = {
+interface OperationWeights {
+  list: number;
+  get: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+const OPERATION_WEIGHTS: OperationWeights = {
   list: 40,
   get: 30,
   create: 20,
@@ -65,13 +76,13 @@ const OPERATION_WEIGHTS = {
   delete: 3,
 };
 
-const createdProductIDs = [];
+const createdProductIDs: string[] = [];
 
-export default function () {
+export default function (): void {
   requestsPerStage.add(1);
 
   const rand = Math.random() * 100;
-  let response;
+  let response: RefinedResponse<ResponseType | undefined> | null = null;
 
   try {
     if (rand < OPERATION_WEIGHTS.list) {
@@ -88,13 +99,13 @@ export default function () {
 
     if (response) {
       const isSuccess = response.status >= 200 && response.status < 300;
-      successRate.add(isSuccess);
-      errorRate.add(!isSuccess);
+      successRate.add(isSuccess ? 1 : 0);
+      errorRate.add(!isSuccess ? 1 : 0);
       requestDuration.add(response.timings.duration);
     }
   } catch (e) {
     errorRate.add(1);
-    console.error(`Request failed: ${e.message}`);
+    console.error(`Request failed: ${(e as Error).message}`);
   }
 
   // Variable think time - shorter under higher load (realistic behavior)
@@ -103,7 +114,7 @@ export default function () {
   sleep(Math.random() * thinkTime + 0.1);
 }
 
-function listProducts() {
+function listProducts(): RefinedResponse<ResponseType | undefined> {
   const page = getRandomPage();
   const pageSize = config.testData.pageSize;
   const url = getURL(`/products?page=${page}&pageSize=${pageSize}`);
@@ -120,13 +131,14 @@ function listProducts() {
   return response;
 }
 
-function getProduct() {
-  let productID;
+function getProduct(): RefinedResponse<ResponseType | undefined> {
+  let productID: string;
 
   if (createdProductIDs.length > 0) {
     productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   } else {
-    productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    productID = getSeededProductID();
   }
 
   const url = getURL(`/products/${productID}`);
@@ -143,11 +155,11 @@ function getProduct() {
   return response;
 }
 
-function createProduct() {
+function createProduct(): RefinedResponse<ResponseType | undefined> {
   const product = getRandomProduct();
   const url = getURL('/products');
 
-  const uniqueProduct = {
+  const uniqueProduct: CreateProductInput = {
     name: `${product.name} ${Date.now()}-${__VU}`,
     description: product.description,
     price: product.price + (Math.random() * 10),
@@ -159,14 +171,18 @@ function createProduct() {
     tags: { endpoint: 'create_product', test: 'ramp-up' },
   });
 
-  check(response, {
+  const success = check(response, {
     'create: status ok': (r) => r.status === 201,
-  }) && storeProductID(response);
+  });
+
+  if (success) {
+    storeProductID(response);
+  }
 
   return response;
 }
 
-function updateProduct() {
+function updateProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length === 0) {
     return createProduct();
   }
@@ -174,7 +190,7 @@ function updateProduct() {
   const productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   const url = getURL(`/products/${productID}`);
 
-  const updates = {
+  const updates: UpdateProductInput = {
     price: Math.random() * 200 + 10,
     description: `Updated at ${Date.now()}`,
   };
@@ -191,7 +207,7 @@ function updateProduct() {
   return response;
 }
 
-function deleteProduct() {
+function deleteProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length < 10) {
     return createProduct();
   }
@@ -211,9 +227,9 @@ function deleteProduct() {
   return response;
 }
 
-function storeProductID(response) {
+function storeProductID(response: RefinedResponse<ResponseType | undefined>): void {
   try {
-    const body = JSON.parse(response.body);
+    const body = JSON.parse(response.body as string) as ProductResponse;
     // go-bricks wraps response in data object
     const product = body.data || body;
     if (product.id) {
@@ -227,7 +243,7 @@ function storeProductID(response) {
   }
 }
 
-export function setup() {
+export function setup(): void {
   console.log('🚀 Starting Ramp-Up Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('');
@@ -268,7 +284,7 @@ export function setup() {
   console.log('');
 }
 
-export function teardown(data) {
+export function teardown(): void {
   console.log('');
   console.log('✅ Ramp-up test completed');
   console.log('');
@@ -287,7 +303,7 @@ export function teardown(data) {
   console.log('   - If rate limit errors: increase app.rate.limit/burst');
 }
 
-export function handleSummary(data) {
+export function handleSummary(data: any): { stdout: string } {
   const avgDuration = data.metrics.http_req_duration?.values?.avg || 0;
   const p95Duration = data.metrics.http_req_duration?.values['p(95)'] || 0;
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
@@ -296,22 +312,29 @@ export function handleSummary(data) {
   const totalReqs = data.metrics.http_reqs?.values?.count || 0;
   const reqRate = data.metrics.http_reqs?.values?.rate || 0;
 
-  console.log('');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('                   RAMP-UP TEST SUMMARY                     ');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log(`Total Requests:          ${totalReqs}`);
-  console.log(`Requests/sec:            ${reqRate.toFixed(2)}`);
-  console.log(`Success Rate:            ${(successRateValue * 100).toFixed(2)}%`);
-  console.log(`Error Rate:              ${(errorRateValue * 100).toFixed(2)}%`);
-  console.log(`Avg Response Time:       ${avgDuration.toFixed(2)}ms`);
-  console.log(`P95 Response Time:       ${p95Duration.toFixed(2)}ms`);
-  console.log(`P99 Response Time:       ${p99Duration.toFixed(2)}ms`);
-  console.log('═══════════════════════════════════════════════════════════');
+  const summary = `
+═══════════════════════════════════════════════════════════
+                   RAMP-UP TEST SUMMARY
+═══════════════════════════════════════════════════════════
+Total Requests:          ${totalReqs}
+Requests/sec:            ${reqRate.toFixed(2)}
+Success Rate:            ${(successRateValue * 100).toFixed(2)}%
+Error Rate:              ${(errorRateValue * 100).toFixed(2)}%
+Avg Response Time:       ${avgDuration.toFixed(2)}ms
+P95 Response Time:       ${p95Duration.toFixed(2)}ms
+P99 Response Time:       ${p99Duration.toFixed(2)}ms
+═══════════════════════════════════════════════════════════
+`;
 
   // Determine test result
   const passed = successRateValue >= 0.95 && p95Duration < 1000;
+  const status = passed ? '✅ TEST PASSED' : '❌ TEST FAILED - Review thresholds';
+
+  console.log(summary);
+  console.log(status);
   console.log('');
-  console.log(passed ? '✅ TEST PASSED' : '❌ TEST FAILED - Review thresholds');
-  console.log('');
+
+  return {
+    stdout: summary + '\n' + status + '\n',
+  };
 }

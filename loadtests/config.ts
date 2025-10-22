@@ -1,7 +1,9 @@
 // k6 Load Testing Configuration
 // This file contains shared configuration for all load tests
 
-export const config = {
+import type { TestConfig, LoadProfile, SampleProduct, Headers } from './types/index.ts';
+
+export const config: TestConfig = {
   // Base URL for API - override with K6_BASE_URL environment variable
   baseURL: __ENV.K6_BASE_URL || 'http://localhost:8080',
 
@@ -55,30 +57,53 @@ export const config = {
   },
 };
 
-// Helper function to construct full URL
-export function getURL(path) {
+/**
+ * Helper function to construct full URL from path
+ */
+export function getURL(path: string): string {
   return `${config.baseURL}${config.apiPrefix}${path}`;
 }
 
-// Helper function to get random test product
-export function getRandomProduct() {
+/**
+ * Helper function to get random test product
+ */
+export function getRandomProduct(): SampleProduct {
   const products = config.testData.sampleProducts;
   return products[Math.floor(Math.random() * products.length)];
 }
 
-// Helper function to get random page number
-export function getRandomPage() {
+/**
+ * Helper function to get random page number
+ */
+export function getRandomPage(): number {
   return Math.floor(Math.random() * config.testData.maxPages) + 1;
 }
 
+/**
+ * Helper function to get a random seeded product ID
+ * Returns one of the 6 UUIDs from the initial database seed data (V1 migration)
+ * Use this as a fallback when no products have been created yet during load tests
+ */
+export function getSeededProductID(): string {
+  const seededIDs: string[] = [
+    '550e8400-e29b-41d4-a716-446655440001',
+    '550e8400-e29b-41d4-a716-446655440002',
+    '550e8400-e29b-41d4-a716-446655440003',
+    '550e8400-e29b-41d4-a716-446655440004',
+    '550e8400-e29b-41d4-a716-446655440005',
+    '550e8400-e29b-41d4-a716-446655440006',
+  ];
+  return seededIDs[Math.floor(Math.random() * seededIDs.length)];
+}
+
 // Common request headers
-export const headers = {
+export const headers: Headers = {
   'Content-Type': 'application/json',
   'Accept': 'application/json',
 };
 
 // Load profile configurations for different test scenarios
-export const loadProfiles = {
+export const loadProfiles: Record<string, LoadProfile> = {
   // Smoke test - minimal load to verify everything works
   smoke: {
     stages: [
@@ -130,8 +155,15 @@ export const loadProfiles = {
   },
 };
 
-// Export common checks
-export function createChecks() {
+/**
+ * Type for check functions
+ */
+export type CheckFunction = (r: any) => boolean;
+
+/**
+ * Common check functions
+ */
+export function createChecks(): Record<string, CheckFunction> {
   return {
     'status is 200': (r) => r.status === 200,
     'status is 201': (r) => r.status === 201,

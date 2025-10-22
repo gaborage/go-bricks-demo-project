@@ -1,4 +1,4 @@
-// sustained-load.js - Sustained Load Test
+// sustained-load.ts - Sustained Load Test
 //
 // This test maintains constant load over an extended period to:
 // - Identify memory leaks
@@ -10,13 +10,16 @@
 // Runs at constant 50 VUs for 15 minutes
 //
 // Usage:
-//   k6 run loadtests/sustained-load.js
-//   k6 run --duration 30m loadtests/sustained-load.js  # Extended duration
+//   k6 run loadtests/sustained-load.ts
+//   k6 run --duration 30m loadtests/sustained-load.ts  # Extended duration
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Counter, Gauge } from 'k6/metrics';
-import { config, getURL, getRandomProduct, getRandomPage, headers } from './config.js';
+import type { Options } from 'k6/options';
+import type { RefinedResponse, ResponseType } from 'k6/http';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics to detect degradation over time
 const errorRate = new Rate('errors');
@@ -26,15 +29,28 @@ const connectionIssues = new Counter('connection_errors');
 const timeouts = new Counter('timeout_errors');
 const activeConnections = new Gauge('active_connections_estimate');
 
+// Interface for metrics window tracking
+interface MetricsWindow {
+  count: number;
+  sumDuration: number;
+  errors: number;
+}
+
+interface MetricsWindows {
+  first5min: MetricsWindow;
+  middle5min: MetricsWindow;
+  last5min: MetricsWindow;
+}
+
 // Track metrics over time windows
-let metricsWindow = {
+const metricsWindow: MetricsWindows = {
   first5min: { count: 0, sumDuration: 0, errors: 0 },
   middle5min: { count: 0, sumDuration: 0, errors: 0 },
   last5min: { count: 0, sumDuration: 0, errors: 0 },
 };
 
 // Test configuration - sustained load
-export const options = {
+export const options: Options = {
   stages: [
     { duration: '1m', target: 50 },   // Ramp up
     { duration: '15m', target: 50 },  // Sustained load
@@ -56,10 +72,18 @@ export const options = {
   batch: 10,
 };
 
-const createdProductIDs = [];
+const createdProductIDs: string[] = [];
 const startTime = Date.now();
 
-export default function () {
+interface OperationWeights {
+  list: number;
+  get: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export default function (): void {
   const elapsed = (Date.now() - startTime) / 1000;
 
   // Execute mixed operations
@@ -69,15 +93,15 @@ export default function () {
     const isSuccess = response.status >= 200 && response.status < 400;
     const duration = response.timings.duration;
 
-    successRate.add(isSuccess);
-    errorRate.add(!isSuccess);
+    successRate.add(isSuccess ? 1 : 0);
+    errorRate.add(!isSuccess ? 1 : 0);
     memoryLeakIndicator.add(duration);
 
     // Track connection and timeout errors specifically
-    if (response.status === 0 || response.error_code === 1050) {
+    if (response.status === 0 || (response as any).error_code === 1050) {
       connectionIssues.add(1);
     }
-    if (response.status === 0 && response.error?.includes('timeout')) {
+    if (response.status === 0 && (response as any).error?.includes('timeout')) {
       timeouts.add(1);
     }
 
@@ -92,7 +116,7 @@ export default function () {
   sleep(Math.random() * 0.8 + 0.3);
 }
 
-function recordMetricsByWindow(elapsed, duration, isError) {
+function recordMetricsByWindow(elapsed: number, duration: number, isError: boolean): void {
   // First 5 minutes (after 1min ramp-up)
   if (elapsed >= 60 && elapsed < 360) {
     metricsWindow.first5min.count++;
@@ -113,11 +137,11 @@ function recordMetricsByWindow(elapsed, duration, isError) {
   }
 }
 
-function executeRandomOperation() {
+function executeRandomOperation(): RefinedResponse<ResponseType | undefined> | null {
   const rand = Math.random() * 100;
 
   // Realistic production mix
-  const weights = {
+  const weights: OperationWeights = {
     list: 45,
     get: 30,
     create: 15,
@@ -138,12 +162,12 @@ function executeRandomOperation() {
       return deleteProduct();
     }
   } catch (e) {
-    console.error(`Operation failed: ${e.message}`);
+    console.error(`Operation failed: ${(e as Error).message}`);
     return null;
   }
 }
 
-function listProducts() {
+function listProducts(): RefinedResponse<ResponseType | undefined> {
   const page = getRandomPage();
   const pageSize = config.testData.pageSize;
   const url = getURL(`/products?page=${page}&pageSize=${pageSize}`);
@@ -160,13 +184,14 @@ function listProducts() {
   return response;
 }
 
-function getProduct() {
-  let productID;
+function getProduct(): RefinedResponse<ResponseType | undefined> {
+  let productID: string;
 
   if (createdProductIDs.length > 0) {
     productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   } else {
-    productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    productID = getSeededProductID();
   }
 
   const url = getURL(`/products/${productID}`);
@@ -183,11 +208,11 @@ function getProduct() {
   return response;
 }
 
-function createProduct() {
+function createProduct(): RefinedResponse<ResponseType | undefined> {
   const product = getRandomProduct();
   const url = getURL('/products');
 
-  const uniqueProduct = {
+  const uniqueProduct: CreateProductInput = {
     name: `${product.name} ${Date.now()}-${__VU}-${__ITER}`,
     description: product.description,
     price: product.price + (Math.random() * 10),
@@ -205,7 +230,7 @@ function createProduct() {
 
   if (success) {
     try {
-      const body = JSON.parse(response.body);
+      const body = JSON.parse(response.body as string) as ProductResponse;
       // go-bricks wraps response in data object
       const product = body.data || body;
       if (product.id) {
@@ -223,7 +248,7 @@ function createProduct() {
   return response;
 }
 
-function updateProduct() {
+function updateProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length === 0) {
     return createProduct();
   }
@@ -231,7 +256,7 @@ function updateProduct() {
   const productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   const url = getURL(`/products/${productID}`);
 
-  const updates = {
+  const updates: UpdateProductInput = {
     price: Math.random() * 200 + 10,
     description: `Updated at ${Date.now()}`,
   };
@@ -248,7 +273,7 @@ function updateProduct() {
   return response;
 }
 
-function deleteProduct() {
+function deleteProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length < 20) {
     return createProduct();
   }
@@ -268,7 +293,7 @@ function deleteProduct() {
   return response;
 }
 
-export function setup() {
+export function setup(): void {
   console.log('🚀 Starting Sustained Load Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('');
@@ -309,7 +334,7 @@ export function setup() {
   console.log('');
 }
 
-export function teardown(data) {
+export function teardown(): void {
   // Calculate average response times by window
   const first5minAvg = metricsWindow.first5min.count > 0
     ? metricsWindow.first5min.sumDuration / metricsWindow.first5min.count
@@ -372,7 +397,7 @@ export function teardown(data) {
   console.log(`📦 Created ${createdProductIDs.length} products remaining in memory`);
 }
 
-export function handleSummary(data) {
+export function handleSummary(data: any): { stdout: string } {
   const avgDuration = data.metrics.http_req_duration?.values?.avg || 0;
   const p95Duration = data.metrics.http_req_duration?.values['p(95)'] || 0;
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
@@ -382,24 +407,31 @@ export function handleSummary(data) {
   const connErrors = data.metrics.connection_errors?.values?.count || 0;
   const timeoutErrors = data.metrics.timeout_errors?.values?.count || 0;
 
-  console.log('');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('                 SUSTAINED LOAD TEST SUMMARY                ');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log(`Total Requests:          ${totalReqs}`);
-  console.log(`Requests/sec:            ${reqRate.toFixed(2)}`);
-  console.log(`Error Rate:              ${(errorRateValue * 100).toFixed(2)}%`);
-  console.log(`Connection Errors:       ${connErrors}`);
-  console.log(`Timeout Errors:          ${timeoutErrors}`);
-  console.log('');
-  console.log('Response Times:');
-  console.log(`  Average:               ${avgDuration.toFixed(2)}ms`);
-  console.log(`  P95:                   ${p95Duration.toFixed(2)}ms`);
-  console.log(`  P99:                   ${p99Duration.toFixed(2)}ms`);
-  console.log('═══════════════════════════════════════════════════════════');
+  const summary = `
+═══════════════════════════════════════════════════════════
+                 SUSTAINED LOAD TEST SUMMARY
+═══════════════════════════════════════════════════════════
+Total Requests:          ${totalReqs}
+Requests/sec:            ${reqRate.toFixed(2)}
+Error Rate:              ${(errorRateValue * 100).toFixed(2)}%
+Connection Errors:       ${connErrors}
+Timeout Errors:          ${timeoutErrors}
+
+Response Times:
+  Average:               ${avgDuration.toFixed(2)}ms
+  P95:                   ${p95Duration.toFixed(2)}ms
+  P99:                   ${p99Duration.toFixed(2)}ms
+═══════════════════════════════════════════════════════════
+`;
 
   const passed = errorRateValue < 0.01 && p95Duration < 500 && connErrors < 10;
+  const status = passed ? '✅ TEST PASSED' : '❌ TEST FAILED - Review thresholds and logs';
+
+  console.log(summary);
+  console.log(status);
   console.log('');
-  console.log(passed ? '✅ TEST PASSED' : '❌ TEST FAILED - Review thresholds and logs');
-  console.log('');
+
+  return {
+    stdout: summary + '\n' + status + '\n',
+  };
 }

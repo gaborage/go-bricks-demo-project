@@ -1,0 +1,53 @@
+{
+  "compilerOptions": {
+    // Target ES2015 for k6 compatibility
+    "target": "ES2015",
+    "lib": ["ES2015", "DOM"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+
+    // k6 type definitions
+    "types": ["k6"],
+
+    // Strict type checking
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+
+    // Additional checks
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Module resolution
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+
+    // Skip type checking for node_modules
+    "skipLibCheck": true,
+
+    // Don't emit files (k6 handles transpilation)
+    "noEmit": true,
+
+    // Generate source maps for debugging
+    "sourceMap": false,
+    "declaration": false
+  },
+  "include": [
+    "loadtests/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "loadtests/dist",
+    "loadtests/backup"
+  ]
+}

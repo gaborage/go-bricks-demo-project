@@ -1,4 +1,4 @@
-// products-crud.js - Realistic CRUD Mix Load Test
+// products-crud.ts - Realistic CRUD Mix Load Test
 //
 // This test simulates realistic production traffic with a mix of:
 // - 50% List operations (pagination)
@@ -8,14 +8,24 @@
 // - 3% Delete operations
 //
 // Usage:
-//   k6 run loadtests/products-crud.js
-//   k6 run --vus 50 --duration 5m loadtests/products-crud.js
-//   K6_BASE_URL=http://prod.example.com:8080 k6 run loadtests/products-crud.js
+//   k6 run loadtests/products-crud.ts
+//   k6 run --vus 50 --duration 5m loadtests/products-crud.ts
+//   K6_BASE_URL=http://prod.example.com:8080 k6 run loadtests/products-crud.ts
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
-import { config, getURL, getRandomProduct, getRandomPage, headers, loadProfiles } from './config.js';
+import type { Options } from 'k6/options';
+import {
+  config,
+  getURL,
+  getRandomProduct,
+  getRandomPage,
+  getSeededProductID,
+  headers,
+  loadProfiles,
+} from './config.ts';
+import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
 const listProductsRate = new Rate('list_products_success');
@@ -31,7 +41,7 @@ const updateProductDuration = new Trend('update_product_duration');
 const deleteProductDuration = new Trend('delete_product_duration');
 
 // Test configuration - use rampUp profile by default
-export const options = {
+export const options: Options = {
   stages: loadProfiles.rampUp.stages,
   thresholds: config.thresholds,
   // Batch multiple HTTP requests together for better performance
@@ -41,10 +51,10 @@ export const options = {
 };
 
 // Store created product IDs for use in update/delete operations
-const createdProductIDs = [];
+const createdProductIDs: string[] = [];
 
 // Main test function - executed by each virtual user repeatedly
-export default function () {
+export default function (): void {
   // Determine which operation to perform based on weighted distribution
   const rand = Math.random() * 100;
 
@@ -69,7 +79,7 @@ export default function () {
   sleep(Math.random() * 1.5 + 0.5);
 }
 
-function listProducts() {
+function listProducts(): void {
   const page = getRandomPage();
   const pageSize = config.testData.pageSize;
   const url = getURL(`/products?page=${page}&pageSize=${pageSize}`);
@@ -83,7 +93,7 @@ function listProducts() {
     'list: status is 200': (r) => r.status === 200,
     'list: has products array': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductListResponse;
         return Array.isArray(body.data?.products || body.products);
       } catch (e) {
         return false;
@@ -91,21 +101,20 @@ function listProducts() {
     },
   });
 
-  listProductsRate.add(success);
+  listProductsRate.add(success ? 1 : 0);
   listProductsDuration.add(response.timings.duration);
 }
 
-function getProduct() {
+function getProduct(): void {
   // Try to get a product we created, otherwise use a random ID
-  let productID;
+  let productID: string;
 
   if (createdProductIDs.length > 0) {
     // Pick a random product ID from our created products
     productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   } else {
-    // Fallback: use a predictable ID (assumes products exist from seeding)
-    // This will result in some 404s which is realistic
-    productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    productID = getSeededProductID();
   }
 
   const url = getURL(`/products/${productID}`);
@@ -120,26 +129,26 @@ function getProduct() {
     'get: has valid response': (r) => {
       if (r.status === 404) return true;
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object
         const product = body.data || body;
-        return product.id && product.name && product.price !== undefined;
+        return !!(product.id && product.name && product.price !== undefined);
       } catch (e) {
         return false;
       }
     },
   });
 
-  getProductRate.add(success);
+  getProductRate.add(success ? 1 : 0);
   getProductDuration.add(response.timings.duration);
 }
 
-function createProduct() {
+function createProduct(): void {
   const product = getRandomProduct();
   const url = getURL('/products');
 
   // Add some randomness to make each product unique
-  const uniqueProduct = {
+  const uniqueProduct: CreateProductInput = {
     name: `${product.name} ${Date.now()}`,
     description: product.description,
     price: product.price + (Math.random() * 10),
@@ -155,7 +164,7 @@ function createProduct() {
     'create: status is 201': (r) => r.status === 201,
     'create: returns product with ID': (r) => {
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object
         const product = body.data || body;
         if (product.id) {
@@ -174,15 +183,15 @@ function createProduct() {
     },
   });
 
-  createProductRate.add(success);
+  createProductRate.add(success ? 1 : 0);
   createProductDuration.add(response.timings.duration);
 }
 
-function updateProduct() {
+function updateProduct(): void {
   // Only try to update if we have created products
   if (createdProductIDs.length === 0) {
-    // Fallback: try to update a random ID (may result in 404)
-    const productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    const productID = getSeededProductID();
     performUpdate(productID);
     return;
   }
@@ -191,10 +200,10 @@ function updateProduct() {
   performUpdate(productID);
 }
 
-function performUpdate(productID) {
+function performUpdate(productID: string): void {
   const url = getURL(`/products/${productID}`);
 
-  const updates = {
+  const updates: UpdateProductInput = {
     name: `Updated Product ${Date.now()}`,
     price: Math.random() * 200 + 10,
     description: 'Updated during load test',
@@ -210,7 +219,7 @@ function performUpdate(productID) {
     'update: returns updated product': (r) => {
       if (r.status === 404) return true;
       try {
-        const body = JSON.parse(r.body);
+        const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object
         const product = body.data || body;
         return product.id === productID;
@@ -220,11 +229,11 @@ function performUpdate(productID) {
     },
   });
 
-  updateProductRate.add(success);
+  updateProductRate.add(success ? 1 : 0);
   updateProductDuration.add(response.timings.duration);
 }
 
-function deleteProduct() {
+function deleteProduct(): void {
   // Only delete if we have many created products (keep some for other operations)
   if (createdProductIDs.length < 10) {
     // Not enough products, create one instead
@@ -234,6 +243,8 @@ function deleteProduct() {
 
   // Remove and delete the oldest created product
   const productID = createdProductIDs.shift();
+  if (!productID) return;
+
   const url = getURL(`/products/${productID}`);
 
   const response = http.del(url, null, {
@@ -245,12 +256,12 @@ function deleteProduct() {
     'delete: status is 204 or 404': (r) => r.status === 204 || r.status === 404,
   });
 
-  deleteProductRate.add(success);
+  deleteProductRate.add(success ? 1 : 0);
   deleteProductDuration.add(response.timings.duration);
 }
 
 // Setup function - runs once before the test starts
-export function setup() {
+export function setup(): void {
   console.log('🚀 Starting CRUD Mix Load Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('📈 Operation Distribution:');
@@ -277,7 +288,7 @@ export function setup() {
 }
 
 // Teardown function - runs once after the test completes
-export function teardown(data) {
+export function teardown(): void {
   console.log('');
   console.log('✅ Load test completed');
   console.log(`📦 Created ${createdProductIDs.length} products during test`);

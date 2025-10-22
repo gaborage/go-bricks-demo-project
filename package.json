@@ -1,0 +1,22 @@
+{
+  "name": "go-bricks-demo-loadtests",
+  "version": "1.0.0",
+  "description": "k6 load tests in TypeScript for go-bricks demo project",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "type-check:watch": "tsc --noEmit --watch"
+  },
+  "keywords": [
+    "k6",
+    "load-testing",
+    "typescript",
+    "performance"
+  ],
+  "devDependencies": {
+    "@types/k6": "^0.52.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

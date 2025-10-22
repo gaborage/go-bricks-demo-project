@@ -1,4 +1,4 @@
-// spike-test.js - Traffic Spike Load Test
+// spike-test.ts - Traffic Spike Load Test
 //
 // This test simulates sudden traffic spikes to verify:
 // - System resilience under sudden load increases
@@ -14,12 +14,15 @@
 // 4. Recovery monitoring
 //
 // Usage:
-//   k6 run loadtests/spike-test.js
+//   k6 run loadtests/spike-test.ts
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Gauge } from 'k6/metrics';
-import { config, getURL, getRandomProduct, getRandomPage, headers } from './config.js';
+import type { Options } from 'k6/options';
+import type { RefinedResponse, ResponseType } from 'k6/http';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
 const spikeErrors = new Rate('spike_errors');
@@ -29,7 +32,7 @@ const currentStage = new Gauge('current_stage');
 const requestLatency = new Trend('request_latency');
 
 // Test configuration - spike profile
-export const options = {
+export const options: Options = {
   stages: [
     { duration: '2m', target: 10 },    // Baseline: establish normal behavior
     { duration: '30s', target: 300 },  // Spike: sudden jump to 300 VUs
@@ -56,12 +59,19 @@ export const options = {
 
 // Track which stage we're in
 let stageStartTime = Date.now();
-let currentStageIndex = 0;
-const stages = ['baseline', 'spike_ramp', 'spike_hold', 'spike_drop', 'recovery'];
+const stages: string[] = ['baseline', 'spike_ramp', 'spike_hold', 'spike_drop', 'recovery'];
 
-const createdProductIDs = [];
+const createdProductIDs: string[] = [];
 
-export default function () {
+interface OperationWeights {
+  list: number;
+  get: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export default function (): void {
   // Determine current stage based on elapsed time
   const elapsed = (Date.now() - stageStartTime) / 1000;
   const stage = getCurrentStage(elapsed);
@@ -75,11 +85,11 @@ export default function () {
 
     // Record errors by stage
     if (stage === 'baseline') {
-      baselineErrors.add(isError);
+      baselineErrors.add(isError ? 1 : 0);
     } else if (stage.startsWith('spike')) {
-      spikeErrors.add(isError);
+      spikeErrors.add(isError ? 1 : 0);
     } else if (stage === 'recovery') {
-      recoveryErrors.add(isError);
+      recoveryErrors.add(isError ? 1 : 0);
     }
 
     requestLatency.add(response.timings.duration, { stage });
@@ -90,7 +100,7 @@ export default function () {
   sleep(Math.random() * thinkTime);
 }
 
-function getCurrentStage(elapsed) {
+function getCurrentStage(elapsed: number): string {
   if (elapsed < 120) return 'baseline';        // 0-2m
   if (elapsed < 150) return 'spike_ramp';      // 2m-2.5m
   if (elapsed < 210) return 'spike_hold';      // 2.5m-3.5m
@@ -98,11 +108,12 @@ function getCurrentStage(elapsed) {
   return 'recovery';                           // 4m+
 }
 
-function executeRandomOperation() {
+function executeRandomOperation(): RefinedResponse<ResponseType | undefined> | null {
   const rand = Math.random() * 100;
 
   // During spike, favor reads (simulates cache stampede scenario)
-  const weights = getCurrentStage((Date.now() - stageStartTime) / 1000).startsWith('spike')
+  const currentElapsed = (Date.now() - stageStartTime) / 1000;
+  const weights: OperationWeights = getCurrentStage(currentElapsed).startsWith('spike')
     ? { list: 50, get: 35, create: 10, update: 3, delete: 2 }
     : { list: 40, get: 30, create: 20, update: 7, delete: 3 };
 
@@ -119,12 +130,12 @@ function executeRandomOperation() {
       return deleteProduct();
     }
   } catch (e) {
-    console.error(`Operation failed: ${e.message}`);
+    console.error(`Operation failed: ${(e as Error).message}`);
     return null;
   }
 }
 
-function listProducts() {
+function listProducts(): RefinedResponse<ResponseType | undefined> {
   const page = getRandomPage();
   const pageSize = config.testData.pageSize;
   const url = getURL(`/products?page=${page}&pageSize=${pageSize}`);
@@ -143,13 +154,14 @@ function listProducts() {
   return response;
 }
 
-function getProduct() {
-  let productID;
+function getProduct(): RefinedResponse<ResponseType | undefined> {
+  let productID: string;
 
   if (createdProductIDs.length > 0) {
     productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   } else {
-    productID = `prod-${Math.floor(Math.random() * 100) + 1}`;
+    // Fallback to seeded product IDs from database migration
+    productID = getSeededProductID();
   }
 
   const url = getURL(`/products/${productID}`);
@@ -168,11 +180,11 @@ function getProduct() {
   return response;
 }
 
-function createProduct() {
+function createProduct(): RefinedResponse<ResponseType | undefined> {
   const product = getRandomProduct();
   const url = getURL('/products');
 
-  const uniqueProduct = {
+  const uniqueProduct: CreateProductInput = {
     name: `${product.name} ${Date.now()}-${__VU}`,
     description: product.description,
     price: product.price,
@@ -192,7 +204,7 @@ function createProduct() {
 
   if (success) {
     try {
-      const body = JSON.parse(response.body);
+      const body = JSON.parse(response.body as string) as ProductResponse;
       // go-bricks wraps response in data object
       const product = body.data || body;
       if (product.id) {
@@ -209,7 +221,7 @@ function createProduct() {
   return response;
 }
 
-function updateProduct() {
+function updateProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length === 0) {
     return createProduct();
   }
@@ -217,7 +229,7 @@ function updateProduct() {
   const productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   const url = getURL(`/products/${productID}`);
 
-  const updates = {
+  const updates: UpdateProductInput = {
     price: Math.random() * 200 + 10,
   };
 
@@ -235,7 +247,7 @@ function updateProduct() {
   return response;
 }
 
-function deleteProduct() {
+function deleteProduct(): RefinedResponse<ResponseType | undefined> {
   if (createdProductIDs.length < 5) {
     return createProduct();
   }
@@ -257,7 +269,7 @@ function deleteProduct() {
   return response;
 }
 
-export function setup() {
+export function setup(): void {
   console.log('🚀 Starting Spike Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('');
@@ -300,7 +312,7 @@ export function setup() {
   console.log('');
 }
 
-export function teardown(data) {
+export function teardown(): void {
   console.log('');
   console.log('✅ Spike test completed');
   console.log('');
@@ -319,7 +331,7 @@ export function teardown(data) {
   console.log('   🚩 Cascading failures (errors in baseline after spike)');
 }
 
-export function handleSummary(data) {
+export function handleSummary(data: any): { stdout: string } {
   const p95Duration = data.metrics.http_req_duration?.values['p(95)'] || 0;
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
   const totalErrors = data.metrics.http_req_failed?.values?.rate || 0;
@@ -328,30 +340,38 @@ export function handleSummary(data) {
   const recoveryErrorRate = data.metrics.recovery_errors?.values?.rate || 0;
   const totalReqs = data.metrics.http_reqs?.values?.count || 0;
 
-  console.log('');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('                     SPIKE TEST SUMMARY                     ');
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log(`Total Requests:          ${totalReqs}`);
-  console.log(`Overall Error Rate:      ${(totalErrors * 100).toFixed(2)}%`);
-  console.log('');
-  console.log('Error Rates by Phase:');
-  console.log(`  Baseline:              ${(baselineErrorRate * 100).toFixed(2)}%`);
-  console.log(`  Spike:                 ${(spikeErrorRate * 100).toFixed(2)}%`);
-  console.log(`  Recovery:              ${(recoveryErrorRate * 100).toFixed(2)}%`);
-  console.log('');
-  console.log('Response Times:');
-  console.log(`  P95:                   ${p95Duration.toFixed(2)}ms`);
-  console.log(`  P99:                   ${p99Duration.toFixed(2)}ms`);
-  console.log('═══════════════════════════════════════════════════════════');
+  const summary = `
+═══════════════════════════════════════════════════════════
+                     SPIKE TEST SUMMARY
+═══════════════════════════════════════════════════════════
+Total Requests:          ${totalReqs}
+Overall Error Rate:      ${(totalErrors * 100).toFixed(2)}%
+
+Error Rates by Phase:
+  Baseline:              ${(baselineErrorRate * 100).toFixed(2)}%
+  Spike:                 ${(spikeErrorRate * 100).toFixed(2)}%
+  Recovery:              ${(recoveryErrorRate * 100).toFixed(2)}%
+
+Response Times:
+  P95:                   ${p95Duration.toFixed(2)}ms
+  P99:                   ${p99Duration.toFixed(2)}ms
+═══════════════════════════════════════════════════════════
+`;
 
   // Evaluate results
   const goodRecovery = recoveryErrorRate < baselineErrorRate * 2;
   const acceptableSpike = spikeErrorRate < 0.15;
 
-  console.log('');
-  console.log('Resilience Assessment:');
-  console.log(`  Spike handling:        ${acceptableSpike ? '✅ Good' : '❌ Poor - too many errors'}`);
-  console.log(`  Recovery speed:        ${goodRecovery ? '✅ Good' : '❌ Poor - slow recovery'}`);
-  console.log('');
+  const assessment = `
+Resilience Assessment:
+  Spike handling:        ${acceptableSpike ? '✅ Good' : '❌ Poor - too many errors'}
+  Recovery speed:        ${goodRecovery ? '✅ Good' : '❌ Poor - slow recovery'}
+`;
+
+  console.log(summary);
+  console.log(assessment);
+
+  return {
+    stdout: summary + '\n' + assessment + '\n',
+  };
 }

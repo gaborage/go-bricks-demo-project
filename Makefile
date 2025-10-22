@@ -196,7 +196,7 @@ loadtest-crud: check-k6
 	@echo "🧪 Running CRUD mix load test..."
 	@echo "This test simulates realistic production traffic with read/write operations"
 	@echo ""
-	@k6 run loadtests/products-crud.js
+	@k6 run loadtests/products-crud.ts
 	@echo ""
 	@echo "✅ CRUD load test completed"
 
@@ -205,7 +205,7 @@ loadtest-read: check-k6
 	@echo "🧪 Running read-only baseline test..."
 	@echo "This test establishes baseline performance for read operations"
 	@echo ""
-	@k6 run loadtests/products-read-only.js
+	@k6 run loadtests/products-read-only.ts
 	@echo ""
 	@echo "✅ Read-only load test completed"
 
@@ -215,7 +215,7 @@ loadtest-ramp: check-k6
 	@echo "This test gradually increases load to find breaking points"
 	@echo "⚠️  Duration: ~17 minutes"
 	@echo ""
-	@k6 run loadtests/ramp-up-test.js
+	@k6 run loadtests/ramp-up-test.ts
 	@echo ""
 	@echo "✅ Ramp-up load test completed"
 
@@ -225,7 +225,7 @@ loadtest-spike: check-k6
 	@echo "This test simulates sudden traffic spikes"
 	@echo "⚠️  Duration: ~6 minutes"
 	@echo ""
-	@k6 run loadtests/spike-test.js
+	@k6 run loadtests/spike-test.ts
 	@echo ""
 	@echo "✅ Spike load test completed"
 
@@ -235,7 +235,7 @@ loadtest-sustained: check-k6
 	@echo "This test validates stability over extended duration"
 	@echo "⚠️  Duration: ~17 minutes"
 	@echo ""
-	@k6 run loadtests/sustained-load.js
+	@k6 run loadtests/sustained-load.ts
 	@echo ""
 	@echo "✅ Sustained load test completed"
 
@@ -245,19 +245,19 @@ loadtest-all: check-k6
 	@echo "⚠️  Total duration: ~60 minutes"
 	@echo ""
 	@echo "1/5: Read-only baseline test..."
-	@k6 run loadtests/products-read-only.js
+	@k6 run loadtests/products-read-only.ts
 	@echo ""
 	@echo "2/5: CRUD mix test..."
-	@k6 run loadtests/products-crud.js
+	@k6 run loadtests/products-crud.ts
 	@echo ""
 	@echo "3/5: Spike test..."
-	@k6 run loadtests/spike-test.js
+	@k6 run loadtests/spike-test.ts
 	@echo ""
 	@echo "4/5: Ramp-up test..."
-	@k6 run loadtests/ramp-up-test.js
+	@k6 run loadtests/ramp-up-test.ts
 	@echo ""
 	@echo "5/5: Sustained load test..."
-	@k6 run loadtests/sustained-load.js
+	@k6 run loadtests/sustained-load.ts
 	@echo ""
 	@echo "✅ All load tests completed!"
 	@echo "📊 Review results and see wiki/LOAD_TESTING.md for analysis guidance"
@@ -265,9 +265,15 @@ loadtest-all: check-k6
 # Run a quick smoke test
 loadtest-smoke: check-k6
 	@echo "🧪 Running smoke test (quick validation)..."
-	@k6 run --vus 1 --duration 30s loadtests/products-crud.js
+	@k6 run --vus 1 --duration 30s loadtests/products-crud.ts
 	@echo ""
 	@echo "✅ Smoke test completed"
+
+# Type check load test TypeScript files
+loadtest-type-check:
+	@echo "🔍 Type checking load tests..."
+	@npm run type-check
+	@echo "✅ Type check passed"
 
 # Run all load tests with monitoring and automated analysis
 loadtest-all-monitored:

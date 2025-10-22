@@ -8,6 +8,7 @@
 *
 
 .gomodcache/
+node_modules/
 
 # But not these files...
 !/.gitignore
@@ -28,12 +29,25 @@
 !.env.example
 !config.example.yaml
 
+# TypeScript and Node.js
+!package.json
+!package-lock.json
+!tsconfig.json
+
 !wiki/*
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
 
 !sonar-project.properties
+
+# Load test files
+!loadtests/**/*.ts
+!loadtests/**/*.js
+!loadtests/**/*.yaml
+!loadtests/**/*.md
+
+!tsconfig.json
 
 # ...even if they are in subdirectories
 !*/
