@@ -6,7 +6,7 @@ Production-ready demonstration of the [go-bricks framework](../go-bricks) showca
 
 - **Modular Architecture** - Domain-driven design with clean separation of concerns
 - **REST API** - Full CRUD operations with Echo web framework
-- **Dual Observability** - Prometheus/Grafana/Jaeger (local) + DataDog (cloud)
+- **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
 - **Production Patterns** - Health checks, structured logging, connection pooling
@@ -46,19 +46,24 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 
 ### Local Stack (Recommended)
 ```bash
+make docker-up-local
+# Or manually:
 cd etc/docker
 docker-compose --profile local up -d
 ```
 - **Prometheus:** http://localhost:9090
 - **Grafana:** http://localhost:3000 (admin/admin)
-- **Jaeger:** http://localhost:16686
+- **Tempo:** http://localhost:3200
 
-### DataDog Stack
+### New Relic Stack
 ```bash
-# Create .env with DD_API_KEY and DD_SITE
+# Create .env with NEW_RELIC_LICENSE_KEY and NEW_RELIC_REGION
+make docker-up-newrelic
+# Or manually:
 cd etc/docker
-docker-compose --profile datadog up -d
+docker-compose --profile newrelic up -d
 ```
+- **New Relic One:** https://one.newrelic.com/nr1-core
 
 **Switch stacks:** Just run `docker-compose down` and start the other profile. Application auto-connects to `localhost:4317`.
 

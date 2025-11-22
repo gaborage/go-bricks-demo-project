@@ -5,7 +5,7 @@
 
 ## Summary
 
-Successfully created a **parallel observability stack** using Prometheus, Grafana, and Jaeger for **immediate local validation** of go-bricks observability, while keeping the DataDog setup intact.
+Successfully created a **parallel observability stack** using Prometheus, Grafana, Tempo, and Loki for **immediate local validation** of go-bricks observability, with New Relic as the cloud alternative.
 
 ## Validation Results
 
@@ -47,11 +47,11 @@ gobricks_http_server_response_body_size_bytes
         ┌─────────┴──────────┐
         │                    │
         ▼                    ▼
-  DataDog Stack       Prometheus Stack
+  New Relic Stack     Prometheus Stack
   (Cloud)             (Local)
         │                    │
         ▼                    ▼
-   DataDog API    ┌──────────┴──────────┐
+   New Relic API   ┌──────────┴──────────┐
                   │                     │
            Prometheus            Jaeger
            (metrics)            (traces)
@@ -63,29 +63,29 @@ gobricks_http_server_response_body_size_bytes
 ### Profile-Based Switching
 
 **Docker Compose Profiles**:
-- `datadog`: OTel Collector → DataDog Cloud
-- `local`: OTel Collector → Prometheus + Grafana + Jaeger
+- `newrelic`: OTel Collector → New Relic Cloud
+- `local`: OTel Collector → Prometheus + Grafana + Tempo + Loki
 
 **Switch commands**:
 ```bash
 # Local testing (recommended for development)
 docker-compose --profile local up -d
 
-# DataDog testing (cloud observability)
-docker-compose --profile datadog up -d
+# New Relic testing (cloud observability)
+docker-compose --profile newrelic up -d
 ```
 
 ## File Structure
 
 ```
 go-bricks-demo-project/
-├── otel-collector-datadog.yaml          # DataDog exporter config
-├── otel-collector-prometheus.yaml       # Prometheus/Jaeger exporter config
+├── otel-collector-newrelic.yaml         # New Relic OTLP exporter config
+├── otel-collector-prometheus.yaml       # Prometheus/Tempo exporter config
 ├── prometheus.yml                       # Prometheus scrape config
 ├── grafana/
 │   └── provisioning/
 │       └── datasources/
-│           └── datasources.yml          # Auto-provision Prometheus + Jaeger
+│           └── datasources.yml          # Auto-provision Prometheus + Tempo + Loki
 ├── docker-compose.yml                   # Both stacks with profiles
 └── config.development.yaml              # Application config (unchanged)
 ```
@@ -103,13 +103,13 @@ go-bricks-demo-project/
 | **Grafana** | 3000 | http://localhost:3000 | Dashboards (admin/admin) |
 | **Jaeger** | 16686 | http://localhost:16686 | Trace visualization |
 
-### DataDog Stack (`--profile datadog`)
+### New Relic Stack (`--profile newrelic`)
 
 | Service | Port | Purpose |
 |---------|------|---------|
 | **OTel Collector** | 4317 | OTLP gRPC receiver |
 | **OTel Collector** | 4318 | OTLP HTTP receiver |
-| *Exports to* | - | DataDog Cloud (us5.datadoghq.com) |
+| *Exports to* | - | New Relic Cloud (otlp.nr-data.net) |
 
 ## How to Use
 
@@ -166,14 +166,14 @@ for i in {1..30}; do curl http://localhost:8080/api/v1/products?page=1; sleep 0.
 3. Search traces
 4. Explore span details, timing, and request flow
 
-### Switch to DataDog Stack
+### Switch to New Relic Stack
 
 ```bash
 # Stop local stack
 docker-compose down
 
-# Start DataDog stack (requires DD_API_KEY in .env)
-docker-compose --profile datadog up -d
+# Start New Relic stack (requires NEW_RELIC_LICENSE_KEY in .env)
+docker-compose --profile newrelic up -d
 
 # Application automatically connects to the active OTel Collector
 ```
@@ -184,10 +184,10 @@ docker-compose --profile datadog up -d
 
 **File**: `otel-collector-prometheus.yaml`
 
-**Key Differences from DataDog**:
-- **No DataDog connector** (simpler pipelines)
+**Key Differences from New Relic**:
+- **No cloud API calls** (everything stays local)
 - **Prometheus exporter** on port 8889 (scraped by Prometheus)
-- **Jaeger exporter** via OTLP to port 4317
+- **Tempo/Jaeger exporter** via OTLP
 - **Clean, simple architecture** - perfect for local testing
 
 **Pipelines**:
@@ -225,7 +225,7 @@ service:
 ## Benefits of This Approach
 
 ### ✅ Immediate Feedback
-- **No waiting**: See metrics in < 30 seconds (vs. 10-15 minutes with DataDog)
+- **No waiting**: See metrics in < 30 seconds (vs. cloud indexing delays)
 - **Local debugging**: Full visibility into telemetry pipeline
 - **No cloud dependency**: Work offline
 
@@ -236,14 +236,14 @@ service:
 - **Confirmed**: W3C trace propagation works
 
 ### ✅ Dual Stack Flexibility
-- **Local dev**: Use Prometheus/Grafana for fast feedback
-- **Cloud testing**: Switch to DataDog when needed
+- **Local dev**: Use Prometheus/Grafana/Tempo/Loki for fast feedback
+- **Cloud testing**: Switch to New Relic when needed
 - **Clean separation**: No config mixing
 
-### ✅ Production-Ready DataDog Setup
-- **DataDog connector**: APM stats computation
-- **Cloud integration**: Ready for production monitoring
-- **Maintained separately**: No risk to DataDog setup
+### ✅ Production-Ready New Relic Setup
+- **Standard OTLP**: No proprietary connectors needed
+- **Cloud integration**: Ready for production monitoring with New Relic One
+- **Maintained separately**: Clean profile-based architecture
 
 ## Metrics Available
 
@@ -415,10 +415,10 @@ counter.Add(ctx, 1)
 ✅ **Service metadata**: Correctly tagged
 ✅ **W3C propagation**: Traceparent headers working
 
-**The Prometheus + Grafana stack provides immediate, local validation without waiting for cloud indexing delays.**
+**The Prometheus + Grafana + Tempo + Loki stack provides immediate, local validation without waiting for cloud indexing delays.**
 
 You now have two fully functional observability stacks:
-- **Local (Prometheus/Grafana/Jaeger)**: Fast feedback for development
-- **Cloud (DataDog)**: Production-ready monitoring
+- **Local (Prometheus/Grafana/Tempo/Loki)**: Fast feedback for development
+- **Cloud (New Relic)**: Production-ready monitoring with New Relic One
 
 Switch between them with a single command!

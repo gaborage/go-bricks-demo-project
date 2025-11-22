@@ -11,7 +11,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Multi-tenant capable (currently running in single-tenant mode)
 - PostgreSQL + RabbitMQ infrastructure
 - REST API with Echo web framework
-- Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + DataDog (cloud)
+- Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - Comprehensive load testing with k6
 
 **Requirements:**
@@ -293,25 +293,28 @@ The dashboard now uses OpenTelemetry semantic conventions for Go runtime metrics
 - **Trace → Log correlation:** Navigate from trace to related logs seamlessly
 - **Customizable:** Edit and save your own versions
 
-### Cloud Stack (DataDog)
+### Cloud Stack (New Relic)
 
 **Best for:** Production-like monitoring and APM
 
 **Setup:**
-1. Get DataDog API key from https://app.datadoghq.com/organization-settings/api-keys
+1. Get New Relic license key from https://one.newrelic.com/launcher/api-keys-ui.api-keys-launcher
 2. Create `.env` file in project root:
    ```bash
-   DD_API_KEY=your_api_key_here
-   DD_SITE=us5.datadoghq.com
+   NEW_RELIC_LICENSE_KEY=your_license_key_here
+   NEW_RELIC_REGION=US  # or EU
    ```
 3. Start stack:
    ```bash
+   make docker-up-newrelic
+   # Or manually:
    cd etc/docker
-   docker-compose --profile datadog up -d
+   docker-compose --profile newrelic up -d
    ```
 
 **Access:**
-- DataDog APM: https://us5.datadoghq.com/apm
+- New Relic One: https://one.newrelic.com/nr1-core
+- APM & Services: https://one.newrelic.com/nr1-core?filters=(domain%20IN%20('APM'))
 - Service name: `go-bricks-demo-project`
 
 ### Switching Observability Stacks
@@ -322,7 +325,7 @@ cd etc/docker && docker-compose down
 
 # Start desired stack
 docker-compose --profile local up -d      # For Prometheus/Grafana/Loki/Tempo
-docker-compose --profile datadog up -d    # For DataDog
+docker-compose --profile newrelic up -d   # For New Relic
 ```
 
 **Note:** Application doesn't need restart when switching - it always sends to `localhost:4317`.
@@ -627,7 +630,7 @@ query, args, err := qb.Delete("products").
 
 All Docker-related files are in [etc/docker/](etc/docker/) directory:
 - `docker-compose.yml` - Main compose file with service profiles
-- `otel/` - OpenTelemetry Collector configurations (Prometheus vs. DataDog)
+- `otel/` - OpenTelemetry Collector configurations (Prometheus vs. New Relic)
 - `prometheus/` - Prometheus scrape configuration
 - `promtail/` - Promtail log collection configuration
 - `loki/` - Loki log storage configuration
@@ -639,7 +642,7 @@ All Docker-related files are in [etc/docker/](etc/docker/) directory:
 
 **Service profiles:**
 - `--profile local` - Prometheus + Grafana + Tempo + Loki (local development)
-- `--profile datadog` - DataDog Cloud integration (production-like)
+- `--profile newrelic` - New Relic Cloud integration (production-like)
 - `--profile migrations` - Flyway migration runner
 
 ## Contribution Guidelines

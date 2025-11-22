@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-down logs status check-deps deps fmt lint coverage check migrate test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -15,7 +15,9 @@ help:
 	@echo "  clean             Clean build artifacts"
 	@echo ""
 	@echo "Docker targets:"
-	@echo "  docker-up         Start all services (PostgreSQL + RabbitMQ)"
+	@echo "  docker-up         Start all services (PostgreSQL + RabbitMQ + local observability)"
+	@echo "  docker-up-local   Start local observability stack (Prometheus/Grafana/Tempo/Loki)"
+	@echo "  docker-up-newrelic Start New Relic observability stack (cloud)"
 	@echo "  docker-down       Stop all services"
 	@echo "  logs              View logs from all services"
 	@echo "  status            Show service status"
@@ -86,10 +88,13 @@ clean:
 	go clean -cache -testcache
 	@echo "✅ Clean completed"
 
-# Start all Docker services
-docker-up: check-deps
-	@echo "🐳 Starting Docker services..."
-	docker-compose -f etc/docker/docker-compose.yml up -d
+# Start all Docker services (defaults to local observability stack)
+docker-up: docker-up-local
+
+# Start Docker services with local observability stack (Prometheus + Grafana + Tempo + Loki)
+docker-up-local: check-deps
+	@echo "🐳 Starting Docker services with local observability stack..."
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile local up -d
 	@echo "⏳ Waiting for services to be ready..."
 	@sleep 5
 	@echo "✅ All services are running"
@@ -98,32 +103,50 @@ docker-up: check-deps
 	@echo "  PostgreSQL:           localhost:5432"
 	@echo "  RabbitMQ AMQP:        localhost:5672"
 	@echo "  RabbitMQ Management:  http://localhost:15672"
+	@echo "  Prometheus:           http://localhost:9090"
+	@echo "  Grafana:              http://localhost:3000 (admin/admin)"
+	@echo "  Tempo:                http://localhost:3200"
+
+# Start Docker services with New Relic observability stack (cloud)
+docker-up-newrelic: check-deps
+	@echo "🐳 Starting Docker services with New Relic observability stack..."
+	@echo "⚠️  Requires NEW_RELIC_LICENSE_KEY in .env file"
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile newrelic up -d
+	@echo "⏳ Waiting for services to be ready..."
+	@sleep 5
+	@echo "✅ All services are running"
+	@echo ""
+	@echo "📋 Service URLs:"
+	@echo "  PostgreSQL:           localhost:5432"
+	@echo "  RabbitMQ AMQP:        localhost:5672"
+	@echo "  RabbitMQ Management:  http://localhost:15672"
+	@echo "  New Relic APM:        https://one.newrelic.com/nr1-core"
 
 # Stop all Docker services
 docker-down:
 	@echo "🛑 Stopping Docker services..."
-	docker-compose -f etc/docker/docker-compose.yml down -v
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env down -v
 	@echo "✅ All services stopped"
 
 # View logs from all services
 logs:
-	docker-compose -f etc/docker/docker-compose.yml logs -f
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env logs -f
 
 # Show service status
 status:
 	@echo "📊 Service Status:"
-	@docker-compose -f etc/docker/docker-compose.yml ps
+	@docker-compose -f etc/docker/docker-compose.yml --env-file .env ps
 
 # Run database migrations using Flyway
 migrate:
 	@echo "🚀 Running database migrations..."
-	docker-compose -f etc/docker/docker-compose.yml --profile migrations run --rm flyway migrate
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway migrate
 	@echo "✅ Migrations completed"
 
 # Show migration status
 migrate-info:
 	@echo "📊 Migration status..."
-	docker-compose -f etc/docker/docker-compose.yml --profile migrations run --rm flyway info
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway info
 
 # Format Go code
 fmt:

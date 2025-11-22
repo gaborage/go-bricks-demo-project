@@ -66,25 +66,25 @@ services:
       - migrations  # Only start with --profile migrations
 
   # ========== OBSERVABILITY STACKS ==========
-  # Use docker-compose profiles to switch between DataDog and Prometheus stacks
-  # DataDog:    docker-compose --profile datadog up -d
+  # Use docker-compose profiles to switch between New Relic and Prometheus stacks
+  # New Relic:  docker-compose --profile newrelic up -d
   # Prometheus: docker-compose --profile local up -d
 
-  # OpenTelemetry Collector - DataDog variant (exports to DataDog Cloud)
-  otel-collector-datadog:
+  # OpenTelemetry Collector - New Relic variant (exports to New Relic Cloud)
+  otel-collector-newrelic:
     image: otel/opentelemetry-collector-contrib:latest
-    container_name: go-bricks-otel-collector-datadog
-    command: ["--config=/etc/otel-collector-datadog.yaml"]
+    container_name: go-bricks-otel-collector-newrelic
+    command: ["--config=/etc/otel-collector-newrelic.yaml"]
     ports:
       - "4317:4317"   # OTLP gRPC receiver
       - "4318:4318"   # OTLP HTTP receiver
       - "8888:8888"   # Prometheus metrics (collector's own metrics)
       - "13133:13133" # Health check
     environment:
-      - DD_API_KEY=${DD_API_KEY:?DD_API_KEY environment variable is required}
-      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:?NEW_RELIC_LICENSE_KEY environment variable is required}
+      - NEW_RELIC_REGION=${NEW_RELIC_REGION:-US}
     volumes:
-      - ./otel/otel-collector-datadog.yaml:/etc/otel-collector-datadog.yaml:ro
+      - ./otel/otel-collector-newrelic.yaml:/etc/otel-collector-newrelic.yaml:ro
     networks:
       - app-network
     healthcheck:
@@ -94,7 +94,7 @@ services:
       retries: 3
       start_period: 10s
     profiles:
-      - datadog
+      - newrelic
 
   # Grafana Alloy - OpenTelemetry Collector with native Loki support
   # Replaces otel-collector-local with built-in otelcol.exporter.loki

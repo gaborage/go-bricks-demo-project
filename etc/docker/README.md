@@ -8,7 +8,7 @@ This directory contains all Docker-related configuration files for the go-bricks
 etc/docker/
 ├── docker-compose.yml        # Main compose file with all services
 ├── otel/                      # OpenTelemetry Collector configurations
-│   ├── otel-collector-datadog.yaml      # DataDog exporter (cloud)
+│   ├── otel-collector-newrelic.yaml     # New Relic exporter (cloud)
 │   └── otel-collector-prometheus.yaml   # Prometheus/Jaeger exporters (local)
 ├── prometheus/                # Prometheus configuration
 │   └── prometheus.yml
@@ -27,11 +27,11 @@ All docker-compose commands must be run from this directory (`etc/docker/`):
 ```bash
 cd etc/docker
 
-# Start local observability stack (Prometheus + Grafana + Jaeger)
+# Start local observability stack (Prometheus + Grafana + Tempo + Loki)
 docker-compose --profile local up -d
 
-# Start DataDog observability stack (requires DD_API_KEY in .env)
-docker-compose --profile datadog up -d
+# Start New Relic observability stack (requires NEW_RELIC_LICENSE_KEY in .env)
+docker-compose --profile newrelic up -d
 
 # Start database migrations
 docker-compose --profile migrations up flyway
@@ -83,19 +83,20 @@ docker-compose ps
 
 **Use case**: Local development and testing with immediate feedback
 
-### `datadog` - DataDog Observability Stack
+### `newrelic` - New Relic Observability Stack
 
 **Services**:
 - PostgreSQL (database)
 - RabbitMQ (message broker)
-- OpenTelemetry Collector (with DataDog connector & exporter)
+- OpenTelemetry Collector (with New Relic OTLP exporter)
 
 **Requirements**:
-- `DD_API_KEY` environment variable
-- `DD_SITE` environment variable (default: us5.datadoghq.com)
+- `NEW_RELIC_LICENSE_KEY` environment variable
+- `NEW_RELIC_REGION` environment variable (default: US, options: US or EU)
 
 **Access**:
-- DataDog APM: https://us5.datadoghq.com/apm
+- New Relic One: https://one.newrelic.com/nr1-core
+- APM & Services: https://one.newrelic.com/nr1-core?filters=(domain%20IN%20('APM'))
 
 **Use case**: Cloud observability, production-like monitoring
 
@@ -116,11 +117,11 @@ docker-compose ps
 - Exports traces to Jaeger via OTLP
 - Simple, clean pipelines for local testing
 
-**[otel/otel-collector-datadog.yaml](otel/otel-collector-datadog.yaml)**
+**[otel/otel-collector-newrelic.yaml](otel/otel-collector-newrelic.yaml)**
 - Receives OTLP from application
-- Uses DataDog Connector to compute APM stats
-- Exports traces and metrics to DataDog Cloud
-- Required for APM visibility in DataDog UI
+- Exports traces, metrics, and logs to New Relic using standard OTLP protocol
+- No connector needed (simpler than DataDog setup)
+- Native OTLP support for full observability in New Relic One
 
 ### Prometheus Config
 
@@ -168,14 +169,14 @@ docker-compose down -v  # -v removes volumes (WARNING: deletes data!)
 Create a `.env` file in the project root (not in `etc/docker/`) with:
 
 ```bash
-# DataDog (required for --profile datadog)
-DD_API_KEY=your_datadog_api_key_here
-DD_SITE=us5.datadoghq.com
+# New Relic (required for --profile newrelic)
+NEW_RELIC_LICENSE_KEY=your_license_key_here
+NEW_RELIC_REGION=US  # or EU
 ```
 
 ## Switching Between Observability Stacks
 
-### From Local to DataDog
+### From Local to New Relic
 
 ```bash
 cd etc/docker
@@ -183,16 +184,16 @@ cd etc/docker
 # Stop local stack
 docker-compose down
 
-# Start DataDog stack
-docker-compose --profile datadog up -d
+# Start New Relic stack
+docker-compose --profile newrelic up -d
 ```
 
-### From DataDog to Local
+### From New Relic to Local
 
 ```bash
 cd etc/docker
 
-# Stop DataDog stack
+# Stop New Relic stack
 docker-compose down
 
 # Start local stack
@@ -249,5 +250,5 @@ curl http://localhost:13133/
 ## Related Documentation
 
 - [PROMETHEUS_GRAFANA_SETUP.md](../../wiki/PROMETHEUS_GRAFANA_SETUP.md) - Complete Prometheus/Grafana setup guide
-- [DATADOG_CONNECTOR_FIX.md](../../DATADOG_CONNECTOR_FIX.md) - DataDog connector configuration details
 - [config.development.yaml](../../config.development.yaml) - Application observability configuration
+- [New Relic OTLP Documentation](https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/opentelemetry-setup/) - Official New Relic OTLP guide
