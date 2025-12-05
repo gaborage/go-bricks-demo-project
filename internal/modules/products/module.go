@@ -43,8 +43,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	})
 
 	// Setup functions to get context-dependent resources
-	m.getDB = deps.GetDB
-	m.getMessaging = deps.GetMessaging
+	m.getDB = deps.DB
+	m.getMessaging = deps.Messaging
 
 	m.logger.Info().Msg("Initializing products module")
 

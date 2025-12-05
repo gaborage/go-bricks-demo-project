@@ -67,7 +67,7 @@ func (m *mockDB) DatabaseType() string {
 	return "mock"
 }
 
-func (m *mockDB) GetMigrationTable() string {
+func (m *mockDB) MigrationTable() string {
 	return "migrations"
 }
 
