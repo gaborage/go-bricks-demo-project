@@ -1,14 +1,16 @@
-package http
+package handlers
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/service"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
@@ -210,10 +212,20 @@ func TestListProducts(t *testing.T) {
 			page:     0,
 			pageSize: 10,
 			serviceFunc: func(ctx context.Context, page, pageSize int) ([]*domain.Product, int, error) {
-				return nil, 0, errors.New("page must be greater than 0")
+				return nil, 0, fmt.Errorf("%w: page must be greater than 0", service.ErrValidation)
 			},
 			wantStatus:  http.StatusBadRequest,
 			wantErrCode: "BAD_REQUEST",
+		},
+		{
+			name:     "internal error",
+			page:     1,
+			pageSize: 10,
+			serviceFunc: func(ctx context.Context, page, pageSize int) ([]*domain.Product, int, error) {
+				return nil, 0, fmt.Errorf("%w: failed to list products: database error", service.ErrInternal)
+			},
+			wantStatus:  http.StatusInternalServerError,
+			wantErrCode: "INTERNAL_ERROR",
 		},
 	}
 

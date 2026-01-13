@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/http"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/handlers"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/job"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/service"
@@ -19,7 +19,7 @@ import (
 type Module struct {
 	deps         *app.ModuleDeps
 	service      *service.ProductService
-	handler      *http.ProductHandler
+	handler      *handlers.ProductHandler
 	repo         repository.ProductRepository
 	logger       logger.Logger
 	getDB        func(context.Context) (database.Interface, error)
@@ -53,7 +53,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// Initialize repository, service, jobs and handler
 	m.repo = *repository.NewSQLProductRepository(m.getDB)
 	m.service = service.NewService(&m.repo, m.logger)
-	m.handler = http.NewProductHandler(m.service, m.logger)
+	m.handler = handlers.NewProductHandler(m.service, m.logger)
 
 	m.logger.Info().Msg("Products module initialized successfully")
 
