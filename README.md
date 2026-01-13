@@ -37,6 +37,11 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 - `PUT /api/v1/products/:id` - Update product
 - `DELETE /api/v1/products/:id` - Delete product
 
+### Analytics (Named Database Example)
+- `POST /api/v1/analytics/views` - Record a product view
+- `GET /api/v1/analytics/views` - Get top viewed products
+- `GET /api/v1/analytics/views/:productId` - Get view stats for product
+
 ### System
 - `GET /health` - Liveness probe
 - `GET /ready` - Readiness probe (checks DB + messaging)
@@ -134,6 +139,76 @@ Framework supports:
 
 To enable: Set `multitenant.enabled: true` in config and configure tenant resolver.
 
+## Named Databases
+
+The go-bricks framework supports **multiple independent database connections**, each identified by a unique name. This enables data-layered architectures where different concerns (products, analytics, audit logs) have isolated storage.
+
+### How It Works
+
+- **Default database**: `deps.DB(ctx)` - configured under `database:`
+- **Named databases**: `deps.DBByName(ctx, "name")` - configured under `databases.{name}:`
+
+### Configuration
+
+```yaml
+# Default database (products module)
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: postgres
+
+# Named databases
+databases:
+  analytics:                    # Database name identifier
+    type: postgresql
+    host: localhost
+    port: 5433                  # Separate PostgreSQL instance
+    database: analytics
+    username: postgres
+    password: postgres
+    pool:
+      max:
+        connections: 20         # Smaller pool for analytics workload
+```
+
+### Example: Analytics Module
+
+The [analytics module](internal/modules/analytics/) demonstrates this pattern:
+
+```go
+// In module.Init() - create a closure for the named database
+m.getAnalyticsDB = func(ctx context.Context) (database.Interface, error) {
+    return deps.DBByName(ctx, "analytics")
+}
+
+// Pass to repository
+m.repo = repository.NewAnalyticsRepository(m.getAnalyticsDB)
+```
+
+### Infrastructure
+
+The project includes two PostgreSQL instances:
+- `postgres` (port 5432) - Main database for products
+- `postgres-analytics` (port 5433) - Analytics database
+
+Each has independent migrations in `migrations/` and `migrations-analytics/`.
+
+### Testing Analytics API
+
+```bash
+# Record a product view
+curl -X POST http://localhost:8080/api/v1/analytics/views \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"test-id","userAgent":"curl","ipAddress":"127.0.0.1"}'
+
+# Get top viewed products
+curl "http://localhost:8080/api/v1/analytics/views?limit=5"
+
+# Get stats for specific product
+curl http://localhost:8080/api/v1/analytics/views/test-id
+```
+
 ## Troubleshooting
 
 **DEBUG env conflict:** `unset DEBUG && make run`
@@ -158,8 +233,10 @@ go-bricks-demo-project/
 ├── cmd/api/main.go              # Entry point
 ├── internal/modules/
 │   ├── products/                # Products CRUD module
+│   ├── analytics/               # Analytics module (named database example)
 │   └── shared/secrets/          # Multi-tenant AWS integration
-├── migrations/                  # Flyway SQL migrations
+├── migrations/                  # Flyway migrations (default database)
+├── migrations-analytics/        # Flyway migrations (analytics database)
 ├── loadtests/                   # k6 load tests
 ├── etc/docker/                  # Docker Compose + configs
 ├── config.development.yaml      # Configuration
