@@ -4,10 +4,10 @@ package handlers
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/service"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -109,8 +109,7 @@ func (h *ProductHandler) ListProducts(req ListProductsRequest, ctx server.Handle
 	products, total, err := h.service.ListProducts(ctx.Echo.Request().Context(), req.Page, req.PageSize)
 	if err != nil {
 		h.logger.Error().Err(err).Int("page", req.Page).Int("pageSize", req.PageSize).Msg("Failed to list products")
-		// Internal errors are wrapped with "failed to list products:" prefix
-		if strings.HasPrefix(err.Error(), "failed to list products:") {
+		if errors.Is(err, service.ErrInternal) {
 			return nil, server.NewInternalServerError("Failed to retrieve products")
 		}
 		// Validation errors (page/pageSize) return as bad request

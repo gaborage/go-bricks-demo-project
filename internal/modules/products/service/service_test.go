@@ -72,6 +72,7 @@ func TestCreateProduct(t *testing.T) {
 		repoErr     error
 		wantErr     bool
 		errContains string
+		wantErrType error // Sentinel error type to check with errors.Is
 	}{
 		{
 			name:        "successful create",
@@ -90,6 +91,7 @@ func TestCreateProduct(t *testing.T) {
 			imageURL:    "",
 			wantErr:     true,
 			errContains: "required",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "name too long",
@@ -99,6 +101,7 @@ func TestCreateProduct(t *testing.T) {
 			imageURL:    "",
 			wantErr:     true,
 			errContains: "150 characters",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "negative price",
@@ -108,6 +111,7 @@ func TestCreateProduct(t *testing.T) {
 			imageURL:    "",
 			wantErr:     true,
 			errContains: "non-negative",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid URL scheme",
@@ -117,6 +121,7 @@ func TestCreateProduct(t *testing.T) {
 			imageURL:    "ftp://example.com/image.jpg",
 			wantErr:     true,
 			errContains: "invalid image URL",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid URL format",
@@ -126,6 +131,7 @@ func TestCreateProduct(t *testing.T) {
 			imageURL:    "not a url",
 			wantErr:     true,
 			errContains: "invalid image URL",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "repository error",
@@ -136,6 +142,7 @@ func TestCreateProduct(t *testing.T) {
 			repoErr:     errors.New("database error"),
 			wantErr:     true,
 			errContains: "failed to create product",
+			wantErrType: ErrInternal,
 		},
 	}
 
@@ -147,12 +154,12 @@ func TestCreateProduct(t *testing.T) {
 				},
 			}
 
-			service := &ProductService{
+			svc := &ProductService{
 				repository: mockRepo,
 				logger:     log,
 			}
 
-			product, err := service.CreateProduct(ctx, tt.productName, tt.description, tt.price, tt.imageURL)
+			product, err := svc.CreateProduct(ctx, tt.productName, tt.description, tt.price, tt.imageURL)
 
 			if tt.wantErr {
 				if err == nil {
@@ -161,6 +168,9 @@ func TestCreateProduct(t *testing.T) {
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("CreateProduct() error = %v, want error containing %v", err, tt.errContains)
+				}
+				if tt.wantErrType != nil && !errors.Is(err, tt.wantErrType) {
+					t.Errorf("CreateProduct() error type = %T, want errors.Is(%v) = true", err, tt.wantErrType)
 				}
 				return
 			}
@@ -260,6 +270,7 @@ func TestListProducts(t *testing.T) {
 		repoError   error
 		wantErr     bool
 		errContains string
+		wantErrType error // Sentinel error type to check with errors.Is
 		wantTotal   int
 		wantCount   int
 	}{
@@ -278,6 +289,7 @@ func TestListProducts(t *testing.T) {
 			pageSize:    10,
 			wantErr:     true,
 			errContains: "greater than 0",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid page (negative)",
@@ -285,6 +297,7 @@ func TestListProducts(t *testing.T) {
 			pageSize:    10,
 			wantErr:     true,
 			errContains: "greater than 0",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid pageSize (zero)",
@@ -292,6 +305,7 @@ func TestListProducts(t *testing.T) {
 			pageSize:    0,
 			wantErr:     true,
 			errContains: "between 1 and 100",
+			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid pageSize (too large)",
@@ -299,13 +313,15 @@ func TestListProducts(t *testing.T) {
 			pageSize:    101,
 			wantErr:     true,
 			errContains: "between 1 and 100",
+			wantErrType: ErrValidation,
 		},
 		{
-			name:      "repository error",
-			page:      1,
-			pageSize:  10,
-			repoError: errors.New("database error"),
-			wantErr:   true,
+			name:        "repository error",
+			page:        1,
+			pageSize:    10,
+			repoError:   errors.New("database error"),
+			wantErr:     true,
+			wantErrType: ErrInternal,
 		},
 		{
 			name:      "page 2 offset calculation",
@@ -341,12 +357,12 @@ func TestListProducts(t *testing.T) {
 				},
 			}
 
-			service := &ProductService{
+			svc := &ProductService{
 				repository: mockRepo,
 				logger:     log,
 			}
 
-			products, total, err := service.ListProducts(ctx, tt.page, tt.pageSize)
+			products, total, err := svc.ListProducts(ctx, tt.page, tt.pageSize)
 
 			if tt.wantErr {
 				if err == nil {
@@ -355,6 +371,9 @@ func TestListProducts(t *testing.T) {
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ListProducts() error = %v, want error containing %v", err, tt.errContains)
+				}
+				if tt.wantErrType != nil && !errors.Is(err, tt.wantErrType) {
+					t.Errorf("ListProducts() error type = %T, want errors.Is(%v) = true", err, tt.wantErrType)
 				}
 				return
 			}
@@ -393,6 +412,7 @@ func TestUpdateProduct(t *testing.T) {
 		getByIDErr  error
 		wantErr     bool
 		errContains string
+		wantErrType error // Sentinel error type to check with errors.Is
 	}{
 		{
 			name:        "successful update name and price",
@@ -408,13 +428,15 @@ func TestUpdateProduct(t *testing.T) {
 			id:          "test-id",
 			wantErr:     true,
 			errContains: "no fields to update",
+			wantErrType: ErrValidation,
 		},
 		{
-			name:       "product not found",
-			id:         "missing-id",
-			updateName: &name,
-			updateErr:  repository.ErrProductNotFound,
-			wantErr:    true,
+			name:        "product not found",
+			id:          "missing-id",
+			updateName:  &name,
+			updateErr:   repository.ErrProductNotFound,
+			wantErr:     true,
+			wantErrType: repository.ErrProductNotFound,
 		},
 		{
 			name:        "invalid URL",
@@ -422,14 +444,16 @@ func TestUpdateProduct(t *testing.T) {
 			updateURL:   &invalidURL,
 			wantErr:     true,
 			errContains: "invalid image URL",
+			wantErrType: ErrValidation,
 		},
 		{
-			name:       "repository error on fetch",
-			id:         "test-id",
-			updateName: &name,
-			updateErr:  nil,
-			getByIDErr: errors.New("database error"),
-			wantErr:    true,
+			name:        "repository error on fetch",
+			id:          "test-id",
+			updateName:  &name,
+			updateErr:   nil,
+			getByIDErr:  errors.New("database error"),
+			wantErr:     true,
+			wantErrType: ErrInternal,
 		},
 	}
 
@@ -447,12 +471,12 @@ func TestUpdateProduct(t *testing.T) {
 				},
 			}
 
-			service := &ProductService{
+			svc := &ProductService{
 				repository: mockRepo,
 				logger:     log,
 			}
 
-			product, err := service.UpdateProduct(ctx, tt.id, tt.updateName, nil, tt.updatePrice, tt.updateURL)
+			product, err := svc.UpdateProduct(ctx, tt.id, tt.updateName, nil, tt.updatePrice, tt.updateURL)
 
 			if tt.wantErr {
 				if err == nil {
@@ -461,6 +485,9 @@ func TestUpdateProduct(t *testing.T) {
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("UpdateProduct() error = %v, want error containing %v", err, tt.errContains)
+				}
+				if tt.wantErrType != nil && !errors.Is(err, tt.wantErrType) {
+					t.Errorf("UpdateProduct() error type = %T, want errors.Is(%v) = true", err, tt.wantErrType)
 				}
 				return
 			}
@@ -482,10 +509,11 @@ func TestDeleteProduct(t *testing.T) {
 	log := newMockLogger()
 
 	tests := []struct {
-		name    string
-		id      string
-		repoErr error
-		wantErr bool
+		name        string
+		id          string
+		repoErr     error
+		wantErr     bool
+		wantErrType error // Sentinel error type to check with errors.Is
 	}{
 		{
 			name:    "successful delete",
@@ -494,16 +522,18 @@ func TestDeleteProduct(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "product not found",
-			id:      "missing-id",
-			repoErr: repository.ErrProductNotFound,
-			wantErr: true,
+			name:        "product not found",
+			id:          "missing-id",
+			repoErr:     repository.ErrProductNotFound,
+			wantErr:     true,
+			wantErrType: repository.ErrProductNotFound,
 		},
 		{
-			name:    "repository error",
-			id:      "test-id",
-			repoErr: errors.New("database error"),
-			wantErr: true,
+			name:        "repository error",
+			id:          "test-id",
+			repoErr:     errors.New("database error"),
+			wantErr:     true,
+			wantErrType: ErrInternal,
 		},
 	}
 
@@ -515,16 +545,19 @@ func TestDeleteProduct(t *testing.T) {
 				},
 			}
 
-			service := &ProductService{
+			svc := &ProductService{
 				repository: mockRepo,
 				logger:     log,
 			}
 
-			err := service.DeleteProduct(ctx, tt.id)
+			err := svc.DeleteProduct(ctx, tt.id)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("DeleteProduct() error = nil, wantErr %v", tt.wantErr)
+				}
+				if tt.wantErrType != nil && !errors.Is(err, tt.wantErrType) {
+					t.Errorf("DeleteProduct() error type = %T, want errors.Is(%v) = true", err, tt.wantErrType)
 				}
 				return
 			}
