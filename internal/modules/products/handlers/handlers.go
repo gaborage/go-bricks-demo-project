@@ -3,6 +3,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
@@ -93,7 +95,7 @@ func NewProductHandler(s ProductServiceInterface, l logger.Logger) *ProductHandl
 func (h *ProductHandler) GetProduct(req GetProductRequest, ctx server.HandlerContext) (*ProductResponse, server.IAPIError) {
 	product, err := h.service.GetProductByID(ctx.Echo.Request().Context(), req.ID)
 	if err != nil {
-		if err == repository.ErrProductNotFound {
+		if errors.Is(err, repository.ErrProductNotFound) {
 			return nil, server.NewNotFoundError("Product")
 		}
 		h.logger.Error().Err(err).Str("productID", req.ID).Msg("Failed to get product")
@@ -107,6 +109,11 @@ func (h *ProductHandler) ListProducts(req ListProductsRequest, ctx server.Handle
 	products, total, err := h.service.ListProducts(ctx.Echo.Request().Context(), req.Page, req.PageSize)
 	if err != nil {
 		h.logger.Error().Err(err).Int("page", req.Page).Int("pageSize", req.PageSize).Msg("Failed to list products")
+		// Internal errors are wrapped with "failed to list products:" prefix
+		if strings.HasPrefix(err.Error(), "failed to list products:") {
+			return nil, server.NewInternalServerError("Failed to retrieve products")
+		}
+		// Validation errors (page/pageSize) return as bad request
 		return nil, server.NewBadRequestError(err.Error())
 	}
 
@@ -151,7 +158,7 @@ func (h *ProductHandler) UpdateProduct(req UpdateProductRequest, ctx server.Hand
 		req.ImageURL,
 	)
 	if err != nil {
-		if err == repository.ErrProductNotFound {
+		if errors.Is(err, repository.ErrProductNotFound) {
 			return nil, server.NewNotFoundError("Product")
 		}
 		h.logger.Error().Err(err).Str("productID", req.ID).Msg("Failed to update product")
@@ -164,7 +171,7 @@ func (h *ProductHandler) UpdateProduct(req UpdateProductRequest, ctx server.Hand
 func (h *ProductHandler) DeleteProduct(req DeleteProductRequest, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
 	err := h.service.DeleteProduct(ctx.Echo.Request().Context(), req.ID)
 	if err != nil {
-		if err == repository.ErrProductNotFound {
+		if errors.Is(err, repository.ErrProductNotFound) {
 			return server.NoContentResult{}, server.NewNotFoundError("Product")
 		}
 		h.logger.Error().Err(err).Str("productID", req.ID).Msg("Failed to delete product")
