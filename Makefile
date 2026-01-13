@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -23,8 +23,11 @@ help:
 	@echo "  status            Show service status"
 	@echo ""
 	@echo "Database targets:"
-	@echo "  migrate           Run database migrations (Flyway)"
-	@echo "  migrate-info      Show migration status"
+	@echo "  migrate           Run main database migrations (Flyway)"
+	@echo "  migrate-info      Show main migration status"
+	@echo "  migrate-analytics Run analytics database migrations"
+	@echo "  migrate-analytics-info Show analytics migration status"
+	@echo "  migrate-all       Run all migrations (main + analytics)"
 	@echo ""
 	@echo "Development targets:"
 	@echo "  fmt               Format Go code"
@@ -100,7 +103,8 @@ docker-up-local: check-deps
 	@echo "✅ All services are running"
 	@echo ""
 	@echo "📋 Service URLs:"
-	@echo "  PostgreSQL:           localhost:5432"
+	@echo "  PostgreSQL (main):    localhost:5432"
+	@echo "  PostgreSQL (analytics): localhost:5433"
 	@echo "  RabbitMQ AMQP:        localhost:5672"
 	@echo "  RabbitMQ Management:  http://localhost:15672"
 	@echo "  Prometheus:           http://localhost:9090"
@@ -148,6 +152,21 @@ migrate-info:
 	@echo "📊 Migration status..."
 	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway info
 
+# Run analytics database migrations using Flyway (named databases demo)
+migrate-analytics:
+	@echo "🚀 Running analytics database migrations..."
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway-analytics migrate
+	@echo "✅ Analytics migrations completed"
+
+# Show analytics migration status
+migrate-analytics-info:
+	@echo "📊 Analytics migration status..."
+	docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway-analytics info
+
+# Run all migrations (main + analytics)
+migrate-all: migrate migrate-analytics
+	@echo "✅ All migrations completed"
+
 # Format Go code
 fmt:
 	@echo "📝 Formatting Go code..."
@@ -184,7 +203,7 @@ update:
 	@echo "✅ Dependencies updated"
 
 # Development environment setup
-dev: docker-up migrate
+dev: docker-up migrate-all
 	@echo "🚀 Development environment ready!"
 	@echo ""
 	@echo "Next steps:"
@@ -192,8 +211,9 @@ dev: docker-up migrate
 	@echo "  2. Test the API:        make test-products-api"
 	@echo ""
 	@echo "📋 Useful endpoints:"
-	@echo "  Health:    http://localhost:8080/health"
-	@echo "  Products:  http://localhost:8080/api/v1/products"
+	@echo "  Health:     http://localhost:8080/health"
+	@echo "  Products:   http://localhost:8080/api/v1/products"
+	@echo "  Analytics:  http://localhost:8080/api/v1/analytics/views"
 
 # ============================================================================
 # Load Testing Targets

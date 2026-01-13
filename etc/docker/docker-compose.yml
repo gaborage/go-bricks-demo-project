@@ -22,6 +22,29 @@ services:
     networks:
       - app-network
 
+  # Analytics PostgreSQL Database (named database demo)
+  # Demonstrates go-bricks named databases feature - separate DB for analytics
+  postgres-analytics:
+    image: postgres:16-alpine
+    container_name: go-bricks-postgres-analytics
+    ports:
+      - "5433:5432"  # Different host port to avoid conflict with main postgres
+    environment:
+      - POSTGRES_DB=analytics
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8
+    volumes:
+      - postgres_analytics_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d analytics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+
   # RabbitMQ Message Broker
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -61,6 +84,28 @@ services:
       - app-network
     depends_on:
       postgres:
+        condition: service_healthy
+    profiles:
+      - migrations  # Only start with --profile migrations
+
+  # Flyway migration service for analytics database
+  flyway-analytics:
+    image: flyway/flyway:10-alpine
+    container_name: go-bricks-flyway-analytics
+    command: info  # Default command (can be overridden)
+    environment:
+      - FLYWAY_URL=jdbc:postgresql://postgres-analytics:5432/analytics
+      - FLYWAY_USER=postgres
+      - FLYWAY_PASSWORD=postgres
+      - FLYWAY_SCHEMAS=public
+      - FLYWAY_TABLE=flyway_schema_history
+      - FLYWAY_BASELINE_ON_MIGRATE=true
+    volumes:
+      - ../../migrations-analytics:/flyway/sql:ro
+    networks:
+      - app-network
+    depends_on:
+      postgres-analytics:
         condition: service_healthy
     profiles:
       - migrations  # Only start with --profile migrations
@@ -208,6 +253,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  postgres_analytics_data:
     driver: local
   rabbitmq_data:
     driver: local

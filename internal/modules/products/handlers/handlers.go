@@ -1,4 +1,5 @@
-package http
+// Package handlers provides HTTP handlers for the products module.
+package handlers
 
 import (
 	"context"
@@ -67,6 +68,8 @@ func ToProductResponse(p *domain.Product) *ProductResponse {
 }
 
 // ProductServiceInterface defines the service contract for handlers
+//
+//nolint:dupl // Interface matches test mock signatures - this is expected
 type ProductServiceInterface interface {
 	CreateProduct(ctx context.Context, name, description string, price float64, imageURL string) (*domain.Product, error)
 	GetProductByID(ctx context.Context, id string) (*domain.Product, error)

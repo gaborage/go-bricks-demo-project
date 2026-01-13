@@ -2,6 +2,7 @@
 package main
 
 import (
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/logger"
@@ -37,6 +38,13 @@ func getModulesToLoad() []ModuleConfig {
 			Name:    "products",
 			Enabled: true,
 			Module:  products.NewModule(),
+		},
+		{
+			// Analytics module demonstrates the go-bricks named databases feature.
+			// It uses deps.DBByName(ctx, "analytics") to connect to a separate database.
+			Name:    "analytics",
+			Enabled: true,
+			Module:  analytics.NewModule(),
 		},
 	}
 }
