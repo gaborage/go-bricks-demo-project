@@ -8,6 +8,7 @@ import (
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks/database"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 var (
@@ -29,15 +30,18 @@ const (
 
 type ProductRepository struct {
 	getDB func(context.Context) (database.Interface, error)
+	cols  dbtypes.Columns // Cached column metadata for type-safe queries
 }
 
 func NewSQLProductRepository(getDB func(context.Context) (database.Interface, error)) *ProductRepository {
+	qb := database.NewQueryBuilder(database.PostgreSQL)
 	return &ProductRepository{
 		getDB: getDB,
+		cols:  qb.Columns(&domain.ProductEntity{}), // Cache once at construction
 	}
 }
 
-// Create inserts a new product into the database
+// Create inserts a new product into the database using type-safe InsertStruct
 func (r *ProductRepository) Create(ctx context.Context, product *domain.Product) error {
 	db, err := r.getDB(ctx)
 	if err != nil {
@@ -46,11 +50,9 @@ func (r *ProductRepository) Create(ctx context.Context, product *domain.Product)
 
 	entity := domain.ToProductEntity(product)
 
+	// Use InsertStruct for type-safe, vendor-aware INSERT generation
 	qb := database.NewQueryBuilder(database.PostgreSQL)
-	query, args, err := qb.Insert(entity.TableName()).
-		Columns("id", "name", "description", "price", "image_url", "created_date", "updated_date").
-		Values(entity.ID, entity.Name, entity.Description, entity.Price, entity.ImageURL, entity.CreatedDate, entity.UpdatedDate).
-		ToSql()
+	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
 	if err != nil {
 		return fmt.Errorf("failed to build insert query: %w", err)
 	}
@@ -63,7 +65,7 @@ func (r *ProductRepository) Create(ctx context.Context, product *domain.Product)
 	return nil
 }
 
-// GetByID retrieves a product by its ID
+// GetByID retrieves a product by its ID using type-safe column references
 func (r *ProductRepository) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	db, err := r.getDB(ctx)
 	if err != nil {
@@ -73,9 +75,10 @@ func (r *ProductRepository) GetByID(ctx context.Context, id string) (*domain.Pro
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	f := qb.Filter()
 
-	query, args, err := qb.Select("id", "name", "description", "price", "image_url", "created_date", "updated_date").
+	// Use cols.All() for type-safe column selection and cols.Col() for filter
+	query, args, err := qb.Select(r.cols.All()).
 		From("products").
-		Where(f.Eq("id", id)).
+		Where(f.Eq(r.cols.Col("ID"), id)).
 		ToSQL()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build select query: %w", err)
@@ -102,7 +105,7 @@ func (r *ProductRepository) GetByID(ctx context.Context, id string) (*domain.Pro
 	return domain.ToProduct(&entity), nil
 }
 
-// List retrieves a paginated list of products with total count
+// List retrieves a paginated list of products with total count using type-safe columns
 func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*domain.Product, int, error) {
 	db, err := r.getDB(ctx)
 	if err != nil {
@@ -125,10 +128,10 @@ func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*dom
 		return nil, 0, fmt.Errorf("failed to get total count: %w", err)
 	}
 
-	// Then, get paginated products
-	query, args, err := qb.Select("id", "name", "description", "price", "image_url", "created_date", "updated_date").
+	// Use cols.All() for type-safe column selection and cols.Col() for ordering
+	query, args, err := qb.Select(r.cols.All()).
 		From("products").
-		OrderBy("created_date DESC").
+		OrderBy(r.cols.Col("CreatedDate") + " DESC").
 		Limit(uint64(limit)).
 		Offset(uint64(offset)).
 		ToSQL()
@@ -168,7 +171,7 @@ func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*dom
 	return products, total, nil
 }
 
-// Update performs a partial update on a product
+// Update performs a partial update on a product using type-safe column mapping
 func (r *ProductRepository) Update(ctx context.Context, id string, updates map[string]any) error {
 	db, err := r.getDB(ctx)
 	if err != nil {
@@ -181,17 +184,28 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 		return err
 	}
 
+	// Map JSON field names to type-safe database column names via cols.Col()
+	fieldToColumn := map[string]string{
+		"name":         r.cols.Col("Name"),
+		"description":  r.cols.Col("Description"),
+		"price":        r.cols.Col("Price"),
+		"image_url":    r.cols.Col("ImageURL"),
+		"updated_date": r.cols.Col("UpdatedDate"),
+	}
+
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	f := qb.Filter()
 	updateBuilder := qb.Update("products")
 
-	// Add each field to update
+	// Add each field to update using type-safe column names
 	for key, value := range updates {
-		updateBuilder = updateBuilder.Set(key, value)
+		if colName, ok := fieldToColumn[key]; ok {
+			updateBuilder = updateBuilder.Set(colName, value)
+		}
 	}
 
 	query, args, err := updateBuilder.
-		Where(f.Eq("id", id)).
+		Where(f.Eq(r.cols.Col("ID"), id)).
 		ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build update query: %w", err)
@@ -214,7 +228,7 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	return nil
 }
 
-// Delete removes a product from the database
+// Delete removes a product from the database using type-safe column reference
 func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 	db, err := r.getDB(ctx)
 	if err != nil {
@@ -224,7 +238,7 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	f := qb.Filter()
 	query, args, err := qb.Delete("products").
-		Where(f.Eq("id", id)).
+		Where(f.Eq(r.cols.Col("ID"), id)).
 		ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build delete query: %w", err)
