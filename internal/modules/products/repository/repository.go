@@ -199,10 +199,17 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	updateBuilder := qb.Update("products")
 
 	// Add each field to update using type-safe column names
+	columnsSet := 0
 	for key, value := range updates {
 		if colName, ok := fieldToColumn[key]; ok {
 			updateBuilder = updateBuilder.Set(colName, value)
+			columnsSet++
 		}
+	}
+
+	// Bail out early if no valid columns to update
+	if columnsSet == 0 {
+		return fmt.Errorf("no valid fields to update")
 	}
 
 	query, args, err := updateBuilder.
