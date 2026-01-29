@@ -51,6 +51,7 @@ func (r *ProductRepository) Create(ctx context.Context, product *domain.Product)
 	entity := domain.ToProductEntity(product)
 
 	// Use InsertStruct for type-safe, vendor-aware INSERT generation
+	// Note: InsertStruct returns squirrel.InsertBuilder which uses ToSql() (lowercase)
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
 	if err != nil {
