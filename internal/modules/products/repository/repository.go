@@ -184,13 +184,13 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 		return err
 	}
 
-	// Map JSON field names to type-safe database column names via cols.Col()
+	// Map JSON field names (camelCase per struct tags) to type-safe database column names
 	fieldToColumn := map[string]string{
-		"name":         r.cols.Col("Name"),
-		"description":  r.cols.Col("Description"),
-		"price":        r.cols.Col("Price"),
-		"image_url":    r.cols.Col("ImageURL"),
-		"updated_date": r.cols.Col("UpdatedDate"),
+		"name":        r.cols.Col("Name"),
+		"description": r.cols.Col("Description"),
+		"price":       r.cols.Col("Price"),
+		"imageURL":    r.cols.Col("ImageURL"),
+		"updatedDate": r.cols.Col("UpdatedDate"),
 	}
 
 	qb := database.NewQueryBuilder(database.PostgreSQL)
