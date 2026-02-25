@@ -1,5 +1,7 @@
 # Go-Bricks Demo Project
 
+[![CI](https://github.com/gaborage/go-bricks-demo-project/actions/workflows/ci.yml/badge.svg)](https://github.com/gaborage/go-bricks-demo-project/actions/workflows/ci.yml)
+
 Production-ready demonstration of the [go-bricks framework](../go-bricks) showcasing modular architecture, REST APIs, observability, and performance testing.
 
 ## Features

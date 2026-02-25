@@ -38,6 +38,7 @@ node_modules/
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
+!.github/dependabot.yml
 
 !sonar-project.properties
 

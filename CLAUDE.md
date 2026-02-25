@@ -685,6 +685,27 @@ make check  # Runs: fmt + lint + test
 - Integration tests - Add or update when introducing new database queries, HTTP endpoints, or messaging flows
 - Load tests - Run `make loadtest-smoke` to validate performance hasn't regressed
 
+### CI/CD (GitHub Actions)
+
+All PRs to `main` and pushes to `main` run automated checks via GitHub Actions.
+
+**CI workflow** (`.github/workflows/ci.yml`) — 3 parallel jobs:
+
+| Job | What it runs | Notes |
+|-----|-------------|-------|
+| **Lint** | `golangci-lint` via official action | v2 config; produces inline PR annotations |
+| **Test** | `go test -v -race -coverprofile` | Uploads coverage artifact (7-day retention) |
+| **Build** | `go build -o /dev/null ./cmd/api/main.go` | Verifies compilation |
+
+**Security workflow** (`.github/workflows/security.yml`):
+- Runs `govulncheck ./...` on PRs, pushes to main, and weekly (Monday 8am UTC)
+
+**Dependabot** (`.github/dependabot.yml`):
+- Go modules — weekly updates (prefix: `chore(deps)`)
+- GitHub Actions — weekly updates (prefix: `chore(ci)`)
+
+**CI badge** is displayed at the top of README.md.
+
 ### Testing Requirements
 
 - **Always add tests for:** Database repository methods, HTTP handlers, service business logic
