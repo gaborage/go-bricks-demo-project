@@ -544,6 +544,10 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `PUT /api/v1/products/:id` - Update product
 - `DELETE /api/v1/products/:id` - Delete product
 
+**Legacy module** (raw response, no APIResponse envelope):
+- `GET /api/v1/legacy/products` - List products (raw JSON)
+- `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -579,6 +583,25 @@ Security is mandatory, not optional:
 - **Secrets management:** Only load secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault). See [internal/modules/shared/secrets/](internal/modules/shared/secrets/)
 - **No hardcoded credentials** - Never commit secrets. No secrets in logs or error messages
 - **Audit logging** - Log sensitive operations (access control changes, data modifications) with trace IDs for correlation
+
+### Raw Response Mode
+
+Use `server.WithRawResponse()` to bypass the standard `APIResponse` envelope (`{"data": ..., "meta": {...}}`). This is designed for the **Strangler Fig migration pattern**: incrementally replacing legacy APIs while maintaining backward compatibility with existing consumers.
+
+```go
+// Standard route — response wrapped in APIResponse envelope
+server.GET(hr, r, "/products/:id", h.GetProduct)
+// → {"data": {"id": "...", "name": "..."}, "meta": {"timestamp": "...", "traceId": "..."}}
+
+// Raw response route — handler return value sent directly as JSON
+server.GET(hr, r, "/legacy/products/:id", h.GetProduct,
+    server.WithRawResponse(),
+    server.WithTags("legacy"),
+)
+// → {"id": "...", "name": "..."}
+```
+
+The handler signature is identical — only the route option changes the wire format. See [internal/modules/legacy/](internal/modules/legacy/) for a complete example.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -721,11 +744,16 @@ Explore the code in this order:
    - Type-safe Filter API usage
    - Query builder patterns (`Select`, `Where`, `ToSQL()`)
 
-5. **[internal/modules/shared/](internal/modules/shared/)** - Shared bricks
+5. **[internal/modules/legacy/](internal/modules/legacy/)** - Raw response module
+   - Demonstrates `WithRawResponse()` route option
+   - Reuses products service/repository (cross-module dependency)
+   - Compare route registration with products module to see the difference
+
+6. **[internal/modules/shared/](internal/modules/shared/)** - Shared bricks
    - `secrets/` - Multi-tenant AWS Secrets Manager integration
    - Reusable cross-cutting capabilities
 
-6. **[config.development.yaml](config.development.yaml)** - Configuration
+7. **[config.development.yaml](config.development.yaml)** - Configuration
    - Extensively commented config showing all options
    - Database pool settings
    - Observability configuration
