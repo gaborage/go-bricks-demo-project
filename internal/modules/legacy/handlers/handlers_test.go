@@ -133,20 +133,26 @@ func TestGetProduct(t *testing.T) {
 
 			response, apiErr := handler.GetProduct(*req, ctx)
 
-			if apiErr != nil {
+			if tt.wantErrCode != "" {
+				if apiErr == nil {
+					t.Fatalf("GetProduct() expected error with code %q, got nil", tt.wantErrCode)
+				}
 				if apiErr.HTTPStatus() != tt.wantStatus {
 					t.Errorf("GetProduct() status = %v, want %v", apiErr.HTTPStatus(), tt.wantStatus)
 				}
-				if tt.wantErrCode != "" && apiErr.ErrorCode() != tt.wantErrCode {
+				if apiErr.ErrorCode() != tt.wantErrCode {
 					t.Errorf("GetProduct() errorCode = %v, want %v", apiErr.ErrorCode(), tt.wantErrCode)
 				}
 				return
 			}
 
+			if apiErr != nil {
+				t.Fatalf("GetProduct() unexpected error: %v (status %d)", apiErr.ErrorCode(), apiErr.HTTPStatus())
+			}
+
 			if tt.checkResponse {
 				if response == nil {
-					t.Errorf("GetProduct() response = nil, want non-nil")
-					return
+					t.Fatalf("GetProduct() response = nil, want non-nil")
 				}
 				if response.ID != tt.wantProductID {
 					t.Errorf("GetProduct() ID = %v, want %v", response.ID, tt.wantProductID)
@@ -238,19 +244,25 @@ func TestListProducts(t *testing.T) {
 
 			response, apiErr := handler.ListProducts(*req, ctx)
 
-			if apiErr != nil {
+			if tt.wantErrCode != "" {
+				if apiErr == nil {
+					t.Fatalf("ListProducts() expected error with code %q, got nil", tt.wantErrCode)
+				}
 				if apiErr.HTTPStatus() != tt.wantStatus {
 					t.Errorf("ListProducts() status = %v, want %v", apiErr.HTTPStatus(), tt.wantStatus)
 				}
-				if tt.wantErrCode != "" && apiErr.ErrorCode() != tt.wantErrCode {
+				if apiErr.ErrorCode() != tt.wantErrCode {
 					t.Errorf("ListProducts() errorCode = %v, want %v", apiErr.ErrorCode(), tt.wantErrCode)
 				}
 				return
 			}
 
+			if apiErr != nil {
+				t.Fatalf("ListProducts() unexpected error: %v (status %d)", apiErr.ErrorCode(), apiErr.HTTPStatus())
+			}
+
 			if response == nil {
-				t.Errorf("ListProducts() response = nil, want non-nil")
-				return
+				t.Fatalf("ListProducts() response = nil, want non-nil")
 			}
 
 			if response.Total != tt.wantTotal {

@@ -47,10 +47,10 @@ func (h *LegacyHandler) ListProducts(req producthandlers.ListProductsRequest, ct
 	products, total, err := h.service.ListProducts(ctx.Echo.Request().Context(), req.Page, req.PageSize)
 	if err != nil {
 		h.logger.Error().Err(err).Int("page", req.Page).Int("pageSize", req.PageSize).Msg("Failed to list products")
-		if errors.Is(err, service.ErrInternal) {
-			return nil, server.NewInternalServerError("Failed to retrieve products")
+		if errors.Is(err, service.ErrValidation) {
+			return nil, server.NewBadRequestError(err.Error())
 		}
-		return nil, server.NewBadRequestError(err.Error())
+		return nil, server.NewInternalServerError("Failed to retrieve products")
 	}
 
 	productResponses := make([]producthandlers.ProductResponse, len(products))
