@@ -11,6 +11,7 @@ Production-ready demonstration of the [go-bricks framework](../go-bricks) showca
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
+- **Raw Response Mode** - `WithRawResponse()` for Strangler Fig migration patterns
 - **Production Patterns** - Health checks, structured logging, connection pooling
 
 ## Quick Start
@@ -43,6 +44,10 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 - `POST /api/v1/analytics/views` - Record a product view
 - `GET /api/v1/analytics/views` - Get top viewed products
 - `GET /api/v1/analytics/views/:productId` - Get view stats for product
+
+### Legacy (Raw Response Example)
+- `GET /api/v1/legacy/products` - List products (no APIResponse envelope)
+- `GET /api/v1/legacy/products/:id` - Get product by ID (no APIResponse envelope)
 
 ### System
 - `GET /health` - Liveness probe
@@ -236,6 +241,7 @@ go-bricks-demo-project/
 ├── internal/modules/
 │   ├── products/                # Products CRUD module
 │   ├── analytics/               # Analytics module (named database example)
+│   ├── legacy/                  # Legacy module (WithRawResponse example)
 │   └── shared/secrets/          # Multi-tenant AWS integration
 ├── migrations/                  # Flyway migrations (default database)
 ├── migrations-analytics/        # Flyway migrations (analytics database)
