@@ -3,6 +3,7 @@ package main
 
 import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/logger"
@@ -45,6 +46,13 @@ func getModulesToLoad() []ModuleConfig {
 			Name:    "analytics",
 			Enabled: true,
 			Module:  analytics.NewModule(),
+		},
+		{
+			// Legacy module demonstrates WithRawResponse() for Strangler Fig migrations.
+			// Routes bypass the standard APIResponse envelope, returning JSON directly.
+			Name:    "legacy",
+			Enabled: true,
+			Module:  legacy.NewModule(),
 		},
 	}
 }
