@@ -5,8 +5,12 @@ import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks"
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/keystore"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/outbox"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 func main() {
@@ -35,6 +39,30 @@ type ModuleConfig struct {
 
 func getModulesToLoad() []ModuleConfig {
 	return []ModuleConfig{
+		// --- Framework modules (order matters: scheduler → outbox → keystore) ---
+		{
+			// Scheduler provides cron/fixed-rate job execution.
+			// Must be registered before outbox (the relay runs as a scheduled job).
+			Name:    "scheduler",
+			Enabled: true,
+			Module:  scheduler.NewModule(),
+		},
+		{
+			// Outbox provides transactional event publishing (dual-write pattern).
+			// Events written inside a DB transaction are reliably relayed to RabbitMQ.
+			Name:    "outbox",
+			Enabled: true,
+			Module:  outbox.NewModule(),
+		},
+		{
+			// KeyStore loads named RSA key pairs from DER files at startup.
+			// Used by the webhooks module for payload signing/verification.
+			Name:    "keystore",
+			Enabled: true,
+			Module:  keystore.NewModule(),
+		},
+
+		// --- Business modules ---
 		{
 			Name:    "products",
 			Enabled: true,
@@ -53,6 +81,12 @@ func getModulesToLoad() []ModuleConfig {
 			Name:    "legacy",
 			Enabled: true,
 			Module:  legacy.NewModule(),
+		},
+		{
+			// Webhooks module demonstrates KeyStore RSA signing/verification.
+			Name:    "webhooks",
+			Enabled: true,
+			Module:  webhooks.NewModule(),
 		},
 	}
 }

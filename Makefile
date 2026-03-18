@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -30,6 +30,7 @@ help:
 	@echo "  migrate-all       Run all migrations (main + analytics)"
 	@echo ""
 	@echo "Development targets:"
+	@echo "  generate-keys     Generate RSA key pair for webhook signing (KeyStore demo)"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -202,8 +203,18 @@ update:
 	go mod tidy
 	@echo "✅ Dependencies updated"
 
+# Generate RSA key pair for webhook signing (KeyStore demo)
+generate-keys:
+	@echo "🔑 Generating RSA key pair for webhook signing..."
+	@mkdir -p certs
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/webhook_signing_private.der 2>/dev/null
+	@openssl rsa -in certs/webhook_signing_private.der -inform DER -pubout -outform DER -out certs/webhook_signing_public.der 2>/dev/null
+	@echo "✅ Keys generated in certs/"
+	@echo "   Private: certs/webhook_signing_private.der"
+	@echo "   Public:  certs/webhook_signing_public.der"
+
 # Development environment setup
-dev: docker-up migrate-all
+dev: docker-up migrate-all generate-keys
 	@echo "🚀 Development environment ready!"
 	@echo ""
 	@echo "Next steps:"
