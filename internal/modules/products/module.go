@@ -52,7 +52,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	// Initialize repository, service, jobs and handler
 	m.repo = *repository.NewSQLProductRepository(m.getDB)
-	m.service = service.NewService(&m.repo, m.logger)
+	m.service = service.NewService(&m.repo, m.logger, deps.Outbox, deps.DB)
 	m.handler = handlers.NewProductHandler(m.service, m.logger)
 
 	m.logger.Info().Msg("Products module initialized successfully")
@@ -67,8 +67,13 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 // DeclareMessaging declares messaging infrastructure for this module
-func (m *Module) DeclareMessaging(_ *messaging.Declarations) {
-	// No messaging needed for this example
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+	// Declare the exchange used by outbox events for product lifecycle events
+	decls.RegisterExchange(&messaging.ExchangeDeclaration{
+		Name:    "product-events",
+		Type:    "topic",
+		Durable: true,
+	})
 }
 
 func (m *Module) RegisterJobs(scheduler app.JobRegistrar) error {

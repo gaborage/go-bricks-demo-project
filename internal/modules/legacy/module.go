@@ -51,9 +51,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	m.getDB = deps.DB
 
-	// Reuse existing products repository and service
+	// Reuse existing products repository and service.
+	// Pass nil outbox and nil getDB — legacy module does not publish events.
 	repo := repository.NewSQLProductRepository(m.getDB)
-	svc := service.NewService(repo, m.logger)
+	svc := service.NewService(repo, m.logger, nil, nil)
 	m.handler = handlers.NewLegacyHandler(svc, m.logger)
 
 	m.logger.Info().Msg("Legacy module initialized successfully — demonstrates WithRawResponse()")

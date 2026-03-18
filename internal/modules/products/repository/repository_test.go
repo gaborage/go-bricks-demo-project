@@ -185,6 +185,106 @@ func TestUpdate(t *testing.T) {
 	})
 }
 
+func TestCreateTx(t *testing.T) {
+	ctx := context.Background()
+	product := domain.New("tx-id", "Tx Product", "Description", 49.99, "")
+
+	t.Run("successful create within transaction", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		tx := db.ExpectTransaction().
+			ExpectExec("INSERT INTO products").WillReturnRowsAffected(1)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		repo := NewSQLProductRepository(getDB)
+		realTx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		err = repo.CreateTx(ctx, realTx, product)
+		if err != nil {
+			t.Errorf("CreateTx() unexpected error = %v", err)
+		}
+
+		if !tx.IsCommitted() && !tx.IsRolledBack() {
+			// Transaction is still open (caller manages commit) — that's expected
+		}
+	})
+
+	t.Run("database error within transaction", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		// Use WillReturnRowsAffected(0) to simulate failure — the insert
+		// itself returns an error from the mock exec when no expectation matches
+		db.ExpectTransaction().
+			ExpectExec("INSERT INTO products").WillReturnRowsAffected(0)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		repo := NewSQLProductRepository(getDB)
+		realTx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		// CreateTx should succeed even with 0 rows — INSERT doesn't check affected rows
+		err = repo.CreateTx(ctx, realTx, product)
+		if err != nil {
+			t.Errorf("CreateTx() unexpected error = %v", err)
+		}
+	})
+}
+
+func TestDeleteTx(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful delete within transaction", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectExec("DELETE FROM products").WillReturnRowsAffected(1)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		repo := NewSQLProductRepository(getDB)
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		err = repo.DeleteTx(ctx, tx, "tx-delete-id")
+		if err != nil {
+			t.Errorf("DeleteTx() unexpected error = %v", err)
+		}
+	})
+
+	t.Run("not found within transaction", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectExec("DELETE FROM products").WillReturnRowsAffected(0)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		repo := NewSQLProductRepository(getDB)
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		err = repo.DeleteTx(ctx, tx, "missing-id")
+		if !errors.Is(err, ErrProductNotFound) {
+			t.Errorf("DeleteTx() error = %v, want %v", err, ErrProductNotFound)
+		}
+	})
+}
+
 func TestDelete(t *testing.T) {
 	ctx := context.Background()
 

@@ -8,21 +8,34 @@ import (
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
+	"github.com/gaborage/go-bricks/database"
+	dbtest "github.com/gaborage/go-bricks/database/testing"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	outboxtest "github.com/gaborage/go-bricks/outbox/testing"
 )
 
 // mockRepository implements repository methods for testing
 type mockRepository struct {
-	createFunc  func(ctx context.Context, product *domain.Product) error
-	getByIDFunc func(ctx context.Context, id string) (*domain.Product, error)
-	listFunc    func(ctx context.Context, limit, offset int) ([]*domain.Product, int, error)
-	updateFunc  func(ctx context.Context, id string, updates map[string]any) error
-	deleteFunc  func(ctx context.Context, id string) error
+	createFunc   func(ctx context.Context, product *domain.Product) error
+	createTxFunc func(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error
+	getByIDFunc  func(ctx context.Context, id string) (*domain.Product, error)
+	listFunc     func(ctx context.Context, limit, offset int) ([]*domain.Product, int, error)
+	updateFunc   func(ctx context.Context, id string, updates map[string]any) error
+	deleteFunc   func(ctx context.Context, id string) error
+	deleteTxFunc func(ctx context.Context, tx dbtypes.Tx, id string) error
 }
 
 func (m *mockRepository) Create(ctx context.Context, product *domain.Product) error {
 	if m.createFunc != nil {
 		return m.createFunc(ctx, product)
+	}
+	return nil
+}
+
+func (m *mockRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error {
+	if m.createTxFunc != nil {
+		return m.createTxFunc(ctx, tx, product)
 	}
 	return nil
 }
@@ -51,6 +64,13 @@ func (m *mockRepository) Update(ctx context.Context, id string, updates map[stri
 func (m *mockRepository) Delete(ctx context.Context, id string) error {
 	if m.deleteFunc != nil {
 		return m.deleteFunc(ctx, id)
+	}
+	return nil
+}
+
+func (m *mockRepository) DeleteTx(ctx context.Context, tx dbtypes.Tx, id string) error {
+	if m.deleteTxFunc != nil {
+		return m.deleteTxFunc(ctx, tx, id)
 	}
 	return nil
 }
@@ -188,6 +208,110 @@ func TestCreateProduct(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateProductWithOutbox(t *testing.T) {
+	ctx := context.Background()
+	log := newMockLogger()
+
+	t.Run("publishes product.created event", func(t *testing.T) {
+		mockOutbox := outboxtest.NewMockOutbox()
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+
+		// Expect a transaction with an INSERT (CreateTx) — outbox handles its own INSERT
+		db.ExpectTransaction().
+			ExpectExec("INSERT INTO products").WillReturnRowsAffected(1)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		mockRepo := &mockRepository{
+			createTxFunc: func(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error {
+				// Simulate the tx-based insert
+				_, err := tx.Exec(ctx, "INSERT INTO products")
+				return err
+			},
+		}
+
+		svc := NewService(mockRepo, log, mockOutbox, getDB)
+		product, err := svc.CreateProduct(ctx, "Outbox Product", "Desc", 49.99, "")
+		if err != nil {
+			t.Fatalf("CreateProduct() error = %v", err)
+		}
+
+		if product.Name != "Outbox Product" {
+			t.Errorf("Name = %q, want %q", product.Name, "Outbox Product")
+		}
+
+		events := mockOutbox.EventsByType("product.created")
+		if len(events) != 1 {
+			t.Fatalf("expected 1 product.created event, got %d", len(events))
+		}
+		if events[0].Event.AggregateID != product.ID {
+			t.Errorf("AggregateID = %q, want %q", events[0].Event.AggregateID, product.ID)
+		}
+	})
+
+	t.Run("no events when outbox is nil", func(t *testing.T) {
+		mockRepo := &mockRepository{
+			createFunc: func(ctx context.Context, product *domain.Product) error {
+				return nil
+			},
+		}
+
+		svc := NewService(mockRepo, log, nil, nil)
+		_, err := svc.CreateProduct(ctx, "No Outbox", "Desc", 10.00, "")
+		if err != nil {
+			t.Fatalf("CreateProduct() error = %v", err)
+		}
+	})
+}
+
+func TestDeleteProductWithOutbox(t *testing.T) {
+	ctx := context.Background()
+	log := newMockLogger()
+
+	t.Run("publishes product.deleted event", func(t *testing.T) {
+		mockOutbox := outboxtest.NewMockOutbox()
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+
+		// Expect a transaction with a DELETE
+		db.ExpectTransaction().
+			ExpectExec("DELETE FROM products").WillReturnRowsAffected(1)
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+
+		mockRepo := &mockRepository{
+			deleteTxFunc: func(ctx context.Context, tx dbtypes.Tx, id string) error {
+				result, err := tx.Exec(ctx, "DELETE FROM products")
+				if err != nil {
+					return err
+				}
+				rows, _ := result.RowsAffected()
+				if rows == 0 {
+					return repository.ErrProductNotFound
+				}
+				return nil
+			},
+		}
+
+		svc := NewService(mockRepo, log, mockOutbox, getDB)
+		err := svc.DeleteProduct(ctx, "delete-id")
+		if err != nil {
+			t.Fatalf("DeleteProduct() error = %v", err)
+		}
+
+		events := mockOutbox.EventsByType("product.deleted")
+		if len(events) != 1 {
+			t.Fatalf("expected 1 product.deleted event, got %d", len(events))
+		}
+		if events[0].Event.AggregateID != "delete-id" {
+			t.Errorf("AggregateID = %q, want %q", events[0].Event.AggregateID, "delete-id")
+		}
+	})
 }
 
 func TestGetProductByID(t *testing.T) {

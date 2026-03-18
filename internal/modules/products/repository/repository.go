@@ -22,6 +22,12 @@ type Repository interface {
 	List(ctx context.Context, limit, offset int) ([]*domain.Product, int, error)
 	Update(ctx context.Context, id string, updates map[string]any) error
 	Delete(ctx context.Context, id string) error
+
+	// Transaction-aware variants for use with the transactional outbox pattern.
+	// These accept a dbtypes.Tx so the caller can atomically commit business data
+	// and outbox events in the same database transaction.
+	CreateTx(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error
+	DeleteTx(ctx context.Context, tx dbtypes.Tx, id string) error
 }
 
 const (
@@ -243,6 +249,45 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf(dbUnavailableErrMsg, err)
 	}
 
+	return r.execDelete(ctx, db, id)
+}
+
+// CreateTx inserts a new product within an existing transaction.
+// Use this with the transactional outbox pattern so the insert and
+// outbox event are committed atomically.
+func (r *ProductRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error {
+	entity := domain.ToProductEntity(product)
+
+	qb := database.NewQueryBuilder(database.PostgreSQL)
+	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build insert query: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to insert product: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteTx removes a product within an existing transaction.
+// Use this with the transactional outbox pattern so the delete and
+// outbox event are committed atomically.
+func (r *ProductRepository) DeleteTx(ctx context.Context, tx dbtypes.Tx, id string) error {
+	return r.execDeleteOn(ctx, tx, id)
+}
+
+// execDelete runs a DELETE on the given executor (db or tx).
+func (r *ProductRepository) execDelete(ctx context.Context, executor dbtypes.Querier, id string) error {
+	return r.execDeleteOn(ctx, executor, id)
+}
+
+// execDeleteOn builds and executes a DELETE query against any executor.
+func (r *ProductRepository) execDeleteOn(ctx context.Context, executor interface {
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+}, id string) error {
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	f := qb.Filter()
 	query, args, err := qb.Delete("products").
@@ -252,7 +297,7 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to build delete query: %w", err)
 	}
 
-	result, err := db.Exec(ctx, query, args...)
+	result, err := executor.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete product: %w", err)
 	}

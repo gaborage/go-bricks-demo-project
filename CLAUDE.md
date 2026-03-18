@@ -11,6 +11,8 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Multi-tenant capable (currently running in single-tenant mode)
 - PostgreSQL + RabbitMQ infrastructure
 - REST API with Echo web framework
+- Transactional Outbox for reliable event publishing (dual-write pattern)
+- KeyStore for named RSA key pair management (signing/verification)
 - Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - Comprehensive load testing with k6
 
@@ -44,13 +46,16 @@ When working in this codebase, follow these principles from the [developer manif
 ## Quick Start
 
 ```bash
-# 1. Start infrastructure services
+# 1. Start infrastructure (PostgreSQL, RabbitMQ, observability)
 make docker-up
 
 # 2. Run database migrations
 make migrate
 
-# 3. Build and run application
+# 3. Generate RSA keys for KeyStore demo (first time only)
+make generate-keys
+
+# 4. Build and run application
 make run
 
 # 4. Test the API
@@ -548,6 +553,10 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `GET /api/v1/legacy/products` - List products (raw JSON)
 - `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
 
+**Webhooks module** (KeyStore signing demo):
+- `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
+- `POST /api/v1/webhooks/verify` - Verify a payload's signature
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -602,6 +611,49 @@ server.GET(hr, r, "/legacy/products/:id", h.GetProduct,
 ```
 
 The handler signature is identical — only the route option changes the wire format. See [internal/modules/legacy/](internal/modules/legacy/) for a complete example.
+
+### Transactional Outbox Pattern
+
+The products module demonstrates reliable event publishing using the **dual-write pattern**. When creating or deleting a product, the business data and an outbox event are committed in the same database transaction. A background relay (provided by the `outbox` framework module) polls the outbox table and publishes events to RabbitMQ.
+
+```go
+// In service — transactional create:
+tx, _ := db.Begin(ctx)
+defer tx.Rollback(ctx)
+repo.CreateTx(ctx, tx, product)
+outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType:   "product.created",
+    AggregateID: product.ID,
+    Payload:     product,
+})
+tx.Commit(ctx)
+```
+
+**Config:** See `outbox:` section in [config.development.yaml](config.development.yaml).
+
+**Framework modules registered in main.go:**
+- `scheduler.NewModule()` — provides the job scheduler for the outbox relay
+- `outbox.NewModule()` — provides `deps.Outbox` (OutboxPublisher)
+
+**Event types:** `product.created`, `product.updated`, `product.deleted`
+**Exchange:** `product-events` (topic, durable) declared in products module's `DeclareMessaging()`
+
+### KeyStore RSA Signing
+
+The webhooks module demonstrates the **KeyStore** brick — named RSA key pairs loaded from DER files at startup. The signing service uses `deps.KeyStore.PrivateKey("webhook-signing")` to sign and `PublicKey("webhook-signing")` to verify payloads.
+
+```go
+// Sign a payload
+privKey, _ := keyStore.PrivateKey("webhook-signing")
+sig, _ := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, hash)
+
+// Verify a signature
+pubKey, _ := keyStore.PublicKey("webhook-signing")
+err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash, sig)
+```
+
+**Config:** See `keystore:` section in [config.development.yaml](config.development.yaml).
+**Key generation:** `make generate-keys` creates DER files in `certs/` (gitignored).
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -774,11 +826,15 @@ Explore the code in this order:
    - `secrets/` - Multi-tenant AWS Secrets Manager integration
    - Reusable cross-cutting capabilities
 
-7. **[config.development.yaml](config.development.yaml)** - Configuration
-   - Extensively commented config showing all options
-   - Database pool settings
-   - Observability configuration
-   - Multi-tenant settings
+7. **[internal/modules/webhooks/](internal/modules/webhooks/)** - Webhooks module (KeyStore demo)
+   - Uses `deps.KeyStore.PrivateKey()` / `PublicKey()` for RSA signing
+   - Simple sign/verify HTTP endpoints
+   - See `service/signing_service.go` for the core KeyStore usage
+
+8. **[config.development.yaml](config.development.yaml)** - Configuration
+   - Outbox configuration (poll interval, batch size, retention)
+   - KeyStore configuration (DER file paths for RSA keys)
+   - See `make generate-keys` for key generation
 
 ### Runtime Tour (15-20 minutes)
 
