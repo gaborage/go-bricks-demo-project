@@ -237,6 +237,37 @@ func TestCreateTx(t *testing.T) {
 			t.Errorf("CreateTx() unexpected error = %v", err)
 		}
 	})
+
+	t.Run("nil transaction returns error", func(t *testing.T) {
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return nil, nil
+		}
+		repo := NewSQLProductRepository(getDB)
+		err := repo.CreateTx(ctx, nil, product)
+		if err == nil {
+			t.Error("CreateTx() expected error for nil tx")
+		}
+	})
+
+	t.Run("nil product returns error", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		tx := db.ExpectTransaction()
+		_ = tx
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+		repo := NewSQLProductRepository(getDB)
+		realTx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		err = repo.CreateTx(ctx, realTx, nil)
+		if err == nil {
+			t.Error("CreateTx() expected error for nil product")
+		}
+	})
 }
 
 func TestDeleteTx(t *testing.T) {
@@ -281,6 +312,36 @@ func TestDeleteTx(t *testing.T) {
 		err = repo.DeleteTx(ctx, tx, "missing-id")
 		if !errors.Is(err, ErrProductNotFound) {
 			t.Errorf("DeleteTx() error = %v, want %v", err, ErrProductNotFound)
+		}
+	})
+
+	t.Run("nil transaction returns error", func(t *testing.T) {
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return nil, nil
+		}
+		repo := NewSQLProductRepository(getDB)
+		err := repo.DeleteTx(ctx, nil, "some-id")
+		if err == nil {
+			t.Error("DeleteTx() expected error for nil tx")
+		}
+	})
+
+	t.Run("empty id returns error", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction()
+
+		getDB := func(ctx context.Context) (database.Interface, error) {
+			return db, nil
+		}
+		repo := NewSQLProductRepository(getDB)
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+
+		err = repo.DeleteTx(ctx, tx, "")
+		if err == nil {
+			t.Error("DeleteTx() expected error for empty id")
 		}
 	})
 }
