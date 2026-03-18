@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"testing"
 
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
@@ -20,12 +22,13 @@ func testKeyStore(t *testing.T) *kstest.MockKeyStore {
 }
 
 func TestSignAndVerify(t *testing.T) {
+	ctx := context.Background()
 	ks := testKeyStore(t)
 	svc := NewSigningService(ks)
 
 	payload := `{"event":"product.created","id":"123"}`
 
-	signed, err := svc.Sign(payload)
+	signed, err := svc.Sign(ctx, payload)
 	if err != nil {
 		t.Fatalf("Sign() error = %v", err)
 	}
@@ -40,7 +43,7 @@ func TestSignAndVerify(t *testing.T) {
 		t.Errorf("Payload mismatch")
 	}
 
-	valid, err := svc.Verify(signed.Payload, signed.Signature)
+	valid, err := svc.Verify(ctx, signed.Payload, signed.Signature)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -50,10 +53,11 @@ func TestSignAndVerify(t *testing.T) {
 }
 
 func TestVerifyInvalidSignature(t *testing.T) {
+	ctx := context.Background()
 	ks := testKeyStore(t)
 	svc := NewSigningService(ks)
 
-	valid, err := svc.Verify("some payload", "aW52YWxpZA==") // "invalid" in base64
+	valid, err := svc.Verify(ctx, "some payload", "aW52YWxpZA==") // "invalid" in base64
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -62,21 +66,37 @@ func TestVerifyInvalidSignature(t *testing.T) {
 	}
 }
 
+func TestVerifyMalformedBase64(t *testing.T) {
+	ctx := context.Background()
+	ks := testKeyStore(t)
+	svc := NewSigningService(ks)
+
+	_, err := svc.Verify(ctx, "payload", "!!!not-base64!!!")
+	if err == nil {
+		t.Fatal("Verify() expected error for malformed base64")
+	}
+	if !errors.Is(err, ErrMalformedSignature) {
+		t.Errorf("Verify() error = %v, want ErrMalformedSignature", err)
+	}
+}
+
 func TestSignMissingKey(t *testing.T) {
+	ctx := context.Background()
 	ks := kstest.NewMockKeyStore() // no keys registered
 	svc := NewSigningService(ks)
 
-	_, err := svc.Sign("payload")
+	_, err := svc.Sign(ctx, "payload")
 	if err == nil {
 		t.Fatal("Sign() expected error for missing key")
 	}
 }
 
 func TestVerifyMissingKey(t *testing.T) {
+	ctx := context.Background()
 	ks := kstest.NewMockKeyStore() // no keys registered
 	svc := NewSigningService(ks)
 
-	_, err := svc.Verify("payload", "c2lnbmF0dXJl")
+	_, err := svc.Verify(ctx, "payload", "c2lnbmF0dXJl")
 	if err == nil {
 		t.Fatal("Verify() expected error for missing key")
 	}

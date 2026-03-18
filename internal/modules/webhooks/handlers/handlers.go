@@ -2,7 +2,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/service"
@@ -25,8 +27,8 @@ type VerifyResponse struct {
 
 // SigningServiceInterface defines the service contract for handlers.
 type SigningServiceInterface interface {
-	Sign(payload string) (*domain.SignedPayload, error)
-	Verify(payload, signatureB64 string) (bool, error)
+	Sign(ctx context.Context, payload string) (*domain.SignedPayload, error)
+	Verify(ctx context.Context, payload, signatureB64 string) (bool, error)
 }
 
 type WebhookHandler struct {
@@ -34,7 +36,8 @@ type WebhookHandler struct {
 	logger  logger.Logger
 }
 
-func NewWebhookHandler(s *service.SigningService, l logger.Logger) *WebhookHandler {
+// NewWebhookHandler creates a handler backed by the given signing service interface.
+func NewWebhookHandler(s SigningServiceInterface, l logger.Logger) *WebhookHandler {
 	return &WebhookHandler{
 		service: s,
 		logger:  l,
@@ -42,24 +45,23 @@ func NewWebhookHandler(s *service.SigningService, l logger.Logger) *WebhookHandl
 }
 
 // SignPayload signs an arbitrary JSON payload using the configured RSA key.
-func (h *WebhookHandler) SignPayload(req SignRequest, ctx server.HandlerContext) (server.Result[*domain.SignedPayload], server.IAPIError) {
-	_ = ctx // unused but required by handler signature
-
-	signed, err := h.service.Sign(string(req.Payload))
+func (h *WebhookHandler) SignPayload(req SignRequest, ctx server.HandlerContext) (*domain.SignedPayload, server.IAPIError) {
+	signed, err := h.service.Sign(ctx.Echo.Request().Context(), string(req.Payload))
 	if err != nil {
 		h.logger.Error().Err(err).Msg("Failed to sign payload")
-		return server.Result[*domain.SignedPayload]{}, server.NewInternalServerError("Failed to sign payload")
+		return nil, server.NewInternalServerError("Failed to sign payload")
 	}
 
-	return server.Created(signed), nil
+	return signed, nil
 }
 
 // VerifyPayload verifies a payload's signature against the configured RSA public key.
 func (h *WebhookHandler) VerifyPayload(req VerifyRequest, ctx server.HandlerContext) (*VerifyResponse, server.IAPIError) {
-	_ = ctx
-
-	valid, err := h.service.Verify(req.Payload, req.Signature)
+	valid, err := h.service.Verify(ctx.Echo.Request().Context(), req.Payload, req.Signature)
 	if err != nil {
+		if errors.Is(err, service.ErrMalformedSignature) {
+			return nil, server.NewBadRequestError(err.Error())
+		}
 		h.logger.Error().Err(err).Msg("Failed to verify signature")
 		return nil, server.NewInternalServerError("Failed to verify signature")
 	}

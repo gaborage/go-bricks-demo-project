@@ -258,6 +258,8 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 func (r *ProductRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error {
 	entity := domain.ToProductEntity(product)
 
+	// Note: InsertStruct returns squirrel.InsertBuilder which uses ToSql() (lowercase).
+	// This is an exception to the ToSQL() convention — see existing Create() method.
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
 	if err != nil {

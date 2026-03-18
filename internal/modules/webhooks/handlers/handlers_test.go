@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/domain"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/service"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
@@ -15,20 +17,20 @@ import (
 )
 
 type mockSigningService struct {
-	signFunc   func(payload string) (*domain.SignedPayload, error)
-	verifyFunc func(payload, sig string) (bool, error)
+	signFunc   func(ctx context.Context, payload string) (*domain.SignedPayload, error)
+	verifyFunc func(ctx context.Context, payload, sig string) (bool, error)
 }
 
-func (m *mockSigningService) Sign(payload string) (*domain.SignedPayload, error) {
+func (m *mockSigningService) Sign(ctx context.Context, payload string) (*domain.SignedPayload, error) {
 	if m.signFunc != nil {
-		return m.signFunc(payload)
+		return m.signFunc(ctx, payload)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockSigningService) Verify(payload, sig string) (bool, error) {
+func (m *mockSigningService) Verify(ctx context.Context, payload, sig string) (bool, error) {
 	if m.verifyFunc != nil {
-		return m.verifyFunc(payload, sig)
+		return m.verifyFunc(ctx, payload, sig)
 	}
 	return false, errors.New("not implemented")
 }
@@ -50,9 +52,9 @@ func TestSignPayload(t *testing.T) {
 	log := logger.New("info", false)
 	cfg := newMockConfig()
 
-	t.Run("successful sign", func(t *testing.T) {
+	t.Run("successful sign returns 200", func(t *testing.T) {
 		svc := &mockSigningService{
-			signFunc: func(payload string) (*domain.SignedPayload, error) {
+			signFunc: func(_ context.Context, payload string) (*domain.SignedPayload, error) {
 				return &domain.SignedPayload{
 					Payload:   payload,
 					Signature: "dGVzdA==",
@@ -70,16 +72,17 @@ func TestSignPayload(t *testing.T) {
 		if apiErr != nil {
 			t.Fatalf("SignPayload() error = %v", apiErr)
 		}
-
-		status, _, _ := result.ResultMeta()
-		if status != http.StatusCreated {
-			t.Errorf("status = %d, want %d", status, http.StatusCreated)
+		if result == nil {
+			t.Fatal("SignPayload() returned nil")
+		}
+		if result.Algorithm != "RS256" {
+			t.Errorf("Algorithm = %q, want RS256", result.Algorithm)
 		}
 	})
 
 	t.Run("service error", func(t *testing.T) {
 		svc := &mockSigningService{
-			signFunc: func(payload string) (*domain.SignedPayload, error) {
+			signFunc: func(_ context.Context, payload string) (*domain.SignedPayload, error) {
 				return nil, errors.New("key not found")
 			},
 		}
@@ -104,7 +107,7 @@ func TestVerifyPayload(t *testing.T) {
 
 	t.Run("valid signature", func(t *testing.T) {
 		svc := &mockSigningService{
-			verifyFunc: func(payload, sig string) (bool, error) {
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
 				return true, nil
 			},
 		}
@@ -124,7 +127,7 @@ func TestVerifyPayload(t *testing.T) {
 
 	t.Run("invalid signature", func(t *testing.T) {
 		svc := &mockSigningService{
-			verifyFunc: func(payload, sig string) (bool, error) {
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
 				return false, nil
 			},
 		}
@@ -142,9 +145,29 @@ func TestVerifyPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("service error", func(t *testing.T) {
+	t.Run("malformed signature returns 400", func(t *testing.T) {
 		svc := &mockSigningService{
-			verifyFunc: func(payload, sig string) (bool, error) {
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
+				return false, fmt.Errorf("%w: bad base64", service.ErrMalformedSignature)
+			},
+		}
+
+		handler := &WebhookHandler{service: svc, logger: log}
+		echoCtx, _ := newTestContext()
+		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+
+		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "!!!"}, ctx)
+		if apiErr == nil {
+			t.Fatal("VerifyPayload() expected error")
+		}
+		if apiErr.HTTPStatus() != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", apiErr.HTTPStatus(), http.StatusBadRequest)
+		}
+	})
+
+	t.Run("internal error returns 500", func(t *testing.T) {
+		svc := &mockSigningService{
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
 				return false, errors.New("key not found")
 			},
 		}
