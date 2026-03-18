@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/domain"
@@ -182,6 +183,122 @@ func TestVerifyPayload(t *testing.T) {
 		}
 		if apiErr.HTTPStatus() != http.StatusInternalServerError {
 			t.Errorf("status = %d, want %d", apiErr.HTTPStatus(), http.StatusInternalServerError)
+		}
+	})
+}
+
+// --- Integration-style tests exercising JSON binding via Echo ---
+
+func TestSignPayloadIntegration(t *testing.T) {
+	log := logger.New("info", false)
+	cfg := newMockConfig()
+
+	svc := &mockSigningService{
+		signFunc: func(_ context.Context, payload string) (*domain.SignedPayload, error) {
+			return &domain.SignedPayload{
+				Payload:   payload,
+				Signature: "c2lnbmVk",
+				Algorithm: "RS256",
+				KeyName:   "webhook-signing",
+			}, nil
+		},
+	}
+	handler := NewWebhookHandler(svc, log)
+
+	e := echo.New()
+	body := strings.NewReader(`{"payload":{"event":"product.created"}}`)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/sign", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	echoCtx := e.NewContext(req, rec)
+
+	ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+
+	// Bind request manually to simulate framework binding
+	var signReq SignRequest
+	if err := echoCtx.Bind(&signReq); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+
+	result, apiErr := handler.SignPayload(signReq, ctx)
+	if apiErr != nil {
+		t.Fatalf("SignPayload() error = %v", apiErr)
+	}
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+	if result.Algorithm != "RS256" {
+		t.Errorf("Algorithm = %q, want RS256", result.Algorithm)
+	}
+	if result.Signature != "c2lnbmVk" {
+		t.Errorf("Signature = %q, want c2lnbmVk", result.Signature)
+	}
+}
+
+func TestVerifyPayloadIntegration(t *testing.T) {
+	log := logger.New("info", false)
+	cfg := newMockConfig()
+
+	t.Run("valid signature via JSON binding", func(t *testing.T) {
+		svc := &mockSigningService{
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
+				if payload != "test-data" || sig != "dGVzdA==" {
+					t.Errorf("unexpected args: payload=%q sig=%q", payload, sig)
+				}
+				return true, nil
+			},
+		}
+		handler := NewWebhookHandler(svc, log)
+
+		e := echo.New()
+		body := strings.NewReader(`{"payload":"test-data","signature":"dGVzdA=="}`)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/verify", body)
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		echoCtx := e.NewContext(req, rec)
+
+		var verifyReq VerifyRequest
+		if err := echoCtx.Bind(&verifyReq); err != nil {
+			t.Fatalf("Bind() error = %v", err)
+		}
+
+		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		resp, apiErr := handler.VerifyPayload(verifyReq, ctx)
+		if apiErr != nil {
+			t.Fatalf("VerifyPayload() error = %v", apiErr)
+		}
+		if !resp.Valid {
+			t.Error("valid = false, want true")
+		}
+	})
+
+	t.Run("malformed signature via JSON binding returns 400", func(t *testing.T) {
+		svc := &mockSigningService{
+			verifyFunc: func(_ context.Context, payload, sig string) (bool, error) {
+				return false, fmt.Errorf("%w: bad base64", service.ErrMalformedSignature)
+			},
+		}
+		handler := NewWebhookHandler(svc, log)
+
+		e := echo.New()
+		body := strings.NewReader(`{"payload":"data","signature":"!!!"}`)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/verify", body)
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		echoCtx := e.NewContext(req, rec)
+
+		var verifyReq VerifyRequest
+		if err := echoCtx.Bind(&verifyReq); err != nil {
+			t.Fatalf("Bind() error = %v", err)
+		}
+
+		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		_, apiErr := handler.VerifyPayload(verifyReq, ctx)
+		if apiErr == nil {
+			t.Fatal("expected error")
+		}
+		if apiErr.HTTPStatus() != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", apiErr.HTTPStatus(), http.StatusBadRequest)
 		}
 	})
 }

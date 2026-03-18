@@ -256,6 +256,13 @@ func (r *ProductRepository) Delete(ctx context.Context, id string) error {
 // Use this with the transactional outbox pattern so the insert and
 // outbox event are committed atomically.
 func (r *ProductRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product *domain.Product) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	if product == nil {
+		return fmt.Errorf("product is required")
+	}
+
 	entity := domain.ToProductEntity(product)
 
 	// Note: InsertStruct returns squirrel.InsertBuilder which uses ToSql() (lowercase).
@@ -278,6 +285,12 @@ func (r *ProductRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product
 // Use this with the transactional outbox pattern so the delete and
 // outbox event are committed atomically.
 func (r *ProductRepository) DeleteTx(ctx context.Context, tx dbtypes.Tx, id string) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
 	return r.execDeleteOn(ctx, tx, id)
 }
 
