@@ -8,6 +8,8 @@ Production-ready demonstration of the [go-bricks framework](../go-bricks) showca
 
 - **Modular Architecture** - Domain-driven design with clean separation of concerns
 - **REST API** - Full CRUD operations with Echo web framework
+- **Transactional Outbox** - Reliable event publishing via dual-write pattern
+- **KeyStore** - Named RSA key pair management for signing/verification
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
@@ -22,6 +24,9 @@ make docker-up
 
 # Run database migrations
 make migrate
+
+# Generate RSA keys for KeyStore demo (first time only)
+make generate-keys
 
 # Build and run application
 make run
@@ -48,6 +53,10 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ### Legacy (Raw Response Example)
 - `GET /api/v1/legacy/products` - List products (no APIResponse envelope)
 - `GET /api/v1/legacy/products/:id` - Get product by ID (no APIResponse envelope)
+
+### Webhooks (KeyStore Signing Example)
+- `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
+- `POST /api/v1/webhooks/verify` - Verify a payload's RSA signature
 
 ### System
 - `GET /health` - Liveness probe
@@ -239,9 +248,10 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 go-bricks-demo-project/
 ├── cmd/api/main.go              # Entry point
 ├── internal/modules/
-│   ├── products/                # Products CRUD module
+│   ├── products/                # Products CRUD module (+ transactional outbox events)
 │   ├── analytics/               # Analytics module (named database example)
 │   ├── legacy/                  # Legacy module (WithRawResponse example)
+│   ├── webhooks/                # Webhooks module (KeyStore signing example)
 │   └── shared/secrets/          # Multi-tenant AWS integration
 ├── migrations/                  # Flyway migrations (default database)
 ├── migrations-analytics/        # Flyway migrations (analytics database)
