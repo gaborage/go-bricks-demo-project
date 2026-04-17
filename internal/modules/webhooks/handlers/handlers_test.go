@@ -14,7 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type mockSigningService struct {
@@ -36,7 +36,7 @@ func (m *mockSigningService) Verify(ctx context.Context, payload, sig string) (b
 	return false, errors.New("not implemented")
 }
 
-func newTestContext() (echo.Context, *httptest.ResponseRecorder) {
+func newTestContext() (*echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
 	rec := httptest.NewRecorder()
