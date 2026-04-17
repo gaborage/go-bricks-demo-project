@@ -15,7 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // mockService implements the subset of ProductServiceInterface needed by legacy handlers.
@@ -65,7 +65,7 @@ func newMockConfig() *config.Config {
 	}
 }
 
-func newTestContext() (echo.Context, *httptest.ResponseRecorder) {
+func newTestContext() (*echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
