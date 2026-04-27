@@ -211,6 +211,21 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*Product, error) {
 
 **Why context-aware?** Enables multi-tenant mode where `ctx` determines which database connection to use.
 
+### Database Session Timezone (v0.29.0+)
+
+Every new database connection has its session timezone set to a configured IANA name. **Breaking behavior change** in go-bricks v0.29.0: apps that previously inherited the database server's default now default to UTC. Set `database.timezone: "-"` to preserve the legacy behavior.
+
+The framework applies the setting per *physical* connection (PostgreSQL via pgx `RuntimeParams` in the StartupMessage), so pool members spawned later for growth or after drops don't drift back to the server default — a real bug a one-shot `SET TIME ZONE` after `sql.Open` would have.
+
+Demo config in [config.development.yaml](config.development.yaml) — default DB uses `UTC`, the `analytics` named DB uses `Asia/Tokyo` to make the per-DB enforcement visible:
+
+```bash
+psql -h localhost -p 5432 -U postgres -d postgres -c "SHOW TIMEZONE;"   # → UTC
+psql -h localhost -p 5433 -U postgres -d analytics -c "SHOW TIMEZONE;"  # → Asia/Tokyo
+```
+
+See [ADR-016](https://github.com/gaborage/go-bricks/blob/main/wiki/adr-016-database-session-timezone.md) for the full rationale (incl. Oracle implementation, accepted values, rejected alternatives).
+
 ### Multi-Tenant Support
 
 **Current mode:** Single-tenant (see `config.yaml: multitenant.enabled: false`)
