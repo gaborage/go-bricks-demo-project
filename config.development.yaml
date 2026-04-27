@@ -6,6 +6,46 @@
 # Environment variables override YAML (e.g., APP_NAME overrides app.name).
 # =============================================================================
 
+# --- Default Database -------------------------------------------------------
+# Accessed by modules via deps.DB(ctx).
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: postgres
+  username: postgres
+  password: postgres
+
+  # Session timezone (go-bricks v0.29.0+) — IANA name applied to EVERY new
+  # physical connection. PostgreSQL receives it via the pgx StartupMessage's
+  # RuntimeParams, so pool members spawned later (after drops, lifetime expiry,
+  # or burst load) inherit the same setting — no one-shot drift.
+  #
+  # Behavior:
+  #   "UTC"               (default if unset)        opinionated, environment-stable
+  #   "America/New_York"  (any IANA name)           validated via time.LoadLocation
+  #   "-"                 (sentinel)                opt out: inherit DB server default
+  #   "+05:30"            (numeric offset)          REJECTED — use Etc/GMT-5 instead
+  #
+  # See: https://github.com/gaborage/go-bricks/blob/main/wiki/adr-016-database-session-timezone.md
+  timezone: UTC
+
+# --- Named Databases --------------------------------------------------------
+# Accessed via deps.DBByName(ctx, "<name>"). The analytics module uses "analytics".
+databases:
+  analytics:
+    type: postgresql
+    host: localhost
+    port: 5433              # docker-compose maps the analytics Postgres here
+    database: analytics
+    username: postgres
+    password: postgres
+
+    # Each named database gets its own timezone setting. Here we deliberately
+    # pick a non-UTC zone to prove the per-connection enforcement: queries
+    # against analytics report Tokyo time even when the default DB reports UTC.
+    timezone: Asia/Tokyo
+
 # --- Transactional Outbox ---------------------------------------------------
 # Reliable event publishing via the dual-write pattern.
 # Events are written to an outbox table inside the same DB transaction as
