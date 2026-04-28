@@ -213,7 +213,7 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*Product, error) {
 
 ### Database Session Timezone (v0.29.0+)
 
-Every new database connection has its session timezone set to a configured IANA name. **Breaking behavior change** in go-bricks v0.29.0: apps that previously inherited the database server's default now default to UTC. Set `database.timezone: "-"` to preserve the legacy behavior.
+Every new database connection has its session timezone set to a configured IANA name. **Breaking behavior change** in go-bricks v0.29.0: apps that previously inherited the database server's default now default to UTC. Set `database.timezone: "-"` to preserve the legacy behavior — keep the quotes in YAML so the hyphen doesn't get parsed as a list marker.
 
 The framework applies the setting per *physical* connection (PostgreSQL via pgx `RuntimeParams` in the StartupMessage), so pool members spawned later for growth or after drops don't drift back to the server default — a real bug a one-shot `SET TIME ZONE` after `sql.Open` would have.
 

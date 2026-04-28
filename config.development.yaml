@@ -29,6 +29,7 @@ database:
   #
   # See: https://github.com/gaborage/go-bricks/blob/main/wiki/adr-016-database-session-timezone.md
   timezone: UTC
+  # timezone: "-"   # legacy opt-out: inherit DB server default timezone (keep the quotes in YAML)
 
 # --- Named Databases --------------------------------------------------------
 # Accessed via deps.DBByName(ctx, "<name>"). The analytics module uses "analytics".
@@ -45,6 +46,7 @@ databases:
     # pick a non-UTC zone to prove the per-connection enforcement: queries
     # against analytics report Tokyo time even when the default DB reports UTC.
     timezone: Asia/Tokyo
+    # timezone: "-"   # legacy opt-out for the analytics named DB
 
 # --- Transactional Outbox ---------------------------------------------------
 # Reliable event publishing via the dual-write pattern.
