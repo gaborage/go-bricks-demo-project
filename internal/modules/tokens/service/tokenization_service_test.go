@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTokenize_HappyPath(t *testing.T) {
+func TestTokenizeHappyPath(t *testing.T) {
 	svc := NewTokenizationService()
 	svc.now = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
 
@@ -21,7 +21,7 @@ func TestTokenize_HappyPath(t *testing.T) {
 	assert.Equal(t, time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC), tok.ExpiresAt)
 }
 
-func TestTokenize_DeterministicForSamePAN(t *testing.T) {
+func TestTokenizeDeterministicForSamePAN(t *testing.T) {
 	svc := NewTokenizationService()
 	a, err := svc.Tokenize("4111111111111111")
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestTokenize_DeterministicForSamePAN(t *testing.T) {
 	assert.Equal(t, a.Token, b.Token, "tokenization must be stable for the same PAN")
 }
 
-func TestTokenize_NetworkDetection(t *testing.T) {
+func TestTokenizeNetworkDetection(t *testing.T) {
 	svc := NewTokenizationService()
 	cases := map[string]string{
 		"4111111111111111": "visa",
@@ -46,7 +46,7 @@ func TestTokenize_NetworkDetection(t *testing.T) {
 	}
 }
 
-func TestTokenize_RejectsInvalidInput(t *testing.T) {
+func TestTokenizeRejectsInvalidInput(t *testing.T) {
 	svc := NewTokenizationService()
 	bad := []string{
 		"",                     // empty

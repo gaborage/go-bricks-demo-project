@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRelayService_RoundTripsThroughJOSETransport asserts that the relay service:
+// TestRelayServiceRoundTripsThroughJOSETransport asserts that the relay service:
 //  1. Seals a tokenization request via the framework's JOSETransport
 //  2. POSTs to a partner URL with Content-Type: application/jose
 //  3. Unwraps the partner's JOSE-sealed APIResponse envelope
@@ -25,7 +25,7 @@ import (
 // The "partner" is an httptest server that decrypts+verifies, calls TokenizationService,
 // and re-seals the response — playing the same role the in-process simulator
 // plays in the running demo.
-func TestRelayService_RoundTripsThroughJOSETransport(t *testing.T) {
+func TestRelayServiceRoundTripsThroughJOSETransport(t *testing.T) {
 	ourPriv, _ := jositest.GenerateTestKeyPair(t)
 	peerPriv, _ := jositest.GenerateTestKeyPair(t)
 
@@ -97,10 +97,10 @@ func TestRelayService_RoundTripsThroughJOSETransport(t *testing.T) {
 	assert.Equal(t, "1111", tok.Last4)
 }
 
-// TestRelayService_RejectsMissingKeyStore guards the fail-fast contract — a relay
+// TestRelayServiceRejectsMissingKeyStore guards the fail-fast contract — a relay
 // without a keystore can never make a successful call, so construction must surface
 // that error rather than producing a half-wired client.
-func TestRelayService_RejectsMissingKeyStore(t *testing.T) {
+func TestRelayServiceRejectsMissingKeyStore(t *testing.T) {
 	_, err := NewRelayService(&RelayConfig{
 		PartnerURL: "http://example",
 		SignKid:    "a", EncryptKid: "b", VerifyKid: "c", DecryptKid: "d",
