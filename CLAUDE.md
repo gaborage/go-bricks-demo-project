@@ -572,6 +572,11 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
 - `POST /api/v1/webhooks/verify` - Verify a payload's signature
 
+**Tokens module** (JOSE middleware demo — VTS-style):
+- `POST /api/v1/tokens` - JOSE-protected partner endpoint (decrypt+verify in, sign+encrypt out)
+- `POST /api/v1/tokens/relay` - Plaintext entry that drives the outbound `JOSETransport` against the peer simulator
+- `POST /api/v1/__sim/peer/tokens` - In-process peer simulator (inverse JOSE policy; demo-only)
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -669,6 +674,47 @@ err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash, sig)
 
 **Config:** See `keystore:` section in [config.development.yaml](config.development.yaml).
 **Key generation:** `make generate-keys` creates DER files in `certs/` (gitignored).
+
+### JOSE Middleware (Nested JWE-of-JWS)
+
+The tokens module ([internal/modules/tokens/](internal/modules/tokens/)) demonstrates the framework's JOSE middleware on a Visa Token Services–style integration. Both directions are exercised:
+
+- **Inbound**: request body is a compact JWE-of-JWS. The framework decrypts with our private key, verifies the inner JWS with the peer public key, then binds the plaintext into a struct before the handler runs.
+- **Outbound**: response struct is sealed with our private signing key + peer public encryption key.
+- **Outbound `JOSETransport`**: the relay endpoint wraps an `httpclient.Client` with `WithJOSE(...)` and POSTs to an in-process peer simulator, exercising the same code path a production app uses to call Visa.
+
+```go
+// Both halves of the integration must declare matching jose: tags. Asymmetric
+// declaration (only request OR only response tagged) panics at startup.
+type TokenizeRequest struct {
+    _   struct{} `jose:"decrypt=tokens-our,verify=tokens-peer"`
+    PAN string   `json:"pan" validate:"required,min=13,max=19"`
+}
+
+type TokenizeResponse struct {
+    _     struct{}      `jose:"sign=tokens-our,encrypt=tokens-peer"`
+    Token *domain.Token `json:"token"`
+}
+```
+
+**Module registration order matters:** `keystore.NewModule()` must be registered before any module that declares `jose:`-tagged routes. The framework auto-wires a `jose.KeyStoreResolver` into the handler registry only when `deps.KeyStore` is populated.
+
+**Outbound transport wiring:**
+```go
+client := httpclient.NewBuilder(logger).
+    WithJOSE(httpclient.JOSEConfig{
+        Outbound: outbound, // sign with our key, encrypt to peer
+        Inbound:  inbound,  // decrypt with our key, verify peer signature
+        Resolver: jose.NewKeyStoreResolver(keyStore),
+    }).
+    Build()
+```
+
+**Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokens-peer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
+
+**Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
+
+**Reference:** [go-bricks/llms.txt](../go-bricks/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -846,7 +892,13 @@ Explore the code in this order:
    - Simple sign/verify HTTP endpoints
    - See `service/signing_service.go` for the core KeyStore usage
 
-8. **[config.development.yaml](config.development.yaml)** - Configuration
+8. **[internal/modules/tokens/](internal/modules/tokens/)** - Tokens module (JOSE middleware demo)
+   - `handlers/handlers.go` declares `jose:`-tagged request/response structs that drive the inbound + outbound middleware
+   - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
+   - In-process peer simulator with the inverse policy makes the demo self-contained
+   - [cmd/seal-payload/](cmd/seal-payload/) is the developer tool that produces compact JWE-of-JWS bodies for `curl`
+
+9. **[config.development.yaml](config.development.yaml)** - Configuration
    - Outbox configuration (poll interval, batch size, retention)
    - KeyStore configuration (DER file paths for RSA keys)
    - See `make generate-keys` for key generation

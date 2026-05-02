@@ -10,6 +10,7 @@ Production-ready demonstration of the [go-bricks framework](../go-bricks) showca
 - **REST API** - Full CRUD operations with Echo web framework
 - **Transactional Outbox** - Reliable event publishing via dual-write pattern
 - **KeyStore** - Named RSA key pair management for signing/verification
+- **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
@@ -57,6 +58,48 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ### Webhooks (KeyStore Signing Example)
 - `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
 - `POST /api/v1/webhooks/verify` - Verify a payload's RSA signature
+
+### Tokens (JOSE Middleware Example)
+A Visa Token Services–style integration showing nested JWE-of-JWS protection on
+both inbound and outbound HTTP bodies, plus the framework's outbound
+`JOSETransport` against an in-process peer simulator.
+
+- `POST /api/v1/tokens` — JOSE-protected partner endpoint. Decrypts + verifies
+  the request, returns a signed-and-encrypted token. Requires
+  `Content-Type: application/jose`.
+- `POST /api/v1/tokens/relay` — plaintext entry that drives the outbound JOSE
+  path. Wraps the request via `httpclient.WithJOSE(...)` and POSTs to the
+  in-process peer simulator.
+- `POST /api/v1/__sim/peer/tokens` — peer simulator with the inverse JOSE
+  policy. Demo-only; real integrations point at a counterparty URL instead.
+
+#### Walkthrough
+
+```bash
+# 1. Generate keypairs and patch the inline base64 into config.development.yaml.
+make generate-keys
+
+# 2. Start the app.
+make run
+
+# 3. Seal a payload as the peer would and POST it to /tokens.
+echo '{"pan":"4111111111111111"}' | go run ./cmd/seal-payload | \
+  curl -s -X POST http://localhost:8080/api/v1/tokens \
+       -H 'Content-Type: application/jose' --data-binary @-
+# Response is a compact JWE — decode it back to plaintext via seal-payload's
+# inverse logic, or hit the relay endpoint instead which unwraps for you.
+
+# 4. Drive the outbound JOSETransport via the relay endpoint.
+curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
+     -H 'Content-Type: application/json' \
+     -d '{"pan":"4111111111111111"}'
+# {"data":{"token":{"token":"tok_...","masked_pan":"************1111", ...}}}
+```
+
+The keystore exercises both source styles for a single keypair: `tokens-our` is
+file-backed (production pattern for Kubernetes secret mounts), and
+`tokens-peer` mixes file-backed private with inline base64 public (the
+`value:` style typical of secret-manager projection).
 
 ### System
 - `GET /health` - Liveness probe

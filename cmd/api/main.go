@@ -5,6 +5,7 @@ import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks"
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/keystore"
@@ -87,6 +88,14 @@ func getModulesToLoad() []ModuleConfig {
 			Name:    "webhooks",
 			Enabled: true,
 			Module:  webhooks.NewModule(),
+		},
+		{
+			// Tokens module demonstrates the JOSE middleware (nested JWE-of-JWS)
+			// and the httpclient JOSETransport against an in-process peer simulator.
+			// Requires the keystore module above to populate deps.KeyStore.
+			Name:    "tokens",
+			Enabled: true,
+			Module:  tokens.NewModule(),
 		},
 	}
 }

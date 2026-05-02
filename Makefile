@@ -203,15 +203,33 @@ update:
 	go mod tidy
 	@echo "✅ Dependencies updated"
 
-# Generate RSA key pair for webhook signing (KeyStore demo)
+# Generate RSA key pairs for the KeyStore-backed demos:
+#   - webhook-signing : webhooks module (file/file)
+#   - tokens-our      : tokens module, our half  (file/file)
+#   - tokens-peer     : tokens module, peer half (value/file — public is inlined
+#                       into config.development.yaml between BEGIN/END markers)
 generate-keys:
-	@echo "🔑 Generating RSA key pair for webhook signing..."
+	@echo "🔑 Generating RSA key pairs..."
 	@mkdir -p certs
 	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/webhook_signing_private.der 2>/dev/null
 	@openssl rsa -in certs/webhook_signing_private.der -inform DER -pubout -outform DER -out certs/webhook_signing_public.der 2>/dev/null
-	@echo "✅ Keys generated in certs/"
-	@echo "   Private: certs/webhook_signing_private.der"
-	@echo "   Public:  certs/webhook_signing_public.der"
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_our_private.der 2>/dev/null
+	@openssl rsa -in certs/tokens_our_private.der -inform DER -pubout -outform DER -out certs/tokens_our_public.der 2>/dev/null
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_peer_private.der 2>/dev/null
+	@openssl rsa -in certs/tokens_peer_private.der -inform DER -pubout -outform DER -out certs/tokens_peer_public.der 2>/dev/null
+	@echo "🔁 Patching tokens-peer public key (base64) into config.development.yaml..."
+	@PEER_PUB_B64=$$(base64 < certs/tokens_peer_public.der | tr -d '\n'); \
+		awk -v key="$$PEER_PUB_B64" ' \
+			/BEGIN_TOKENS_PEER_PUB/ {print; in_block=1; next} \
+			/END_TOKENS_PEER_PUB/   {printf "        value: \"%s\"\n", key; print; in_block=0; next} \
+			in_block {next} \
+			{print}' config.development.yaml > config.development.yaml.tmp \
+		&& mv config.development.yaml.tmp config.development.yaml
+	@echo "✅ Keys generated in certs/ and base64 patched into config.development.yaml"
+	@echo "   webhook-signing : certs/webhook_signing_{public,private}.der"
+	@echo "   tokens-our      : certs/tokens_our_{public,private}.der"
+	@echo "   tokens-peer     : certs/tokens_peer_private.der (private)"
+	@echo "                   : config.development.yaml between BEGIN_/END_TOKENS_PEER_PUB markers (public)"
 
 # Development environment setup
 dev: docker-up migrate-all generate-keys
