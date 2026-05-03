@@ -6,6 +6,41 @@
 # Environment variables override YAML (e.g., APP_NAME overrides app.name).
 # =============================================================================
 
+# --- HTTP Server ------------------------------------------------------------
+# All routes — including health and ready — are mounted under this base path.
+# The framework default for server.path.base is empty (routes at root), so the
+# documented demo URLs (curl http://localhost:8080/api/v1/products) and the
+# k6 load tests only resolve once this is set to /api/v1.
+#
+# health/ready resolve at /api/v1/health and /api/v1/ready respectively.
+server:
+  path:
+    base: "/api/v1"
+    health: "/health"
+    ready: "/ready"
+
+# --- Messaging (RabbitMQ) ---------------------------------------------------
+# AMQP broker URL. Required for the outbox relay to publish events; without it
+# the relay job logs "messaging not available" every poll_interval (5s).
+# docker-compose runs RabbitMQ on localhost:5672. The URL omits user info on
+# purpose — the Go amqp091 client fills guest/guest by default, and the broker
+# is configured (etc/docker/rabbitmq/rabbitmq.conf) to accept guest from any
+# source so credentials don't need to live in config files.
+messaging:
+  broker:
+    url: "amqp://localhost:5672/"
+
+# --- Rate limiting ----------------------------------------------------------
+# Framework defaults are app.rate.limit=100 / burst=200 per IP. The bundled k6
+# load tests (50+ VUs) blow through that limit and surface as 5-10% HTTP 429s,
+# which makes them measure the limiter, not the pipeline they're supposed to
+# benchmark. Raised here so dev/benchmark runs are unbottlenecked. Production
+# typically tunes these per-tenant or relies on a CDN/WAF for IP throttling.
+app:
+  rate:
+    limit: 2000
+    burst: 4000
+
 # --- Default Database -------------------------------------------------------
 # Accessed by modules via deps.DB(ctx).
 database:

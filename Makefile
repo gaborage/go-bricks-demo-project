@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-tokens loadtest-tokens-smoke loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -46,6 +46,8 @@ help:
 	@echo "  loadtest-ramp             Run ramp-up test (find limits)"
 	@echo "  loadtest-spike            Run spike test (traffic bursts)"
 	@echo "  loadtest-sustained        Run sustained load test (15min)"
+	@echo "  loadtest-tokens           Run tokens relay (JOSE) load test (~12min)"
+	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
 	@echo "  loadtest-all              Run all load tests in sequence"
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
@@ -340,6 +342,23 @@ loadtest-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/products-crud.ts
 	@echo ""
 	@echo "✅ Smoke test completed"
+
+# Run the tokens relay (JOSE end-to-end) load test
+loadtest-tokens: check-k6
+	@echo "🧪 Running tokens relay load test (JOSE end-to-end)..."
+	@echo "Each request triggers 4 JOSE ops across 2 HTTP hops (relay -> peer simulator)"
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-relay.ts
+	@echo ""
+	@echo "✅ Tokens relay load test completed"
+
+# Quick smoke validation of the tokens relay endpoint (good first run)
+loadtest-tokens-smoke: check-k6
+	@echo "🧪 Running tokens relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-relay.ts
+	@echo ""
+	@echo "✅ Tokens relay smoke test completed"
 
 # Type check load test TypeScript files
 loadtest-type-check:

@@ -82,7 +82,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 // DeclareMessaging is a no-op — the module only speaks HTTP.
-func (m *Module) DeclareMessaging(_ *messaging.Declarations) {}
+func (m *Module) DeclareMessaging(_ *messaging.Declarations) {
+	// messaging not needed
+}
 
 // RegisterJobs is a no-op — the module owns no scheduled work.
 func (m *Module) RegisterJobs(_ app.JobRegistrar) error { return nil }

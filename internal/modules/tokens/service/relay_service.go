@@ -118,18 +118,18 @@ func (s *RelayService) Relay(ctx context.Context, pan string) (*domain.Token, er
 		return nil, fmt.Errorf("partner returned status %d", resp.StatusCode)
 	}
 
-	// The framework's APIResponse envelope wraps the partner's JOSE response
-	// once it's decrypted+verified by the JOSETransport. Unwrap it here.
-	var envelope struct {
-		Data struct {
-			Token *domain.Token `json:"token"`
-		} `json:"data"`
+	// JOSE responses are sealed BEFORE the standard APIResponse envelope is
+	// applied (see go-bricks/server/jose.go: json.Marshal(data) seals the raw
+	// handler return value). So the decrypted body is the bare PeerSimResponse
+	// shape — {"token": {...}} — not {"data": {"token": ...}, "meta": {...}}.
+	var unsealed struct {
+		Token *domain.Token `json:"token"`
 	}
-	if err := json.Unmarshal(resp.Body, &envelope); err != nil {
+	if err := json.Unmarshal(resp.Body, &unsealed); err != nil {
 		return nil, fmt.Errorf("decode relay response: %w", err)
 	}
-	if envelope.Data.Token == nil {
+	if unsealed.Token == nil {
 		return nil, errors.New("partner response missing token")
 	}
-	return envelope.Data.Token, nil
+	return unsealed.Token, nil
 }

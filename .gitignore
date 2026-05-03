@@ -55,5 +55,8 @@ node_modules/
 
 !.specify/**/*
 
+# Docker infrastructure configs (committed for reproducibility)
+!etc/docker/rabbitmq/*.conf
+
 # ...even if they are in subdirectories
 !*/

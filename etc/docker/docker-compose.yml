@@ -2,7 +2,7 @@
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: go-bricks-postgres
     ports:
       - "5432:5432"
@@ -12,7 +12,7 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
   # Analytics PostgreSQL Database (named database demo)
   # Demonstrates go-bricks named databases feature - separate DB for analytics
   postgres-analytics:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: go-bricks-postgres-analytics
     ports:
       - "5433:5432"  # Different host port to avoid conflict with main postgres
@@ -35,7 +35,7 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8
     volumes:
-      - postgres_analytics_data:/var/lib/postgresql/data
+      - postgres_analytics_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d analytics"]
       interval: 10s
@@ -47,16 +47,16 @@ services:
 
   # RabbitMQ Message Broker
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:4-management-alpine
     container_name: go-bricks-rabbitmq
     ports:
       - "5672:5672"   # AMQP port
       - "15672:15672" # Management UI
-    environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # Drops the loopback-only restriction on the built-in `guest` user so the
+      # demo can connect with a credential-less URL (amqp://host:5672/).
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-loopback.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -68,7 +68,7 @@ services:
 
   # Flyway migration service
   flyway:
-    image: flyway/flyway:10-alpine
+    image: flyway/flyway:11-alpine
     container_name: go-bricks-flyway
     command: info  # Default command (can be overridden)
     environment:
@@ -90,7 +90,7 @@ services:
 
   # Flyway migration service for analytics database
   flyway-analytics:
-    image: flyway/flyway:10-alpine
+    image: flyway/flyway:11-alpine
     container_name: go-bricks-flyway-analytics
     command: info  # Default command (can be overridden)
     environment:

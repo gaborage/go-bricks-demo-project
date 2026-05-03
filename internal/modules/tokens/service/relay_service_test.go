@@ -19,12 +19,13 @@ import (
 // TestRelayServiceRoundTripsThroughJOSETransport asserts that the relay service:
 //  1. Seals a tokenization request via the framework's JOSETransport
 //  2. POSTs to a partner URL with Content-Type: application/jose
-//  3. Unwraps the partner's JOSE-sealed APIResponse envelope
+//  3. Unwraps the partner's JOSE-sealed response body
 //  4. Returns the inner Token
 //
 // The "partner" is an httptest server that decrypts+verifies, calls TokenizationService,
 // and re-seals the response — playing the same role the in-process simulator
-// plays in the running demo.
+// plays in the running demo. JOSE sealing happens on the bare handler return value,
+// before any APIResponse envelope, so the peer seals {"token": ...} directly.
 func TestRelayServiceRoundTripsThroughJOSETransport(t *testing.T) {
 	ourPriv, _ := jositest.GenerateTestKeyPair(t)
 	peerPriv, _ := jositest.GenerateTestKeyPair(t)
@@ -63,8 +64,7 @@ func TestRelayServiceRoundTripsThroughJOSETransport(t *testing.T) {
 		tok, err := tokSvc.Tokenize(inner.PAN)
 		require.NoError(t, err)
 
-		envelope := map[string]any{"data": map[string]any{"token": tok}}
-		raw, err := json.Marshal(envelope)
+		raw, err := json.Marshal(map[string]any{"token": tok})
 		require.NoError(t, err)
 
 		sealed, err := jose.Seal(raw, peerOutbound, resolver)
