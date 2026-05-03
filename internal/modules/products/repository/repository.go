@@ -57,9 +57,8 @@ func (r *ProductRepository) Create(ctx context.Context, product *domain.Product)
 	entity := domain.ToProductEntity(product)
 
 	// Use InsertStruct for type-safe, vendor-aware INSERT generation
-	// Note: InsertStruct returns squirrel.InsertBuilder which uses ToSql() (lowercase)
 	qb := database.NewQueryBuilder(database.PostgreSQL)
-	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
+	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build insert query: %w", err)
 	}
@@ -265,10 +264,8 @@ func (r *ProductRepository) CreateTx(ctx context.Context, tx dbtypes.Tx, product
 
 	entity := domain.ToProductEntity(product)
 
-	// Note: InsertStruct returns squirrel.InsertBuilder which uses ToSql() (lowercase).
-	// This is an exception to the ToSQL() convention — see existing Create() method.
 	qb := database.NewQueryBuilder(database.PostgreSQL)
-	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSql()
+	query, args, err := qb.InsertStruct(entity.TableName(), entity).ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build insert query: %w", err)
 	}

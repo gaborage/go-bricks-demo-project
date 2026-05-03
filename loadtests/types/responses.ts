@@ -69,3 +69,29 @@ export interface UpdateProductInput {
   price?: number;
   imageURL?: string;
 }
+
+/**
+ * Tokenization result returned by the tokens module.
+ * Mirrors internal/modules/tokens/domain.Token.
+ */
+export interface Token {
+  token: string;
+  masked_pan: string;
+  network: string;
+  last4: string;
+  expires_at: string;
+}
+
+/**
+ * Plaintext response from POST /api/v1/tokens/relay.
+ * The relay handler unwraps the partner's JOSE response and re-emits it as
+ * a standard go-bricks APIResponse envelope.
+ */
+export interface RelayResponse {
+  data?: {
+    token: Token;
+  };
+  // Fallback for direct shape if the envelope is ever bypassed
+  token?: Token;
+  [key: string]: any;
+}

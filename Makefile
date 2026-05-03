@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -30,7 +30,7 @@ help:
 	@echo "  migrate-all       Run all migrations (main + analytics)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate RSA key pair for webhook signing (KeyStore demo)"
+	@echo "  generate-keys     Generate RSA keypairs (webhook-signing, tokens-our, tokens-peer); patches tokens-peer public into config.development.yaml"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -46,6 +46,8 @@ help:
 	@echo "  loadtest-ramp             Run ramp-up test (find limits)"
 	@echo "  loadtest-spike            Run spike test (traffic bursts)"
 	@echo "  loadtest-sustained        Run sustained load test (15min)"
+	@echo "  loadtest-tokens           Run tokens relay (JOSE) load test (~12min)"
+	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
 	@echo "  loadtest-all              Run all load tests in sequence"
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
@@ -203,15 +205,41 @@ update:
 	go mod tidy
 	@echo "✅ Dependencies updated"
 
-# Generate RSA key pair for webhook signing (KeyStore demo)
+# Generate RSA key pairs for the KeyStore-backed demos:
+#   - webhook-signing : webhooks module (file/file)
+#   - tokens-our      : tokens module, our half  (file/file)
+#   - tokens-peer     : tokens module, peer half (value/file — public is inlined
+#                       into config.development.yaml between BEGIN/END markers)
 generate-keys:
-	@echo "🔑 Generating RSA key pair for webhook signing..."
+	@echo "🔑 Generating RSA key pairs..."
 	@mkdir -p certs
 	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/webhook_signing_private.der 2>/dev/null
 	@openssl rsa -in certs/webhook_signing_private.der -inform DER -pubout -outform DER -out certs/webhook_signing_public.der 2>/dev/null
-	@echo "✅ Keys generated in certs/"
-	@echo "   Private: certs/webhook_signing_private.der"
-	@echo "   Public:  certs/webhook_signing_public.der"
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_our_private.der 2>/dev/null
+	@openssl rsa -in certs/tokens_our_private.der -inform DER -pubout -outform DER -out certs/tokens_our_public.der 2>/dev/null
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_peer_private.der 2>/dev/null
+	@openssl rsa -in certs/tokens_peer_private.der -inform DER -pubout -outform DER -out certs/tokens_peer_public.der 2>/dev/null
+	@echo "🔁 Patching tokens-peer public key (base64) into config.development.yaml..."
+	@grep -q 'BEGIN_TOKENS_PEER_PUB' config.development.yaml || { \
+		echo "❌ config.development.yaml is missing the 'BEGIN_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
+		exit 1; \
+	}
+	@grep -q 'END_TOKENS_PEER_PUB' config.development.yaml || { \
+		echo "❌ config.development.yaml is missing the 'END_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
+		exit 1; \
+	}
+	@PEER_PUB_B64=$$(base64 < certs/tokens_peer_public.der | tr -d '\n'); \
+		awk -v key="$$PEER_PUB_B64" ' \
+			/BEGIN_TOKENS_PEER_PUB/ {print; in_block=1; next} \
+			/END_TOKENS_PEER_PUB/   {printf "        value: \"%s\"\n", key; print; in_block=0; next} \
+			in_block {next} \
+			{print}' config.development.yaml > config.development.yaml.tmp \
+		&& mv config.development.yaml.tmp config.development.yaml
+	@echo "✅ Keys generated in certs/ and base64 patched into config.development.yaml"
+	@echo "   webhook-signing : certs/webhook_signing_{public,private}.der"
+	@echo "   tokens-our      : certs/tokens_our_{public,private}.der"
+	@echo "   tokens-peer     : certs/tokens_peer_private.der (private)"
+	@echo "                   : config.development.yaml between BEGIN_/END_TOKENS_PEER_PUB markers (public)"
 
 # Development environment setup
 dev: docker-up migrate-all generate-keys
@@ -222,7 +250,7 @@ dev: docker-up migrate-all generate-keys
 	@echo "  2. Test the API:        make test-products-api"
 	@echo ""
 	@echo "📋 Useful endpoints:"
-	@echo "  Health:     http://localhost:8080/health"
+	@echo "  Health:     http://localhost:8080/api/v1/health"
 	@echo "  Products:   http://localhost:8080/api/v1/products"
 	@echo "  Analytics:  http://localhost:8080/api/v1/analytics/views"
 
@@ -322,6 +350,23 @@ loadtest-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/products-crud.ts
 	@echo ""
 	@echo "✅ Smoke test completed"
+
+# Run the tokens relay (JOSE end-to-end) load test
+loadtest-tokens: check-k6
+	@echo "🧪 Running tokens relay load test (JOSE end-to-end)..."
+	@echo "Each request triggers 4 JOSE ops across 2 HTTP hops (relay -> peer simulator)"
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-relay.ts
+	@echo ""
+	@echo "✅ Tokens relay load test completed"
+
+# Quick smoke validation of the tokens relay endpoint (good first run)
+loadtest-tokens-smoke: check-k6
+	@echo "🧪 Running tokens relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-relay.ts
+	@echo ""
+	@echo "✅ Tokens relay smoke test completed"
 
 # Type check load test TypeScript files
 loadtest-type-check:

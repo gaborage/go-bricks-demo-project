@@ -54,7 +54,7 @@ func (r *AnalyticsRepository) RecordView(ctx context.Context, view *domain.Produ
 	query, args, err := qb.Insert(entity.TableName()).
 		Columns("id", "product_id", "viewed_at", "user_agent", "ip_address", "session_id", "referrer").
 		Values(entity.ID, entity.ProductID, entity.ViewedAt, entity.UserAgent, entity.IPAddress, entity.SessionID, entity.Referrer).
-		ToSql()
+		ToSQL()
 	if err != nil {
 		return fmt.Errorf("failed to build insert query: %w", err)
 	}
