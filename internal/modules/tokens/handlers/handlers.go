@@ -7,6 +7,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -29,7 +30,7 @@ const maxClaimAge = 5 * time.Minute
 // handler is invoked — the handler sees a plain Go struct.
 type TokenizeRequest struct {
 	_   struct{} `jose:"decrypt=tokens-our,verify=tokens-peer"`
-	PAN string   `json:"pan" validate:"required,min=13,max=19"`
+	PAN string   `json:"pan" validate:"required,numeric,min=13,max=19"`
 }
 
 // TokenizeResponse is the JOSE-protected response. Outbound = sign with our private
@@ -49,7 +50,7 @@ type TokenizeResponse struct {
 // sides of the keystore.
 type PeerSimRequest struct {
 	_   struct{} `jose:"decrypt=tokens-peer,verify=tokens-our"`
-	PAN string   `json:"pan" validate:"required,min=13,max=19"`
+	PAN string   `json:"pan" validate:"required,numeric,min=13,max=19"`
 }
 
 // PeerSimResponse is the simulator's outbound seal — peer signs, peer encrypts to us.
@@ -62,7 +63,7 @@ type PeerSimResponse struct {
 // here (not in service/) so handlers compile against an interface they own,
 // keeping the package importable in tests with a stub.
 type TokenizationService interface {
-	Tokenize(pan string) (*domain.Token, error)
+	Tokenize(ctx context.Context, pan string) (*domain.Token, error)
 }
 
 // Handler serves the partner-facing /tokens route and the in-process peer simulator.
@@ -86,7 +87,7 @@ func (h *Handler) CreateToken(req TokenizeRequest, ctx server.HandlerContext) (*
 		return nil, err
 	}
 
-	tok, err := h.svc.Tokenize(req.PAN)
+	tok, err := h.svc.Tokenize(ctx.Echo.Request().Context(), req.PAN)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidPAN) {
 			return nil, server.NewBadRequestError("invalid PAN")
@@ -100,8 +101,8 @@ func (h *Handler) CreateToken(req TokenizeRequest, ctx server.HandlerContext) (*
 // PeerSimulate handles POST /__sim/peer/tokens — the inverse-policy route that
 // stands in for a Visa-style counterparty. It exists purely so the relay
 // service has somewhere to send its JOSE-sealed outbound request.
-func (h *Handler) PeerSimulate(req PeerSimRequest, _ server.HandlerContext) (*PeerSimResponse, server.IAPIError) {
-	tok, err := h.svc.Tokenize(req.PAN)
+func (h *Handler) PeerSimulate(req PeerSimRequest, ctx server.HandlerContext) (*PeerSimResponse, server.IAPIError) {
+	tok, err := h.svc.Tokenize(ctx.Echo.Request().Context(), req.PAN)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidPAN) {
 			return nil, server.NewBadRequestError("invalid PAN")
@@ -111,15 +112,22 @@ func (h *Handler) PeerSimulate(req PeerSimRequest, _ server.HandlerContext) (*Pe
 	return &PeerSimResponse{Token: tok}, nil
 }
 
-// enforceClaimFreshness rejects requests whose verified iat claim is older than
-// maxClaimAge. The framework verifies the signature; applications enforce timing.
+// enforceClaimFreshness rejects requests whose verified iat claim falls outside
+// ±maxClaimAge of now. Future-dated iat is symmetric clock skew, but it also
+// covers preplay: an attacker who captures a sealed payload and replays it
+// later cannot extend its validity by post-dating the claim.
+// The framework verifies the signature; applications enforce timing.
 func (h *Handler) enforceClaimFreshness(ctx server.HandlerContext) server.IAPIError {
 	claims := jose.ClaimsFromContext(ctx.Echo.Request().Context())
 	if claims == nil || claims.IssuedAt.IsZero() {
 		return nil
 	}
-	if time.Since(claims.IssuedAt) > maxClaimAge {
+	skew := time.Since(claims.IssuedAt)
+	if skew > maxClaimAge {
 		return server.NewUnauthorizedError("payload too old")
+	}
+	if skew < -maxClaimAge {
+		return server.NewUnauthorizedError("payload issued in the future")
 	}
 	return nil
 }

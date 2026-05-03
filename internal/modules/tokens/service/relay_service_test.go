@@ -61,7 +61,7 @@ func TestRelayServiceRoundTripsThroughJOSETransport(t *testing.T) {
 			PAN string `json:"pan"`
 		}
 		require.NoError(t, json.Unmarshal(plaintext, &inner))
-		tok, err := tokSvc.Tokenize(inner.PAN)
+		tok, err := tokSvc.Tokenize(r.Context(), inner.PAN)
 		require.NoError(t, err)
 
 		raw, err := json.Marshal(map[string]any{"token": tok})

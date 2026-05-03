@@ -220,6 +220,14 @@ generate-keys:
 	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_peer_private.der 2>/dev/null
 	@openssl rsa -in certs/tokens_peer_private.der -inform DER -pubout -outform DER -out certs/tokens_peer_public.der 2>/dev/null
 	@echo "🔁 Patching tokens-peer public key (base64) into config.development.yaml..."
+	@grep -q 'BEGIN_TOKENS_PEER_PUB' config.development.yaml || { \
+		echo "❌ config.development.yaml is missing the 'BEGIN_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
+		exit 1; \
+	}
+	@grep -q 'END_TOKENS_PEER_PUB' config.development.yaml || { \
+		echo "❌ config.development.yaml is missing the 'END_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
+		exit 1; \
+	}
 	@PEER_PUB_B64=$$(base64 < certs/tokens_peer_public.der | tr -d '\n'); \
 		awk -v key="$$PEER_PUB_B64" ' \
 			/BEGIN_TOKENS_PEER_PUB/ {print; in_block=1; next} \

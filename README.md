@@ -33,7 +33,7 @@ make generate-keys
 make run
 
 # Test the API
-curl http://localhost:8080/health
+curl http://localhost:8080/api/v1/health
 curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
 
@@ -102,8 +102,8 @@ file-backed (production pattern for Kubernetes secret mounts), and
 `value:` style typical of secret-manager projection).
 
 ### System
-- `GET /health` - Liveness probe
-- `GET /ready` - Readiness probe (checks DB + messaging)
+- `GET /api/v1/health` - Liveness probe
+- `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
 - `GET /debug/*` - Debug endpoints (goroutines, gc, info)
 
 ## Observability

@@ -8,6 +8,7 @@
 package service
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base32"
@@ -41,8 +42,10 @@ func NewTokenizationService() *TokenizationService {
 	return &TokenizationService{now: time.Now}
 }
 
-// Tokenize validates the PAN and returns the demo surrogate token.
-func (s *TokenizationService) Tokenize(pan string) (*domain.Token, error) {
+// Tokenize validates the PAN and returns the demo surrogate token. The context
+// is accepted for tracing/cancellation symmetry with the rest of the request
+// path; the demo derivation itself is CPU-only.
+func (s *TokenizationService) Tokenize(_ context.Context, pan string) (*domain.Token, error) {
 	pan = strings.TrimSpace(pan)
 	if !validPAN(pan) {
 		return nil, ErrInvalidPAN

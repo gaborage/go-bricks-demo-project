@@ -17,7 +17,7 @@ type RelayService interface {
 // point that exercises the OUTBOUND JOSE path. The seal happens internally
 // when the relay service POSTs to the partner URL.
 type RelayRequest struct {
-	PAN string `json:"pan" validate:"required,min=13,max=19"`
+	PAN string `json:"pan" validate:"required,numeric,min=13,max=19"`
 }
 
 // RelayResponse mirrors the unsealed token payload produced by the partner.

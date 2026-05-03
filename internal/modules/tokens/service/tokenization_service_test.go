@@ -12,7 +12,7 @@ func TestTokenizeHappyPath(t *testing.T) {
 	svc := NewTokenizationService()
 	svc.now = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
 
-	tok, err := svc.Tokenize("4111111111111111")
+	tok, err := svc.Tokenize(t.Context(), "4111111111111111")
 	require.NoError(t, err)
 	assert.Equal(t, "visa", tok.Network)
 	assert.Equal(t, "1111", tok.Last4)
@@ -23,9 +23,9 @@ func TestTokenizeHappyPath(t *testing.T) {
 
 func TestTokenizeDeterministicForSamePAN(t *testing.T) {
 	svc := NewTokenizationService()
-	a, err := svc.Tokenize("4111111111111111")
+	a, err := svc.Tokenize(t.Context(), "4111111111111111")
 	require.NoError(t, err)
-	b, err := svc.Tokenize("4111111111111111")
+	b, err := svc.Tokenize(t.Context(), "4111111111111111")
 	require.NoError(t, err)
 	assert.Equal(t, a.Token, b.Token, "tokenization must be stable for the same PAN")
 }
@@ -40,7 +40,7 @@ func TestTokenizeNetworkDetection(t *testing.T) {
 		"3000000000000004": "unknown",
 	}
 	for pan, want := range cases {
-		got, err := svc.Tokenize(pan)
+		got, err := svc.Tokenize(t.Context(), pan)
 		require.NoError(t, err, "pan %s", pan)
 		assert.Equal(t, want, got.Network, "pan %s", pan)
 	}
@@ -56,7 +56,7 @@ func TestTokenizeRejectsInvalidInput(t *testing.T) {
 		"4111111111111112",     // Luhn-invalid
 	}
 	for _, pan := range bad {
-		_, err := svc.Tokenize(pan)
+		_, err := svc.Tokenize(t.Context(), pan)
 		assert.ErrorIs(t, err, ErrInvalidPAN, "pan %q should be rejected", pan)
 	}
 }
