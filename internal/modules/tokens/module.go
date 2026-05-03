@@ -64,7 +64,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if err != nil {
 		return fmt.Errorf("init relay service: %w", err)
 	}
-	m.relayHandler = handlers.NewRelayHandler(relaySvc)
+	m.relayHandler = handlers.NewRelayHandler(relaySvc, m.logger)
 
 	m.logger.Info().
 		Str("partner_url", peerSimulatorURL).

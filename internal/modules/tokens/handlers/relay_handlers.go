@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens/domain"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -26,19 +27,21 @@ type RelayResponse struct {
 
 // RelayHandler bridges plaintext HTTP into the JOSE-wrapped outbound path.
 type RelayHandler struct {
-	svc RelayService
+	svc    RelayService
+	logger logger.Logger
 }
 
 // NewRelayHandler wires a RelayService into the HTTP layer.
-func NewRelayHandler(svc RelayService) *RelayHandler {
-	return &RelayHandler{svc: svc}
+func NewRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
+	return &RelayHandler{svc: svc, logger: l}
 }
 
 // Relay handles POST /api/v1/tokens/relay.
 func (h *RelayHandler) Relay(req RelayRequest, ctx server.HandlerContext) (*RelayResponse, server.IAPIError) {
 	tok, err := h.svc.Relay(ctx.Echo.Request().Context(), req.PAN)
 	if err != nil {
-		return nil, server.NewInternalServerError("relay failed: " + err.Error())
+		h.logger.Error().Err(err).Msg("relay failed")
+		return nil, server.NewInternalServerError("relay failed")
 	}
 	return &RelayResponse{Token: tok}, nil
 }
