@@ -295,6 +295,7 @@ go-bricks-demo-project/
 │   ├── analytics/               # Analytics module (named database example)
 │   ├── legacy/                  # Legacy module (WithRawResponse example)
 │   ├── webhooks/                # Webhooks module (KeyStore signing example)
+│   ├── tokens/                  # Tokens module (JOSE middleware: nested JWE-of-JWS + outbound relay)
 │   └── shared/secrets/          # Multi-tenant AWS integration
 ├── migrations/                  # Flyway migrations (default database)
 ├── migrations-analytics/        # Flyway migrations (analytics database)

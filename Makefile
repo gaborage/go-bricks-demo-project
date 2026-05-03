@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-tokens loadtest-tokens-smoke loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -30,7 +30,7 @@ help:
 	@echo "  migrate-all       Run all migrations (main + analytics)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate RSA key pair for webhook signing (KeyStore demo)"
+	@echo "  generate-keys     Generate RSA keypairs (webhook-signing, tokens-our, tokens-peer); patches tokens-peer public into config.development.yaml"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
