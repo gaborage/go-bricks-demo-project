@@ -250,7 +250,7 @@ dev: docker-up migrate-all generate-keys
 	@echo "  2. Test the API:        make test-products-api"
 	@echo ""
 	@echo "📋 Useful endpoints:"
-	@echo "  Health:     http://localhost:8080/health"
+	@echo "  Health:     http://localhost:8080/api/v1/health"
 	@echo "  Products:   http://localhost:8080/api/v1/products"
 	@echo "  Analytics:  http://localhost:8080/api/v1/analytics/views"
 
