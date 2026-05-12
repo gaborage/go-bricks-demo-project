@@ -192,6 +192,14 @@ MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
 
+MULTITENANT_FLAGS := \
+	--source-config $(MULTITENANT_CONFIG) \
+	--credentials-from config-file \
+	--flyway-config $(MULTITENANT_FLYWAY_CONF) \
+	--migrations-dir $(MULTITENANT_MIGRATIONS_DIR) \
+	--flyway-path $(MULTITENANT_FLYWAY_PATH) \
+	--continue-on-error
+
 # Internal: fail early with a friendly message if go-bricks-migrate is not on PATH.
 migrate-multitenant-check:
 	@command -v $(GO_BRICKS_MIGRATE) >/dev/null 2>&1 || { \
@@ -234,34 +242,16 @@ migrate-multitenant-init: check-deps
 # Boot postgres and apply migrations to every tenant.
 migrate-multitenant-up: docker-up migrate-multitenant-init migrate-multitenant-check
 	@echo "🚀 Applying multi-tenant migrations..."
-	$(GO_BRICKS_MIGRATE) migrate \
-		--source-config $(MULTITENANT_CONFIG) \
-		--credentials-from config-file \
-		--flyway-config $(MULTITENANT_FLYWAY_CONF) \
-		--migrations-dir $(MULTITENANT_MIGRATIONS_DIR) \
-		--flyway-path $(MULTITENANT_FLYWAY_PATH) \
-		--continue-on-error
+	$(GO_BRICKS_MIGRATE) migrate $(MULTITENANT_FLAGS)
 	@echo "✅ Multi-tenant migrations applied"
 
 migrate-multitenant-info: migrate-multitenant-check
 	@echo "📊 Multi-tenant migration status..."
-	$(GO_BRICKS_MIGRATE) info \
-		--source-config $(MULTITENANT_CONFIG) \
-		--credentials-from config-file \
-		--flyway-config $(MULTITENANT_FLYWAY_CONF) \
-		--migrations-dir $(MULTITENANT_MIGRATIONS_DIR) \
-		--flyway-path $(MULTITENANT_FLYWAY_PATH) \
-		--continue-on-error
+	$(GO_BRICKS_MIGRATE) info $(MULTITENANT_FLAGS)
 
 migrate-multitenant-validate: migrate-multitenant-check
 	@echo "🔍 Validating multi-tenant migrations..."
-	$(GO_BRICKS_MIGRATE) validate \
-		--source-config $(MULTITENANT_CONFIG) \
-		--credentials-from config-file \
-		--flyway-config $(MULTITENANT_FLYWAY_CONF) \
-		--migrations-dir $(MULTITENANT_MIGRATIONS_DIR) \
-		--flyway-path $(MULTITENANT_FLYWAY_PATH) \
-		--continue-on-error
+	$(GO_BRICKS_MIGRATE) validate $(MULTITENANT_FLAGS)
 
 # Drop and recreate every tenant's schema. Useful between demo runs or when
 # experimenting with broken migrations.

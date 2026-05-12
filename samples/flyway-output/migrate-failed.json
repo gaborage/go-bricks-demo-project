@@ -1,5 +1,5 @@
 {
-  "timestamp" : "2026-05-12T18:37:37.738346001",
+  "timestamp" : "2026-05-12T18:43:10.632419127",
   "operation" : "migrate",
   "exception" : "Failed to execute script V4__intentionally_broken.sql\n-----------------------------------------------------\nSQL State  : 42703\nError Code : 0\nMessage    : ERROR: column \"does_not_exist\" of relation \"orders\" does not exist\nLocation   : /work/migrations/multitenant/V4__intentionally_broken.sql (/work/migrations/multitenant/V4__intentionally_broken.sql)\nLine       : 1\nStatement  : Run Flyway with -X option to see the actual statement causing the problem\n",
   "licenseFailed" : false,

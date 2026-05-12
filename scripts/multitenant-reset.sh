@@ -10,6 +10,10 @@
 set -euo pipefail
 
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-go-bricks-postgres}"
+
+# Tenant list source of truth: config.multitenant.yaml — keep this array in
+# sync with the multitenant.tenants block there (and with the tenant_roles
+# array in etc/docker/postgres/multitenant-init.sql).
 TENANTS=(acme globex initech)
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
@@ -17,11 +21,13 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
     exit 1
 fi
 
-SQL=""
+# One psql round-trip per tenant so a failure on tenant N surfaces the
+# offending tenant directly in the error, instead of bundling six
+# statements into one invocation.
 for tenant in "${TENANTS[@]}"; do
-    SQL+="DROP SCHEMA IF EXISTS ${tenant} CASCADE;"
-    SQL+="CREATE SCHEMA ${tenant} AUTHORIZATION ${tenant};"
+    docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 >/dev/null <<SQL
+DROP SCHEMA IF EXISTS ${tenant} CASCADE;
+CREATE SCHEMA ${tenant} AUTHORIZATION ${tenant};
+SQL
 done
-
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "$SQL" >/dev/null
 echo "✅ Reset schemas: ${TENANTS[*]}"

@@ -14,6 +14,9 @@
 -- framework patch: go-bricks (v0.31.0) only propagates DB_HOST/PORT/USER/
 -- PASSWORD/NAME to the Flyway subprocess, so we route via role identity.
 
+-- Tenant list source of truth: config.multitenant.yaml — keep this array in
+-- sync with the multitenant.tenants block there (and with the TENANTS array
+-- in scripts/multitenant-reset.sh).
 DO $$
 DECLARE
     tenant TEXT;

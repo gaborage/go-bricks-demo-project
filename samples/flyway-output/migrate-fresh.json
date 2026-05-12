@@ -1,5 +1,5 @@
 {
-  "timestamp" : "2026-05-12T18:37:35.480764472",
+  "timestamp" : "2026-05-12T18:43:08.544227584",
   "operation" : "migrate",
   "exception" : null,
   "licenseFailed" : false,
@@ -12,7 +12,7 @@
     "description" : "create orders table",
     "type" : "SQL",
     "filepath" : "/work/migrations/multitenant/V1__create_orders_table.sql",
-    "executionTime" : 13
+    "executionTime" : 4
   }, {
     "category" : "Versioned",
     "version" : "2",
@@ -27,5 +27,5 @@
   "database" : "postgres",
   "warnings" : [ ],
   "databaseType" : "PostgreSQL",
-  "totalMigrationTime" : 14
+  "totalMigrationTime" : 5
 }
