@@ -29,7 +29,8 @@ POSTGRES_CONTAINER="${FLYWAY_POSTGRES_CONTAINER:-go-bricks-postgres}"
 
 NETWORK="${FLYWAY_NETWORK:-}"
 if [[ -z "$NETWORK" ]]; then
-    NETWORK="$(docker inspect -f '{{range $net,$_ := .NetworkSettings.Networks}}{{$net}} {{end}}' "$POSTGRES_CONTAINER" 2>/dev/null | awk '{print $1}')"
+    # `|| true` lets the empty-NETWORK check below print the friendly error instead of pipefail short-circuiting.
+    NETWORK="$(docker inspect -f '{{range $net,$_ := .NetworkSettings.Networks}}{{$net}} {{end}}' "$POSTGRES_CONTAINER" 2>/dev/null | awk '{print $1}' || true)"
 fi
 if [[ -z "$NETWORK" ]]; then
     echo "flyway-docker: could not auto-detect network for container '$POSTGRES_CONTAINER'." >&2

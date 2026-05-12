@@ -191,6 +191,7 @@ MULTITENANT_INIT_SQL        := etc/docker/postgres/multitenant-init.sql
 MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
+GO_BRICKS_REF               ?= v0.31.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -226,7 +227,7 @@ migrate-multitenant-install:
 	else \
 		TMP=$$(mktemp -d); \
 		echo "  cloning framework into $$TMP"; \
-		git clone --depth 1 https://github.com/gaborage/go-bricks.git "$$TMP" >/dev/null 2>&1; \
+		git clone --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP" >/dev/null 2>&1; \
 		cd "$$TMP/tools/migration" && go install ./cmd/go-bricks-migrate; \
 		rm -rf "$$TMP"; \
 	fi

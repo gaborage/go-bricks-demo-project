@@ -24,10 +24,11 @@ fi
 # One psql round-trip per tenant so a failure on tenant N surfaces the
 # offending tenant directly in the error, instead of bundling six
 # statements into one invocation.
+# format('%I')+\gexec quotes identifiers defensively (TENANTS is trusted, but cheap insurance against future non-trivial tenant IDs).
 for tenant in "${TENANTS[@]}"; do
     docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 >/dev/null <<SQL
-DROP SCHEMA IF EXISTS ${tenant} CASCADE;
-CREATE SCHEMA ${tenant} AUTHORIZATION ${tenant};
+SELECT format('DROP SCHEMA IF EXISTS %I CASCADE', '${tenant}') \gexec
+SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', '${tenant}', '${tenant}') \gexec
 SQL
 done
 echo "✅ Reset schemas: ${TENANTS[*]}"

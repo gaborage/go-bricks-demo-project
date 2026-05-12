@@ -25,6 +25,7 @@ multitenant:
         database: postgres
         username: acme
         password: acme_pw
+        timezone: UTC
     globex:
       database:
         type: postgresql
@@ -33,6 +34,7 @@ multitenant:
         database: postgres
         username: globex
         password: globex_pw
+        timezone: UTC
     initech:
       database:
         type: postgresql
@@ -41,3 +43,4 @@ multitenant:
         database: postgres
         username: initech
         password: initech_pw
+        timezone: UTC

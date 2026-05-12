@@ -62,7 +62,7 @@ applies this idempotently for all three tenants.
 
 ## File layout
 
-```
+```text
 config.multitenant.yaml                       Fleet config (3 tenants)
 flyway/flyway-multitenant.conf                Flyway config (no flyway.schemas)
 migrations/multitenant/
@@ -146,7 +146,7 @@ go-bricks-migrate migrate \
 
 Expected progress (text mode — add `--json` for NDJSON):
 
-```
+```text
   acme (postgresql) ... ok (1.87s)
   globex (postgresql) ... ok (1.17s)
   initech (postgresql) ... ok (1.16s)

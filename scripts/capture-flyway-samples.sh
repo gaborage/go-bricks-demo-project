@@ -42,7 +42,8 @@ PG_DB="${PG_DB:-postgres}"
 
 mkdir -p "$SAMPLES_DIR"
 
-NETWORK="$(docker inspect -f '{{range $net,$_ := .NetworkSettings.Networks}}{{$net}} {{end}}' "$POSTGRES_CONTAINER" 2>/dev/null | awk '{print $1}')"
+# `|| true` lets the empty-NETWORK check below print the friendly error instead of pipefail short-circuiting.
+NETWORK="$(docker inspect -f '{{range $net,$_ := .NetworkSettings.Networks}}{{$net}} {{end}}' "$POSTGRES_CONTAINER" 2>/dev/null | awk '{print $1}' || true)"
 if [[ -z "$NETWORK" ]]; then
     echo "capture: postgres container '$POSTGRES_CONTAINER' not running. Run 'make docker-up'." >&2
     exit 1
