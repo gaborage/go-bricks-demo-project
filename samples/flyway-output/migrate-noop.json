@@ -1,0 +1,17 @@
+{
+  "timestamp" : "2026-05-12T18:37:36.274459667",
+  "operation" : "migrate",
+  "exception" : null,
+  "licenseFailed" : false,
+  "initialSchemaVersion" : "2",
+  "targetSchemaVersion" : null,
+  "schemaName" : "",
+  "migrations" : [ ],
+  "migrationsExecuted" : 0,
+  "success" : true,
+  "flywayVersion" : "11.20.3",
+  "database" : "postgres",
+  "warnings" : [ ],
+  "databaseType" : "PostgreSQL",
+  "totalMigrationTime" : 0
+}

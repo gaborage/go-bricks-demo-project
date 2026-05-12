@@ -1,0 +1,11 @@
+{
+  "flywayVersion" : "11.20.3",
+  "database" : "postgres",
+  "warnings" : [ ],
+  "operation" : "validate",
+  "errorDetails" : null,
+  "invalidMigrations" : [ ],
+  "validationSuccessful" : true,
+  "validateCount" : 2,
+  "allErrorMessages" : ""
+}

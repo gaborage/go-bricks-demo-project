@@ -1,0 +1,24 @@
+{
+  "timestamp" : "2026-05-12T18:37:37.006178292",
+  "operation" : "migrate",
+  "exception" : null,
+  "licenseFailed" : false,
+  "initialSchemaVersion" : "2",
+  "targetSchemaVersion" : "3",
+  "schemaName" : "",
+  "migrations" : [ {
+    "category" : "Versioned",
+    "version" : "3",
+    "description" : "add orders notes column",
+    "type" : "SQL",
+    "filepath" : "/work/migrations/multitenant/V3__add_orders_notes_column.sql",
+    "executionTime" : 3
+  } ],
+  "migrationsExecuted" : 1,
+  "success" : true,
+  "flywayVersion" : "11.20.3",
+  "database" : "postgres",
+  "warnings" : [ ],
+  "databaseType" : "PostgreSQL",
+  "totalMigrationTime" : 3
+}
