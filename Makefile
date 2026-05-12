@@ -226,10 +226,10 @@ migrate-multitenant-install:
 		cd "$$GO_BRICKS_PATH/tools/migration" && go install ./cmd/go-bricks-migrate; \
 	else \
 		TMP=$$(mktemp -d); \
+		trap 'rm -rf "$$TMP"' EXIT; \
 		echo "  cloning framework into $$TMP"; \
-		git clone --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP" >/dev/null 2>&1; \
+		git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP"; \
 		cd "$$TMP/tools/migration" && go install ./cmd/go-bricks-migrate; \
-		rm -rf "$$TMP"; \
 	fi
 	@echo "✅ go-bricks-migrate installed (verify with: which go-bricks-migrate)"
 
