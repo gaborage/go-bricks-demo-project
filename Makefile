@@ -191,7 +191,8 @@ MULTITENANT_INIT_SQL        := etc/docker/postgres/multitenant-init.sql
 MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
-GO_BRICKS_REF               ?= v0.31.0
+# Framework version whose go-bricks-migrate CLI the demo targets.
+GO_BRICKS_REF               ?= v0.39.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -211,25 +212,29 @@ migrate-multitenant-check:
 
 # Install the framework's multi-tenant migration CLI.
 #
-# `go install ...@latest` does NOT work for this binary because
-# tools/migration/go.mod uses `replace github.com/gaborage/go-bricks => ../../`
-# (Go's module proxy rejects replace directives during install). We work
-# around it by cloning the framework into a temp directory and running
-# `go install ./cmd/go-bricks-migrate` from inside that submodule, where
-# replace directives are honored locally. Set GO_BRICKS_PATH to a pre-existing
-# framework checkout to skip the clone.
+# The CLI lives in the independently-versioned tools/migration submodule. A
+# plain `go install ...@<ref>` from the module proxy does NOT yield a working
+# v0.39.0 CLI: the published submodule (tools/migration/v0.38.0, and the
+# d1d092d pseudo-version) still pins parent go-bricks v0.38.0 in its go.mod,
+# while the v0.39.0 CLI source references v0.39.0-only symbols
+# (migration.QuiesceController / QuiesceGate / QuiesceStatus) — so a proxy build
+# either lacks the new features (v0.38.0) or fails to compile (d1d092d). We
+# therefore build from a CHECKOUT, where the repo's root go.work resolves the
+# in-tree parent at v0.39.0. (Upstream follow-up: publish a tools/migration tag
+# whose go.mod requires go-bricks v0.39.0 to make this `go install`-able.)
+# Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
 migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."
 	@set -e; \
 	if [ -n "$$GO_BRICKS_PATH" ] && [ -d "$$GO_BRICKS_PATH/tools/migration/cmd/go-bricks-migrate" ]; then \
 		echo "  using existing framework checkout: $$GO_BRICKS_PATH"; \
-		cd "$$GO_BRICKS_PATH/tools/migration" && go install ./cmd/go-bricks-migrate; \
+		go -C "$$GO_BRICKS_PATH/tools/migration" install ./cmd/go-bricks-migrate; \
 	else \
 		TMP=$$(mktemp -d); \
 		trap 'rm -rf "$$TMP"' EXIT; \
-		echo "  cloning framework into $$TMP"; \
+		echo "  cloning framework $(GO_BRICKS_REF) into $$TMP"; \
 		git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP"; \
-		cd "$$TMP/tools/migration" && go install ./cmd/go-bricks-migrate; \
+		go -C "$$TMP/tools/migration" install ./cmd/go-bricks-migrate; \
 	fi
 	@echo "✅ go-bricks-migrate installed (verify with: which go-bricks-migrate)"
 

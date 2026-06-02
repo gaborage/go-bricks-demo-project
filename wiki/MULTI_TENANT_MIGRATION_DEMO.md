@@ -24,7 +24,7 @@ patterns coexist in this repo.
 > (`--credentials-from=aws-secrets-manager`, the default). That path is
 > tracked as a follow-up demo so this issue can land without LocalStack
 > plumbing. See
-> [`gaborage/go-bricks` ADR-018](https://github.com/gaborage/go-bricks/blob/main/wiki/adr-018-multi-tenant-migration-cli.md)
+> [`gaborage/go-bricks` ADR-018](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_018_multi_tenant_migration_cli.md)
 > for the production architecture.
 
 ## How schema isolation actually works
@@ -279,7 +279,7 @@ re-running `migrate-multitenant-init`.
   opt-in `AuditSink` interface tracked under
   [`gaborage/go-bricks#382`](https://github.com/gaborage/go-bricks/issues/382)
   and described in
-  [ADR-019](https://github.com/gaborage/go-bricks/blob/main/wiki/adr-019-migration-audit-delivery.md).
+  [ADR-019](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_019_migration_audit_delivery.md).
 * **Database-per-tenant (vs. schema-per-tenant)**: trivial extension —
   swap each `database: postgres` line for a unique `database: tenant_db`,
   drop the per-tenant role bootstrap, and let Flyway default `flyway.schemas`
