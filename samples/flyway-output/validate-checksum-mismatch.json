@@ -1,0 +1,22 @@
+{
+  "flywayVersion" : "11.20.3",
+  "database" : "postgres",
+  "warnings" : [ ],
+  "operation" : "validate",
+  "errorDetails" : {
+    "errorCode" : "VALIDATE_ERROR",
+    "errorMessage" : "Migrations have failed validation"
+  },
+  "invalidMigrations" : [ {
+    "version" : "1",
+    "description" : "create orders table",
+    "filepath" : "/work/migrations/multitenant/V1__create_orders_table.sql",
+    "errorDetails" : {
+      "errorCode" : "CHECKSUM_MISMATCH",
+      "errorMessage" : "Migration checksum mismatch for migration version 1\n-> Applied to database : 761877554\n-> Resolved locally    : 705491216\nEither revert the changes to the migration, or run repair to update the schema history."
+    }
+  } ],
+  "validationSuccessful" : false,
+  "validateCount" : 0,
+  "allErrorMessages" : "Migration checksum mismatch for migration version 1\n-> Applied to database : 761877554\n-> Resolved locally    : 705491216\nEither revert the changes to the migration, or run repair to update the schema history."
+}

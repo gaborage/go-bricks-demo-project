@@ -1,0 +1,46 @@
+# Multi-tenant fleet config consumed by `go-bricks-migrate --source-config`.
+#
+# The framework parses this into config.TenantStore and resolves credentials
+# per tenant when `--credentials-from=config-file` is set. Field names match
+# the standard go-bricks config layout (config.DatabaseConfig).
+#
+# All three tenants point at the same Postgres host:port:database; isolation
+# comes from the per-tenant role + schema bootstrapped by
+# etc/docker/postgres/multitenant-init.sql, plus the role-level search_path
+# that steers Flyway's default schema (and therefore flyway_schema_history)
+# into the tenant's schema.
+
+app:
+  name: go-bricks-demo-migrate
+  env: development
+
+multitenant:
+  enabled: true
+  tenants:
+    acme:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: acme
+        password: acme_pw
+        timezone: UTC
+    globex:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: globex
+        password: globex_pw
+        timezone: UTC
+    initech:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: initech
+        password: initech_pw
+        timezone: UTC

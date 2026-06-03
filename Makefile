@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all test-products-api generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -28,6 +28,15 @@ help:
 	@echo "  migrate-analytics Run analytics database migrations"
 	@echo "  migrate-analytics-info Show analytics migration status"
 	@echo "  migrate-all       Run all migrations (main + analytics)"
+	@echo ""
+	@echo "Multi-tenant migrations (schema-per-tenant via go-bricks-migrate):"
+	@echo "  migrate-multitenant-install   go install the go-bricks-migrate CLI"
+	@echo "  migrate-multitenant-init      Bootstrap per-tenant roles + schemas in postgres"
+	@echo "  migrate-multitenant-up        Boot postgres + apply migrations to every tenant"
+	@echo "  migrate-multitenant-info      Show migration status for every tenant"
+	@echo "  migrate-multitenant-validate  Validate (no apply) for every tenant"
+	@echo "  migrate-multitenant-reset     Drop and recreate every tenant's schema"
+	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
 	@echo "Development targets:"
 	@echo "  generate-keys     Generate RSA keypairs (webhook-signing, tokens-our, tokens-peer); patches tokens-peer public into config.development.yaml"
@@ -169,6 +178,100 @@ migrate-analytics-info:
 # Run all migrations (main + analytics)
 migrate-all: migrate migrate-analytics
 	@echo "✅ All migrations completed"
+
+# ============================================================================
+# Multi-tenant migration demo (schema-per-tenant via go-bricks-migrate)
+# ============================================================================
+# See wiki/MULTI_TENANT_MIGRATION_DEMO.md for the walkthrough.
+
+MULTITENANT_CONFIG          := config.multitenant.yaml
+MULTITENANT_FLYWAY_CONF     := flyway/flyway-multitenant.conf
+MULTITENANT_MIGRATIONS_DIR  := migrations/multitenant
+MULTITENANT_INIT_SQL        := etc/docker/postgres/multitenant-init.sql
+MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
+MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
+GO_BRICKS_MIGRATE           := go-bricks-migrate
+# Framework version whose go-bricks-migrate CLI the demo targets.
+GO_BRICKS_REF               ?= v0.39.0
+
+MULTITENANT_FLAGS := \
+	--source-config $(MULTITENANT_CONFIG) \
+	--credentials-from config-file \
+	--flyway-config $(MULTITENANT_FLYWAY_CONF) \
+	--migrations-dir $(MULTITENANT_MIGRATIONS_DIR) \
+	--flyway-path $(MULTITENANT_FLYWAY_PATH) \
+	--continue-on-error
+
+# Internal: fail early with a friendly message if go-bricks-migrate is not on PATH.
+migrate-multitenant-check:
+	@command -v $(GO_BRICKS_MIGRATE) >/dev/null 2>&1 || { \
+		echo "❌ $(GO_BRICKS_MIGRATE) not found on PATH"; \
+		echo "   Install with: make migrate-multitenant-install"; \
+		exit 1; \
+	}
+
+# Install the framework's multi-tenant migration CLI.
+#
+# The CLI lives in the independently-versioned tools/migration submodule. A
+# plain `go install ...@<ref>` from the module proxy does NOT yield a working
+# v0.39.0 CLI: the published submodule (tools/migration/v0.38.0, and the
+# d1d092d pseudo-version) still pins parent go-bricks v0.38.0 in its go.mod,
+# while the v0.39.0 CLI source references v0.39.0-only symbols
+# (migration.QuiesceController / QuiesceGate / QuiesceStatus) — so a proxy build
+# either lacks the new features (v0.38.0) or fails to compile (d1d092d). We
+# therefore build from a CHECKOUT, where the repo's root go.work resolves the
+# in-tree parent at v0.39.0. (Upstream follow-up: publish a tools/migration tag
+# whose go.mod requires go-bricks v0.39.0 to make this `go install`-able.)
+# Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
+migrate-multitenant-install:
+	@echo "📦 Installing go-bricks-migrate..."
+	@set -e; \
+	if [ -n "$$GO_BRICKS_PATH" ] && [ -d "$$GO_BRICKS_PATH/tools/migration/cmd/go-bricks-migrate" ]; then \
+		echo "  using existing framework checkout: $$GO_BRICKS_PATH"; \
+		go -C "$$GO_BRICKS_PATH/tools/migration" install ./cmd/go-bricks-migrate; \
+	else \
+		TMP=$$(mktemp -d); \
+		trap 'rm -rf "$$TMP"' EXIT; \
+		echo "  cloning framework $(GO_BRICKS_REF) into $$TMP"; \
+		git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP"; \
+		go -C "$$TMP/tools/migration" install ./cmd/go-bricks-migrate; \
+	fi
+	@echo "✅ go-bricks-migrate installed (verify with: which go-bricks-migrate)"
+
+# Apply the per-tenant role + schema bootstrap SQL against the running
+# postgres container. Idempotent. Required before the first multi-tenant run.
+migrate-multitenant-init: check-deps
+	@echo "🏗  Bootstrapping multi-tenant roles + schemas in postgres..."
+	@docker exec -i $(MULTITENANT_POSTGRES_CONT) psql -U postgres -d postgres -v ON_ERROR_STOP=1 < $(MULTITENANT_INIT_SQL)
+	@echo "✅ Roles + schemas ready (acme, globex, initech)"
+
+# Boot postgres and apply migrations to every tenant.
+migrate-multitenant-up: docker-up migrate-multitenant-init migrate-multitenant-check
+	@echo "🚀 Applying multi-tenant migrations..."
+	$(GO_BRICKS_MIGRATE) migrate $(MULTITENANT_FLAGS)
+	@echo "✅ Multi-tenant migrations applied"
+
+migrate-multitenant-info: migrate-multitenant-check
+	@echo "📊 Multi-tenant migration status..."
+	$(GO_BRICKS_MIGRATE) info $(MULTITENANT_FLAGS)
+
+migrate-multitenant-validate: migrate-multitenant-check
+	@echo "🔍 Validating multi-tenant migrations..."
+	$(GO_BRICKS_MIGRATE) validate $(MULTITENANT_FLAGS)
+
+# Drop and recreate every tenant's schema. Useful between demo runs or when
+# experimenting with broken migrations.
+migrate-multitenant-reset:
+	@echo "🧹 Dropping tenant schemas (acme, globex, initech)..."
+	@./scripts/multitenant-reset.sh
+	@echo "✅ Tenant schemas reset"
+
+# Capture sample Flyway JSON outputs (7 scenarios) under samples/flyway-output/.
+# Feeds the JSON-output parser design tracked in go-bricks#376.
+migrate-multitenant-samples: docker-up migrate-multitenant-init
+	@echo "📸 Capturing Flyway JSON output samples..."
+	@./scripts/capture-flyway-samples.sh
+	@echo "✅ Samples written to samples/flyway-output/"
 
 # Format Go code
 fmt:

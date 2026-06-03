@@ -1,0 +1,31 @@
+{
+  "timestamp" : "2026-05-12T18:43:08.544227584",
+  "operation" : "migrate",
+  "exception" : null,
+  "licenseFailed" : false,
+  "initialSchemaVersion" : null,
+  "targetSchemaVersion" : "2",
+  "schemaName" : "",
+  "migrations" : [ {
+    "category" : "Versioned",
+    "version" : "1",
+    "description" : "create orders table",
+    "type" : "SQL",
+    "filepath" : "/work/migrations/multitenant/V1__create_orders_table.sql",
+    "executionTime" : 4
+  }, {
+    "category" : "Versioned",
+    "version" : "2",
+    "description" : "add status column",
+    "type" : "SQL",
+    "filepath" : "/work/migrations/multitenant/V2__add_status_column.sql",
+    "executionTime" : 1
+  } ],
+  "migrationsExecuted" : 2,
+  "success" : true,
+  "flywayVersion" : "11.20.3",
+  "database" : "postgres",
+  "warnings" : [ ],
+  "databaseType" : "PostgreSQL",
+  "totalMigrationTime" : 5
+}

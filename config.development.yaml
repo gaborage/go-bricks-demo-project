@@ -41,6 +41,17 @@ app:
     limit: 2000
     burst: 4000
 
+# --- Logging ----------------------------------------------------------------
+# go-bricks v0.39.0 (go-bricks#424) changed the default log output format from
+# "json" to "auto": console (colored) only when stdout is a TTY AND OTLP log
+# export is inactive — otherwise JSON. Pinned explicitly so `make run` keeps
+# readable console output locally while still emitting JSON for the Loki/OTLP
+# pipeline. NOTE: "console" combined with OTLP log export panics at startup;
+# "auto" resolves that automatically.
+log:
+  output:
+    format: auto   # auto | console | json
+
 # --- Default Database -------------------------------------------------------
 # Accessed by modules via deps.DB(ctx).
 database:
@@ -62,7 +73,7 @@ database:
   #   "-"                 (sentinel)                opt out: inherit DB server default
   #   "+05:30"            (numeric offset)          REJECTED — use Etc/GMT-5 instead
   #
-  # See: https://github.com/gaborage/go-bricks/blob/main/wiki/adr-016-database-session-timezone.md
+  # See: https://github.com/gaborage/go-bricks/blob/main/wiki/adr_016_database_session_timezone.md
   timezone: UTC
   # timezone: "-"   # legacy opt-out: inherit DB server default timezone (keep the quotes in YAML)
 
@@ -96,6 +107,14 @@ outbox:
   batch_size: 100                  # Max events per relay cycle
   max_retries: 5                   # Retry limit before marking an event as failed
   retention_period: 72h            # How long delivered events are kept
+
+# --- Scheduler --------------------------------------------------------------
+# The scheduler drives the outbox relay job above. go-bricks v0.39.0
+# (go-bricks#527) added scheduler.timezone — the IANA name used to interpret
+# scheduled-job times. Unset now defaults to UTC; pinned explicitly to mirror
+# database.timezone and document intent. Sentinel "-" opts out (host-local).
+scheduler:
+  timezone: UTC
 
 # --- KeyStore ----------------------------------------------------------------
 # Named RSA key pairs for signing/verification.

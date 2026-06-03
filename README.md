@@ -281,6 +281,8 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 ## Documentation
 
 - **[CLAUDE.md](CLAUDE.md)** - Complete developer guide
+- **[FLYWAY_MIGRATIONS.md](FLYWAY_MIGRATIONS.md)** - Single-tenant Flyway walkthrough (Postgres + Oracle)
+- **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Schema-per-tenant migrations via `go-bricks-migrate`
 - **[wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)** - Load testing guide
 - **[wiki/PROMETHEUS_GRAFANA_SETUP.md](wiki/PROMETHEUS_GRAFANA_SETUP.md)** - Observability setup
 - **[etc/docker/README.md](etc/docker/README.md)** - Docker infrastructure

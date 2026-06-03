@@ -32,6 +32,25 @@ node_modules/
 # Development config (committed so visitors see all options)
 !config.development.yaml
 
+# Multi-tenant migration demo fleet config
+!config.multitenant.yaml
+
+# Migration SQL files (single-tenant + schema-per-tenant)
+!migrations/**/*.sql
+
+# Flyway configs (per-vendor + multi-tenant)
+!flyway/*.conf
+
+# Shell scripts under scripts/
+!scripts/*.sh
+
+# Postgres bootstrap SQL for the multi-tenant demo
+!etc/docker/postgres/*.sql
+
+# Sample Flyway JSON outputs for go-bricks#376 parser design
+!samples/**/*.json
+!samples/**/*.md
+
 # TypeScript and Node.js
 !package.json
 !package-lock.json
