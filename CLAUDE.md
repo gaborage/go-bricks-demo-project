@@ -17,7 +17,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Comprehensive load testing with k6
 
 **Requirements:**
-- Go 1.25.1+
+- Go 1.26+
 - Docker & Docker Compose
 - Make
 
