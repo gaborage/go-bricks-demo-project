@@ -1,5 +1,5 @@
 # Multi-stage build for the multi-tenant AWS example
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install necessary packages
 RUN apk add --no-cache git ca-certificates
@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app ./main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app ./cmd/api/main.go
 
 # Final stage
 FROM alpine:latest
