@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.42.2
 	github.com/gaborage/go-bricks v0.39.1
 	github.com/google/uuid v1.6.0
-	github.com/labstack/echo/v5 v5.1.1
+	github.com/labstack/echo/v5 v5.2.0
 	github.com/stretchr/testify v1.11.1
 )
 
