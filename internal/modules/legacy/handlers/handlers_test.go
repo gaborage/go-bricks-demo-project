@@ -15,7 +15,6 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v5"
 )
 
 // mockService implements the subset of ProductServiceInterface needed by legacy handlers.
@@ -65,12 +64,10 @@ func newMockConfig() *config.Config {
 	}
 }
 
-func newTestContext() (*echo.Context, *httptest.ResponseRecorder) {
-	e := echo.New()
+func newTestContext(cfg *config.Config) server.HandlerContext {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	return c, rec
+	return server.NewHandlerContextForTest(rec, req, cfg)
 }
 
 func TestGetProduct(t *testing.T) {
@@ -125,11 +122,7 @@ func TestGetProduct(t *testing.T) {
 			handler := NewLegacyHandler(mockSvc, log)
 
 			req := &producthandlers.GetProductRequest{ID: tt.productID}
-			echoCtx, _ := newTestContext()
-			ctx := server.HandlerContext{
-				Echo:   echoCtx,
-				Config: cfg,
-			}
+			ctx := newTestContext(cfg)
 
 			response, apiErr := handler.GetProduct(*req, ctx)
 
@@ -236,11 +229,7 @@ func TestListProducts(t *testing.T) {
 				Page:     tt.page,
 				PageSize: tt.pageSize,
 			}
-			echoCtx, _ := newTestContext()
-			ctx := server.HandlerContext{
-				Echo:   echoCtx,
-				Config: cfg,
-			}
+			ctx := newTestContext(cfg)
 
 			response, apiErr := handler.ListProducts(*req, ctx)
 

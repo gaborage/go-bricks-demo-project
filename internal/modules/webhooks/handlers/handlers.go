@@ -46,7 +46,7 @@ func NewWebhookHandler(s SigningServiceInterface, l logger.Logger) *WebhookHandl
 
 // SignPayload signs an arbitrary JSON payload using the configured RSA key.
 func (h *WebhookHandler) SignPayload(req SignRequest, ctx server.HandlerContext) (*domain.SignedPayload, server.IAPIError) {
-	signed, err := h.service.Sign(ctx.Echo.Request().Context(), string(req.Payload))
+	signed, err := h.service.Sign(ctx.RequestContext(), string(req.Payload))
 	if err != nil {
 		h.logger.Error().Err(err).Msg("Failed to sign payload")
 		return nil, server.NewInternalServerError("Failed to sign payload")
@@ -57,7 +57,7 @@ func (h *WebhookHandler) SignPayload(req SignRequest, ctx server.HandlerContext)
 
 // VerifyPayload verifies a payload's signature against the configured RSA public key.
 func (h *WebhookHandler) VerifyPayload(req VerifyRequest, ctx server.HandlerContext) (*VerifyResponse, server.IAPIError) {
-	valid, err := h.service.Verify(ctx.Echo.Request().Context(), req.Payload, req.Signature)
+	valid, err := h.service.Verify(ctx.RequestContext(), req.Payload, req.Signature)
 	if err != nil {
 		if errors.Is(err, service.ErrMalformedSignature) {
 			return nil, server.NewBadRequestError(err.Error())

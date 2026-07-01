@@ -87,7 +87,7 @@ func (h *Handler) CreateToken(req TokenizeRequest, ctx server.HandlerContext) (*
 		return nil, err
 	}
 
-	tok, err := h.svc.Tokenize(ctx.Echo.Request().Context(), req.PAN)
+	tok, err := h.svc.Tokenize(ctx.RequestContext(), req.PAN)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidPAN) {
 			return nil, server.NewBadRequestError("invalid PAN")
@@ -102,7 +102,7 @@ func (h *Handler) CreateToken(req TokenizeRequest, ctx server.HandlerContext) (*
 // stands in for a Visa-style counterparty. It exists purely so the relay
 // service has somewhere to send its JOSE-sealed outbound request.
 func (h *Handler) PeerSimulate(req PeerSimRequest, ctx server.HandlerContext) (*PeerSimResponse, server.IAPIError) {
-	tok, err := h.svc.Tokenize(ctx.Echo.Request().Context(), req.PAN)
+	tok, err := h.svc.Tokenize(ctx.RequestContext(), req.PAN)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidPAN) {
 			return nil, server.NewBadRequestError("invalid PAN")
@@ -118,7 +118,7 @@ func (h *Handler) PeerSimulate(req PeerSimRequest, ctx server.HandlerContext) (*
 // later cannot extend its validity by post-dating the claim.
 // The framework verifies the signature; applications enforce timing.
 func (h *Handler) enforceClaimFreshness(ctx server.HandlerContext) server.IAPIError {
-	claims := jose.ClaimsFromContext(ctx.Echo.Request().Context())
+	claims := jose.ClaimsFromContext(ctx.RequestContext())
 	if claims == nil || claims.IssuedAt.IsZero() {
 		return nil
 	}

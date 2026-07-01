@@ -38,7 +38,7 @@ func NewRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
 
 // Relay handles POST /api/v1/tokens/relay.
 func (h *RelayHandler) Relay(req RelayRequest, ctx server.HandlerContext) (*RelayResponse, server.IAPIError) {
-	tok, err := h.svc.Relay(ctx.Echo.Request().Context(), req.PAN)
+	tok, err := h.svc.Relay(ctx.RequestContext(), req.PAN)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("relay failed")
 		return nil, server.NewInternalServerError("relay failed")
