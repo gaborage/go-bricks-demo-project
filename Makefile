@@ -80,7 +80,7 @@ deps:
 # Build the application
 build: deps
 	@echo "🔨 Building application..."
-	go build -o bin/go-bricks-demo-project ./cmd/api/main.go
+	go build -o bin/go-bricks-demo-project ./cmd/api/
 	@echo "✅ Build completed: bin/go-bricks-demo-project"
 
 # Run the application locally (requires running databases)
@@ -186,7 +186,7 @@ migrate-all: migrate migrate-analytics
 
 MULTITENANT_CONFIG          := config.multitenant.yaml
 MULTITENANT_FLYWAY_CONF     := flyway/flyway-multitenant.conf
-MULTITENANT_MIGRATIONS_DIR  := migrations/multitenant
+MULTITENANT_MIGRATIONS_DIR  := migrations-multitenant
 MULTITENANT_INIT_SQL        := etc/docker/postgres/multitenant-init.sql
 MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
