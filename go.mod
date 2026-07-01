@@ -105,7 +105,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// Consume the unreleased go-bricks v0.45.0 (main HEAD) from the local checkout.
-// Drop this replace once v0.45.0 is tagged and published.
-replace github.com/gaborage/go-bricks => ../go-bricks
