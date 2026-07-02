@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,11 +37,10 @@ func (m *mockSigningService) Verify(ctx context.Context, payload, sig string) (b
 	return false, errors.New("not implemented")
 }
 
-func newTestContext() (*echo.Context, *httptest.ResponseRecorder) {
-	e := echo.New()
+func newTestContext(cfg *config.Config) server.HandlerContext {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
 	rec := httptest.NewRecorder()
-	return e.NewContext(req, rec), rec
+	return server.NewHandlerContextForTest(rec, req, cfg)
 }
 
 func newMockConfig() *config.Config {
@@ -66,8 +66,7 @@ func TestSignPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		result, apiErr := handler.SignPayload(SignRequest{Payload: []byte(`{"event":"test"}`)}, ctx)
 		if apiErr != nil {
@@ -89,8 +88,7 @@ func TestSignPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		_, apiErr := handler.SignPayload(SignRequest{Payload: []byte(`{}`)}, ctx)
 		if apiErr == nil {
@@ -114,8 +112,7 @@ func TestVerifyPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "c2ln"}, ctx)
 		if apiErr != nil {
@@ -134,8 +131,7 @@ func TestVerifyPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "bad"}, ctx)
 		if apiErr != nil {
@@ -154,8 +150,7 @@ func TestVerifyPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "!!!"}, ctx)
 		if apiErr == nil {
@@ -174,8 +169,7 @@ func TestVerifyPayload(t *testing.T) {
 		}
 
 		handler := &WebhookHandler{service: svc, logger: log}
-		echoCtx, _ := newTestContext()
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+		ctx := newTestContext(cfg)
 
 		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "c2ln"}, ctx)
 		if apiErr == nil {
@@ -205,18 +199,15 @@ func TestSignPayloadIntegration(t *testing.T) {
 	}
 	handler := NewWebhookHandler(svc, log)
 
-	e := echo.New()
 	body := strings.NewReader(`{"payload":{"event":"product.created"}}`)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/sign", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
-	echoCtx := e.NewContext(req, rec)
-
-	ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
+	ctx := server.NewHandlerContextForTest(rec, req, cfg)
 
 	// Bind request manually to simulate framework binding
 	var signReq SignRequest
-	if err := echoCtx.Bind(&signReq); err != nil {
+	if err := json.NewDecoder(req.Body).Decode(&signReq); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}
 
@@ -250,19 +241,17 @@ func TestVerifyPayloadIntegration(t *testing.T) {
 		}
 		handler := NewWebhookHandler(svc, log)
 
-		e := echo.New()
 		body := strings.NewReader(`{"payload":"test-data","signature":"dGVzdA=="}`)
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/verify", body)
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec := httptest.NewRecorder()
-		echoCtx := e.NewContext(req, rec)
+		ctx := server.NewHandlerContextForTest(rec, req, cfg)
 
 		var verifyReq VerifyRequest
-		if err := echoCtx.Bind(&verifyReq); err != nil {
+		if err := json.NewDecoder(req.Body).Decode(&verifyReq); err != nil {
 			t.Fatalf("Bind() error = %v", err)
 		}
 
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
 		resp, apiErr := handler.VerifyPayload(verifyReq, ctx)
 		if apiErr != nil {
 			t.Fatalf("VerifyPayload() error = %v", apiErr)
@@ -280,19 +269,17 @@ func TestVerifyPayloadIntegration(t *testing.T) {
 		}
 		handler := NewWebhookHandler(svc, log)
 
-		e := echo.New()
 		body := strings.NewReader(`{"payload":"data","signature":"!!!"}`)
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks/verify", body)
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec := httptest.NewRecorder()
-		echoCtx := e.NewContext(req, rec)
+		ctx := server.NewHandlerContextForTest(rec, req, cfg)
 
 		var verifyReq VerifyRequest
-		if err := echoCtx.Bind(&verifyReq); err != nil {
+		if err := json.NewDecoder(req.Body).Decode(&verifyReq); err != nil {
 			t.Fatalf("Bind() error = %v", err)
 		}
 
-		ctx := server.HandlerContext{Echo: echoCtx, Config: cfg}
 		_, apiErr := handler.VerifyPayload(verifyReq, ctx)
 		if apiErr == nil {
 			t.Fatal("expected error")

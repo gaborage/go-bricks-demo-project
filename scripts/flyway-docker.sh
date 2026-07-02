@@ -19,7 +19,7 @@
 #     FLYWAY_NETWORK if you need to point elsewhere.
 #   * The repo root is mounted read-only at /work so relative paths in the
 #     go-bricks-migrate args (--flyway-config flyway/flyway-multitenant.conf,
-#     --migrations-dir migrations/multitenant) resolve.
+#     --migrations-dir migrations-multitenant) resolve.
 
 set -euo pipefail
 

@@ -18,6 +18,14 @@ server:
     base: "/api/v1"
     health: "/health"
     ready: "/ready"
+  # go-bricks v0.41.0 (#559, ADR-026) flipped the gzip threshold default from 0
+  # (compress everything) to 1024 bytes, so responses < 1KB now ship uncompressed.
+  # Pinned to 0 here to hold wire behavior constant vs v0.39.1 for the perf A/B —
+  # otherwise small product/error JSON silently switches to plaintext and
+  # confounds response-size/bandwidth comparisons. Set to 1024 (or delete this
+  # block) to adopt the current framework default.
+  gzip:
+    minlength: 0
 
 # --- Messaging (RabbitMQ) ---------------------------------------------------
 # AMQP broker URL. Required for the outbox relay to publish events; without it
@@ -98,15 +106,31 @@ databases:
 # Reliable event publishing via the dual-write pattern.
 # Events are written to an outbox table inside the same DB transaction as
 # business data, then relayed to RabbitMQ by a background poller.
+# NOTE (go-bricks v0.40.1, #549): config keys bind by their flat-smushed koanf
+# tag (tablename, autocreatetable, …), NOT the underscored form. The pre-0.40.1
+# underscored keys (table_name, auto_create_table, …) silently STOP binding on
+# upgrade and fall back to their zero-value defaults with no error — which for
+# this block means autocreatetable=false (table never created) and
+# defaultexchange="" (events never route). Keep these flat-smushed.
 outbox:
   enabled: true
-  table_name: gobricks_outbox
-  auto_create_table: true          # Auto-creates the outbox table on first use
-  default_exchange: product-events # Target exchange when event.Exchange is empty
-  poll_interval: 5s                # How often the relay checks for unsent events
-  batch_size: 100                  # Max events per relay cycle
-  max_retries: 5                   # Retry limit before marking an event as failed
-  retention_period: 72h            # How long delivered events are kept
+  tablename: gobricks_outbox
+  autocreatetable: true            # Auto-creates the outbox table on first use
+  defaultexchange: product-events  # Target exchange when event.Exchange is empty
+  pollinterval: 5s                 # How often the relay checks for unsent events
+  batchsize: 100                   # Max events per relay cycle
+  # go-bricks v0.45.0 (#626) reworked retry semantics: maxretries now dead-letters
+  # only POISON events (undecodable headers) to status='failed'. Connectivity
+  # failures (broker down, NACK, publish-confirm timeout, missing exchange) advance
+  # retry_count and retry INDEFINITELY — they never park. Monitor retry_count and
+  # prune status='failed' rows manually (DeletePublished purges only 'published').
+  maxretries: 5                    # Poison-event dead-letter threshold (NOT connectivity retries)
+  retentionperiod: 72h             # How long delivered events are kept
+  # publishtimeout bounds a single relay publish attempt (v0.45.0, default 60s).
+  # HARD INVARIANT: publishtimeout MUST be >= messaging.reconnect.connectiontimeout
+  # (default 30s) or the outbox module fails to Init. Raise this if you raise the
+  # reconnect connection timeout.
+  publishtimeout: 60s
 
 # --- Scheduler --------------------------------------------------------------
 # The scheduler drives the outbox relay job above. go-bricks v0.39.0
@@ -150,7 +174,7 @@ keystore:
     tokens-peer:
       public:
         # BEGIN_TOKENS_PEER_PUB — managed by `make generate-keys`, do not edit by hand.
-        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0AN4rIVSgfzJjpEXIEiogcBhnA3BB27BIFQntYfl8VtTNDPgMZo5OLBs1KoPiwwLmnamSjXSuWyE74ARTz+knAfyYwVOtkbqL8mXFR3wD6cpwL1KiEBs42+3tHtKiuc7M2jOxxCJ5dubH2Q3WQFTJVMQXbzxioIEQ15p2fYowrPLBTofi1WXUY2JrP2qia3/rzsjtmyG5NkjknvxwclV+6HiYzipTB7dEjbj1ok6QAVIp58GOOJNs9q9U9zyZiyU0DPmmuivmLm+UPioZ/vLyKn5TIlz9lltEsp3V83PjzBhhb8qmyqQ9riV5l3lt6Feky90vTf2V1h+MS6DrdGIjwIDAQAB"
+        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs6mRKcCkDegz0y5OB2EszQDMurdfyM1jjextuUFoVC0xIj4e2deTtH5wikzLl3A9K+GxqtQyPnBC+pD3T0xGvMVTlXLvEAEszlQT5DhlwHNRyRiZ9+Fp79h13+TZSFv6r5nPly+cvcAOb8X0Z8e91rDIqfSvQy7QD/+J+st6QXoPa7FPnKR5SXU0gub2qCLBhAECWt84/cQ86AhePpC3JL/HvnCKj8aoLx62SsPQatd6VLExexcs5IPfsZiT0VGhKujYjBtFt/4hDrP+3P98cvso+jkuGCf+gnMBXM+Sjr3A7KDmDwkm+e5XGHmy6f5iIQoMicPkWeEpmMkJqyx+QQIDAQAB"
         # END_TOKENS_PEER_PUB
       private:
         file: "certs/tokens_peer_private.der"

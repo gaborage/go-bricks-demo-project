@@ -93,7 +93,7 @@ func NewProductHandler(s ProductServiceInterface, l logger.Logger) *ProductHandl
 }
 
 func (h *ProductHandler) GetProduct(req GetProductRequest, ctx server.HandlerContext) (*ProductResponse, server.IAPIError) {
-	product, err := h.service.GetProductByID(ctx.Echo.Request().Context(), req.ID)
+	product, err := h.service.GetProductByID(ctx.RequestContext(), req.ID)
 	if err != nil {
 		if errors.Is(err, repository.ErrProductNotFound) {
 			return nil, server.NewNotFoundError("Product")
@@ -106,7 +106,7 @@ func (h *ProductHandler) GetProduct(req GetProductRequest, ctx server.HandlerCon
 }
 
 func (h *ProductHandler) ListProducts(req ListProductsRequest, ctx server.HandlerContext) (*ListProductsResponse, server.IAPIError) {
-	products, total, err := h.service.ListProducts(ctx.Echo.Request().Context(), req.Page, req.PageSize)
+	products, total, err := h.service.ListProducts(ctx.RequestContext(), req.Page, req.PageSize)
 	if err != nil {
 		h.logger.Error().Err(err).Int("page", req.Page).Int("pageSize", req.PageSize).Msg("Failed to list products")
 		if errors.Is(err, service.ErrInternal) {
@@ -132,7 +132,7 @@ func (h *ProductHandler) ListProducts(req ListProductsRequest, ctx server.Handle
 
 func (h *ProductHandler) CreateProduct(req CreateProductRequest, ctx server.HandlerContext) (server.Result[*ProductResponse], server.IAPIError) {
 	product, err := h.service.CreateProduct(
-		ctx.Echo.Request().Context(),
+		ctx.RequestContext(),
 		req.Name,
 		req.Description,
 		req.Price,
@@ -149,7 +149,7 @@ func (h *ProductHandler) CreateProduct(req CreateProductRequest, ctx server.Hand
 
 func (h *ProductHandler) UpdateProduct(req UpdateProductRequest, ctx server.HandlerContext) (*ProductResponse, server.IAPIError) {
 	product, err := h.service.UpdateProduct(
-		ctx.Echo.Request().Context(),
+		ctx.RequestContext(),
 		req.ID,
 		req.Name,
 		req.Description,
@@ -168,7 +168,7 @@ func (h *ProductHandler) UpdateProduct(req UpdateProductRequest, ctx server.Hand
 }
 
 func (h *ProductHandler) DeleteProduct(req DeleteProductRequest, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
-	err := h.service.DeleteProduct(ctx.Echo.Request().Context(), req.ID)
+	err := h.service.DeleteProduct(ctx.RequestContext(), req.ID)
 	if err != nil {
 		if errors.Is(err, repository.ErrProductNotFound) {
 			return server.NoContentResult{}, server.NewNotFoundError("Product")
