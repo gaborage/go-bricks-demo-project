@@ -76,7 +76,7 @@ func NewAnalyticsHandler(s AnalyticsServiceInterface, l logger.Logger) *Analytic
 // RecordView handles POST /analytics/views - records a product view event.
 func (h *AnalyticsHandler) RecordView(req *RecordViewRequest, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
 	err := h.service.RecordProductView(
-		ctx.Echo.Request().Context(),
+		ctx.RequestContext(),
 		req.ProductID,
 		req.UserAgent,
 		req.IPAddress,
@@ -93,7 +93,7 @@ func (h *AnalyticsHandler) RecordView(req *RecordViewRequest, ctx server.Handler
 
 // GetProductStats handles GET /analytics/views/:productId - gets view stats for a product.
 func (h *AnalyticsHandler) GetProductStats(req GetProductStatsRequest, ctx server.HandlerContext) (*ViewStatsResponse, server.IAPIError) {
-	stats, err := h.service.GetProductViewStats(ctx.Echo.Request().Context(), req.ProductID)
+	stats, err := h.service.GetProductViewStats(ctx.RequestContext(), req.ProductID)
 	if err != nil {
 		h.logger.Error().Err(err).Str("productId", req.ProductID).Msg("Failed to get view stats")
 		return nil, server.NewInternalServerError("Failed to retrieve view statistics")
@@ -119,7 +119,7 @@ func (h *AnalyticsHandler) GetTopViewed(req ListTopViewedRequest, ctx server.Han
 		limit = 10 // Default limit
 	}
 
-	stats, err := h.service.GetTopViewedProducts(ctx.Echo.Request().Context(), limit)
+	stats, err := h.service.GetTopViewedProducts(ctx.RequestContext(), limit)
 	if err != nil {
 		h.logger.Error().Err(err).Int("limit", limit).Msg("Failed to get top viewed")
 		return nil, server.NewInternalServerError("Failed to retrieve top viewed products")

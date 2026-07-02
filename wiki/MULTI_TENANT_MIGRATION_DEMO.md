@@ -17,7 +17,7 @@ patterns coexist in this repo.
   so Flyway never sees another tenant's state.
 * Per-tenant credentials resolved from a static YAML file
   (`config.multitenant.yaml`) via `go-bricks-migrate --credentials-from=config-file`.
-* Identical migration files (`migrations/multitenant/V*.sql`) applied to
+* Identical migration files (`migrations-multitenant/V*.sql`) applied to
   every tenant — no per-tenant SQL forks.
 
 > The framework also supports the **AWS Secrets Manager** credential source
@@ -65,7 +65,7 @@ applies this idempotently for all three tenants.
 ```text
 config.multitenant.yaml                       Fleet config (3 tenants)
 flyway/flyway-multitenant.conf                Flyway config (no flyway.schemas)
-migrations/multitenant/
+migrations-multitenant/
     V1__create_orders_table.sql
     V2__add_status_column.sql
 scripts/
@@ -139,7 +139,7 @@ go-bricks-migrate migrate \
     --source-config config.multitenant.yaml \
     --credentials-from config-file \
     --flyway-config flyway/flyway-multitenant.conf \
-    --migrations-dir migrations/multitenant \
+    --migrations-dir migrations-multitenant \
     --flyway-path scripts/flyway-docker.sh \
     --continue-on-error
 ```
@@ -240,7 +240,7 @@ re-running `migrate-multitenant-init`.
 
 ## Adding a new migration to the fleet
 
-1. Drop a new `Vn__description.sql` into `migrations/multitenant/`. Use the
+1. Drop a new `Vn__description.sql` into `migrations-multitenant/`. Use the
    next sequential version number (V3, V4, …). Same SQL is applied to
    every tenant.
 2. (Optional) `make migrate-multitenant-validate` to confirm checksums of

@@ -270,7 +270,7 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 
 ## Troubleshooting
 
-**DEBUG env conflict:** `unset DEBUG && make run`
+**DEBUG env conflict** (go-bricks < v0.43.0 only; resolved by #601): `unset DEBUG && make run`
 
 **Port conflicts:** `make docker-down && make docker-up`
 

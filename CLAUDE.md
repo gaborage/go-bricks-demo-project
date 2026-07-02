@@ -169,9 +169,9 @@ products/
 - Can be overridden by `config.{env}.yaml`
 - Environment variables override YAML (e.g., `APP_NAME` overrides `app.name`)
 
-**IMPORTANT:** The `DEBUG` environment variable conflicts with go-bricks' `debug` config section. Unset it before running:
+**Note:** A bare `DEBUG` environment variable used to conflict with go-bricks' `debug` config section (startup crash). As of go-bricks **v0.43.0 (#601)** the framework silently drops a bare `DEBUG` env var, so this workaround is **no longer required** — kept for anyone on an older framework version:
 ```bash
-unset DEBUG && make run
+unset DEBUG && make run   # only needed on go-bricks < v0.43.0
 ```
 
 ### Database Access Pattern
@@ -953,10 +953,10 @@ After this tour, you'll understand the module system, dependency injection, obse
 
 ## Common Troubleshooting
 
-### DEBUG Environment Variable Conflict
+### DEBUG Environment Variable Conflict (resolved in go-bricks v0.43.0)
 ```bash
-# Symptom: Configuration error on startup
-# Solution: Unset DEBUG environment variable
+# Symptom (go-bricks < v0.43.0 only): configuration error on startup from a bare DEBUG env var.
+# As of v0.43.0 (#601) the framework drops a bare DEBUG var, so this workaround is no longer needed:
 unset DEBUG && make run
 ```
 

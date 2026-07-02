@@ -30,7 +30,7 @@ func NewLegacyHandler(s producthandlers.ProductServiceInterface, l logger.Logger
 
 // GetProduct returns a single product without the APIResponse envelope.
 func (h *LegacyHandler) GetProduct(req producthandlers.GetProductRequest, ctx server.HandlerContext) (*producthandlers.ProductResponse, server.IAPIError) {
-	product, err := h.service.GetProductByID(ctx.Echo.Request().Context(), req.ID)
+	product, err := h.service.GetProductByID(ctx.RequestContext(), req.ID)
 	if err != nil {
 		if errors.Is(err, repository.ErrProductNotFound) {
 			return nil, server.NewNotFoundError("Product")
@@ -44,7 +44,7 @@ func (h *LegacyHandler) GetProduct(req producthandlers.GetProductRequest, ctx se
 
 // ListProducts returns a paginated list of products without the APIResponse envelope.
 func (h *LegacyHandler) ListProducts(req producthandlers.ListProductsRequest, ctx server.HandlerContext) (*producthandlers.ListProductsResponse, server.IAPIError) {
-	products, total, err := h.service.ListProducts(ctx.Echo.Request().Context(), req.Page, req.PageSize)
+	products, total, err := h.service.ListProducts(ctx.RequestContext(), req.Page, req.PageSize)
 	if err != nil {
 		h.logger.Error().Err(err).Int("page", req.Page).Int("pageSize", req.PageSize).Msg("Failed to list products")
 		if errors.Is(err, service.ErrValidation) {
