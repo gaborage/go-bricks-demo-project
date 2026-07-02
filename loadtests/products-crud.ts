@@ -13,7 +13,7 @@
 //   K6_BASE_URL=http://prod.example.com:8080 k6 run loadtests/products-crud.ts
 
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import {
@@ -24,6 +24,9 @@ import {
   getSeededProductID,
   headers,
   loadProfiles,
+  resolveScenario,
+  summaryOutputs,
+  maybeSleep,
 } from './config.ts';
 import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
@@ -40,9 +43,13 @@ const createProductDuration = new Trend('create_product_duration');
 const updateProductDuration = new Trend('update_product_duration');
 const deleteProductDuration = new Trend('delete_product_duration');
 
-// Test configuration - use rampUp profile by default
+// Test configuration - rampUp VU stages by default; controlled
+// constant-arrival-rate when PERF_RATE is set (see resolveScenario in config.ts).
+const crudScenario = resolveScenario();
 export const options: Options = {
-  stages: loadProfiles.rampUp.stages,
+  ...(crudScenario
+    ? { scenarios: { steady: crudScenario } }
+    : { stages: loadProfiles.rampUp.stages }),
   thresholds: config.thresholds,
   // Batch multiple HTTP requests together for better performance
   batch: 10,
@@ -75,8 +82,9 @@ export default function (): void {
     deleteProduct();
   }
 
-  // Think time - simulate realistic user behavior (0.5-2 seconds between requests)
-  sleep(Math.random() * 1.5 + 0.5);
+  // Think time - simulate realistic user behavior (0.5-2 seconds between
+  // requests); suppressed in controlled A/B mode (arrival-rate drives load).
+  maybeSleep(Math.random() * 1.5 + 0.5);
 }
 
 function listProducts(): void {
@@ -292,4 +300,34 @@ export function teardown(): void {
   console.log('');
   console.log('✅ Load test completed');
   console.log(`📦 Created ${createdProductIDs.length} products during test`);
+}
+
+// Custom summary - human-readable stdout plus optional JSON capture (A/B).
+export function handleSummary(data: any): Record<string, string> {
+  const m = data.metrics || {};
+  const dur = m.http_req_duration?.values || {};
+  const pct = (k: string) => ((m[k]?.values?.rate || 0) * 100).toFixed(2);
+  const summary = `
+═══════════════════════════════════════════════════════════
+                     CRUD MIX TEST SUMMARY
+═══════════════════════════════════════════════════════════
+Total Requests:          ${m.http_reqs?.values?.count || 0}
+Throughput:              ${(m.http_reqs?.values?.rate || 0).toFixed(1)} req/s
+Overall Error Rate:      ${((m.http_req_failed?.values?.rate || 0) * 100).toFixed(2)}%
+Avg Response Time:       ${(dur.avg || 0).toFixed(2)}ms
+P95 Response Time:       ${(dur['p(95)'] || 0).toFixed(2)}ms
+P99 Response Time:       ${(dur['p(99)'] || 0).toFixed(2)}ms
+
+Success Rate by Operation:
+  List:                  ${pct('list_products_success')}%
+  Get:                   ${pct('get_product_success')}%
+  Create:                ${pct('create_product_success')}%
+  Update:                ${pct('update_product_success')}%
+  Delete:                ${pct('delete_product_success')}%
+═══════════════════════════════════════════════════════════
+`;
+
+  console.log(summary);
+
+  return summaryOutputs(data, summary);
 }
