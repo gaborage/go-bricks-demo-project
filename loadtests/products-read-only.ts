@@ -68,7 +68,7 @@ export default function (): void {
 
   // Shorter think time for read-only workload (0.2-1 seconds); suppressed in
   // controlled A/B mode so the arrival-rate scenario drives the offered load.
-  maybeSleep(Math.random() * 0.8 + 0.2);
+  maybeSleep(Math.random() * 0.8 + 0.2, readScenario !== null);
 }
 
 function listProducts(): void {

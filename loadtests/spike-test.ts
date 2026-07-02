@@ -103,9 +103,11 @@ export default function (): void {
   }
 
   // Adaptive think time based on stage; suppressed in controlled A/B mode so the
-  // ramping-arrival-rate scenario drives the offered load.
+  // ramping-arrival-rate scenario drives the offered load. Gated on THIS
+  // script's resolved scenario, so PERF_RATE alone with an explicit
+  // PERF_SPIKE_PEAK=0 keeps a native spike run's pacing fully native.
   const thinkTime = stage.startsWith('spike') ? 0.1 : 0.5;
-  maybeSleep(Math.random() * thinkTime);
+  maybeSleep(Math.random() * thinkTime, spikeScenario !== null);
 }
 
 function getCurrentStage(elapsed: number): string {

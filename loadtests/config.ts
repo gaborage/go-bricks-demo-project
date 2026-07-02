@@ -190,18 +190,24 @@ export function createChecks(): Record<string, CheckFunction> {
 //   PERF_PREALLOC  preallocated VUs reused for keep-alive connections (def 300)
 //   PERF_MAXVUS    hard VU ceiling (default = PERF_PREALLOC)
 
+/** Parse a positive-integer env value; fallback on unset/zero/malformed input (NaN-safe). */
+function positiveIntOr(value: string | undefined, fallback: number): number {
+  const n = parseInt(value || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 /** Steady constant-arrival-rate scenario when PERF_RATE is set, else null. */
 export function resolveScenario(): Scenario | null {
-  const rate = parseInt(__ENV.PERF_RATE || '0', 10);
+  const rate = positiveIntOr(__ENV.PERF_RATE, 0);
   if (rate <= 0) return null;
-  const prealloc = parseInt(__ENV.PERF_PREALLOC || '300', 10);
+  const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 300);
   return {
     executor: 'constant-arrival-rate',
     rate,
     timeUnit: '1s',
     duration: __ENV.PERF_DURATION || '60s',
     preAllocatedVUs: prealloc,
-    maxVUs: parseInt(__ENV.PERF_MAXVUS || String(prealloc), 10),
+    maxVUs: positiveIntOr(__ENV.PERF_MAXVUS, prealloc),
     gracefulStop: '5s',
   } as Scenario;
 }
@@ -213,10 +219,12 @@ export function resolveScenario(): Scenario | null {
 //   PERF_SPIKE_BASE               baseline rps (default 300)
 //   PERF_SPIKE_BASE_DUR / _RAMP_DUR / _HOLD_DUR / _RECOVERY_DUR (durations)
 export function resolveSpikeScenario(): Scenario | null {
-  const peak = parseInt(__ENV.PERF_SPIKE_PEAK || __ENV.PERF_RATE || '0', 10);
+  // NOTE: an explicit PERF_SPIKE_PEAK=0 (truthy string "0") deliberately
+  // short-circuits the OR-chain and overrides PERF_RATE -> native spike mode.
+  const peak = positiveIntOr(__ENV.PERF_SPIKE_PEAK || __ENV.PERF_RATE, 0);
   if (peak <= 0) return null;
-  const base = parseInt(__ENV.PERF_SPIKE_BASE || '300', 10);
-  const prealloc = parseInt(__ENV.PERF_PREALLOC || '600', 10);
+  const base = positiveIntOr(__ENV.PERF_SPIKE_BASE, 300);
+  const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 600);
   return {
     executor: 'ramping-arrival-rate',
     startRate: base,
@@ -247,7 +255,9 @@ function durationToSeconds(value: string | undefined, fallback: number): number 
 // stages when PERF_SPIKE_PEAK/PERF_RATE is set, so baseline/spike/recovery labels
 // stay correct in BOTH modes.
 export function spikePhaseBoundaries(): { baselineEnd: number; rampEnd: number; holdEnd: number; dropEnd: number } {
-  const controlled = parseInt(__ENV.PERF_SPIKE_PEAK || __ENV.PERF_RATE || '0', 10) > 0;
+  // Derived from resolveSpikeScenario() so the two can never disagree on what
+  // counts as "controlled" (incl. the explicit PERF_SPIKE_PEAK=0 override).
+  const controlled = resolveSpikeScenario() !== null;
   if (!controlled) {
     return { baselineEnd: 120, rampEnd: 150, holdEnd: 210, dropEnd: 240 };
   }
@@ -263,18 +273,17 @@ export function spikePhaseBoundaries(): { baselineEnd: number; rampEnd: number; 
   };
 }
 
-// In controlled A/B mode (PERF_RATE or PERF_SPIKE_PEAK set) the offered load is
-// driven open-loop by the arrival-rate scenario, so per-iteration think-time is
-// suppressed — otherwise think-time would make the scenario VU-bound and the
-// offered rate unreachable. In default mode the native think-time is preserved
-// (realistic closed-loop user simulation), so `make loadtest-*` is unchanged.
-export function controlledMode(): boolean {
-  return parseInt(__ENV.PERF_RATE || '0', 10) > 0 || parseInt(__ENV.PERF_SPIKE_PEAK || '0', 10) > 0;
-}
-
-/** sleep() in default mode; no-op in controlled A/B mode. */
-export function maybeSleep(seconds: number): void {
-  if (controlledMode()) return;
+// In controlled A/B mode the offered load is driven open-loop by the
+// arrival-rate scenario, so per-iteration think-time is suppressed — otherwise
+// think-time would make the scenario VU-bound and the offered rate
+// unreachable. Each script passes `controlled` from ITS OWN resolved scenario
+// (`myScenario !== null`) rather than a shared global check, so e.g.
+// PERF_SPIKE_PEAK set alone never mutes think-time in the steady tests, and an
+// explicit PERF_SPIKE_PEAK=0 keeps a native spike run's pacing fully native.
+// In default mode the native think-time is preserved (realistic closed-loop
+// user simulation), so `make loadtest-*` is unchanged.
+export function maybeSleep(seconds: number, controlled: boolean): void {
+  if (controlled) return;
   sleep(seconds);
 }
 

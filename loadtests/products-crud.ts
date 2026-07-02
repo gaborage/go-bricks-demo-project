@@ -84,7 +84,7 @@ export default function (): void {
 
   // Think time - simulate realistic user behavior (0.5-2 seconds between
   // requests); suppressed in controlled A/B mode (arrival-rate drives load).
-  maybeSleep(Math.random() * 1.5 + 0.5);
+  maybeSleep(Math.random() * 1.5 + 0.5, crudScenario !== null);
 }
 
 function listProducts(): void {
