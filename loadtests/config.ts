@@ -1,7 +1,9 @@
 // k6 Load Testing Configuration
 // This file contains shared configuration for all load tests
 
+import { sleep } from 'k6';
 import type { TestConfig, LoadProfile, SampleProduct, Headers } from './types/index.ts';
+import type { Scenario } from 'k6/options';
 
 export const config: TestConfig = {
   // Base URL for API - override with K6_BASE_URL environment variable
@@ -171,4 +173,128 @@ export function createChecks(): Record<string, CheckFunction> {
     'response time < 1s': (r) => r.timings.duration < 1000,
     'response has body': (r) => r.body && r.body.length > 0,
   };
+}
+
+// ============================================================================
+// Controlled-load hardening (non-breaking, opt-in via environment variables)
+// ============================================================================
+// Default `make loadtest-*` behavior is UNCHANGED. When PERF_RATE is set, steady
+// tests switch to an open-model constant-arrival-rate scenario — a controlled,
+// repeatable, device-safe offered load that is ideal for version-to-version A/B
+// comparison (hold a fixed rps comfortably below the measured saturation
+// ceiling so the signal reflects the framework, not queue collapse). Knobs use
+// a PERF_ prefix to avoid colliding with k6's reserved K6_VUS/K6_DURATION/etc.
+// option env-vars (which would override script `scenarios`):
+//   PERF_RATE      offered requests/sec (0 or unset -> keep native VU stages)
+//   PERF_DURATION  steady-state duration (default 60s)
+//   PERF_PREALLOC  preallocated VUs reused for keep-alive connections (def 300)
+//   PERF_MAXVUS    hard VU ceiling (default = PERF_PREALLOC)
+
+/** Parse a positive-integer env value; fallback on unset/zero/malformed input (NaN-safe). */
+function positiveIntOr(value: string | undefined, fallback: number): number {
+  const n = parseInt(value || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Steady constant-arrival-rate scenario when PERF_RATE is set, else null. */
+export function resolveScenario(): Scenario | null {
+  const rate = positiveIntOr(__ENV.PERF_RATE, 0);
+  if (rate <= 0) return null;
+  const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 300);
+  return {
+    executor: 'constant-arrival-rate',
+    rate,
+    timeUnit: '1s',
+    duration: __ENV.PERF_DURATION || '60s',
+    preAllocatedVUs: prealloc,
+    maxVUs: positiveIntOr(__ENV.PERF_MAXVUS, prealloc),
+    gracefulStop: '5s',
+  } as Scenario;
+}
+
+// Spike variant: a controlled ramping-arrival-rate burst (baseline -> peak ->
+// baseline) when PERF_SPIKE_PEAK or PERF_RATE is set; else the native VU stages.
+// Keeps the spike SHAPE while bounding the offered load for device safety.
+//   PERF_SPIKE_PEAK / PERF_RATE   peak rps of the burst
+//   PERF_SPIKE_BASE               baseline rps (default 300)
+//   PERF_SPIKE_BASE_DUR / _RAMP_DUR / _HOLD_DUR / _RECOVERY_DUR (durations)
+export function resolveSpikeScenario(): Scenario | null {
+  // NOTE: an explicit PERF_SPIKE_PEAK=0 (truthy string "0") deliberately
+  // short-circuits the OR-chain and overrides PERF_RATE -> native spike mode.
+  const peak = positiveIntOr(__ENV.PERF_SPIKE_PEAK || __ENV.PERF_RATE, 0);
+  if (peak <= 0) return null;
+  const base = positiveIntOr(__ENV.PERF_SPIKE_BASE, 300);
+  const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 600);
+  return {
+    executor: 'ramping-arrival-rate',
+    startRate: base,
+    timeUnit: '1s',
+    preAllocatedVUs: prealloc,
+    maxVUs: parseInt(__ENV.PERF_MAXVUS || String(prealloc), 10),
+    stages: [
+      { target: base, duration: __ENV.PERF_SPIKE_BASE_DUR || '20s' },
+      { target: peak, duration: __ENV.PERF_SPIKE_RAMP_DUR || '5s' },
+      { target: peak, duration: __ENV.PERF_SPIKE_HOLD_DUR || '20s' },
+      { target: base, duration: '5s' },
+      { target: base, duration: __ENV.PERF_SPIKE_RECOVERY_DUR || '15s' },
+    ],
+    gracefulStop: '5s',
+  } as Scenario;
+}
+
+/** Parse a k6-style duration ("20s"/"2m") to seconds; fallback on bad input. */
+function durationToSeconds(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const m = /^(\d+)(s|m)?$/.exec(value.trim());
+  if (!m) return fallback;
+  return parseInt(m[1], 10) * (m[2] === 'm' ? 60 : 1);
+}
+
+// Cumulative phase boundaries (seconds) for the spike test's per-phase error
+// metrics. Tracks the native VU stages by default, or the controlled spike
+// stages when PERF_SPIKE_PEAK/PERF_RATE is set, so baseline/spike/recovery labels
+// stay correct in BOTH modes.
+export function spikePhaseBoundaries(): { baselineEnd: number; rampEnd: number; holdEnd: number; dropEnd: number } {
+  // Derived from resolveSpikeScenario() so the two can never disagree on what
+  // counts as "controlled" (incl. the explicit PERF_SPIKE_PEAK=0 override).
+  const controlled = resolveSpikeScenario() !== null;
+  if (!controlled) {
+    return { baselineEnd: 120, rampEnd: 150, holdEnd: 210, dropEnd: 240 };
+  }
+  const base = durationToSeconds(__ENV.PERF_SPIKE_BASE_DUR, 20);
+  const ramp = durationToSeconds(__ENV.PERF_SPIKE_RAMP_DUR, 5);
+  const hold = durationToSeconds(__ENV.PERF_SPIKE_HOLD_DUR, 20);
+  const drop = 5;
+  return {
+    baselineEnd: base,
+    rampEnd: base + ramp,
+    holdEnd: base + ramp + hold,
+    dropEnd: base + ramp + hold + drop,
+  };
+}
+
+// In controlled A/B mode the offered load is driven open-loop by the
+// arrival-rate scenario, so per-iteration think-time is suppressed — otherwise
+// think-time would make the scenario VU-bound and the offered rate
+// unreachable. Each script passes `controlled` from ITS OWN resolved scenario
+// (`myScenario !== null`) rather than a shared global check, so e.g.
+// PERF_SPIKE_PEAK set alone never mutes think-time in the steady tests, and an
+// explicit PERF_SPIKE_PEAK=0 keeps a native spike run's pacing fully native.
+// In default mode the native think-time is preserved (realistic closed-loop
+// user simulation), so `make loadtest-*` is unchanged.
+export function maybeSleep(seconds: number, controlled: boolean): void {
+  if (controlled) return;
+  sleep(seconds);
+}
+
+// handleSummary helper: always emit the human-readable stdout text; ADDITIONALLY
+// write the full k6 summary JSON to PERF_SUMMARY_FILE when set, so a version A/B
+// can diff machine-readable metrics across runs.
+export function summaryOutputs(data: unknown, stdout: string): Record<string, string> {
+  const outputs: Record<string, string> = { stdout };
+  const file = __ENV.PERF_SUMMARY_FILE;
+  if (file) {
+    outputs[file] = JSON.stringify(data);
+  }
+  return outputs;
 }

@@ -16,10 +16,10 @@
 //   k6 run --vus 100 --duration 5m loadtests/products-read-only.ts
 
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
-import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles } from './config.ts';
+import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles, resolveScenario, summaryOutputs, maybeSleep } from './config.ts';
 import type { ProductResponse, ProductListResponse, Product } from './types/index.ts';
 
 // Custom metrics
@@ -29,9 +29,13 @@ const listProductsDuration = new Trend('list_products_duration');
 const getProductDuration = new Trend('get_product_duration');
 const totalRequests = new Counter('total_requests');
 
-// Test configuration - use sustained load profile
+// Test configuration - sustained VU stages by default; controlled
+// constant-arrival-rate when PERF_RATE is set (see resolveScenario in config.ts).
+const readScenario = resolveScenario();
 export const options: Options = {
-  stages: loadProfiles.sustained.stages,
+  ...(readScenario
+    ? { scenarios: { steady: readScenario } }
+    : { stages: loadProfiles.sustained.stages }),
   thresholds: {
     // Stricter thresholds for read-only operations
     'http_req_duration': [
@@ -62,8 +66,9 @@ export default function (): void {
     getProduct();
   }
 
-  // Shorter think time for read-only workload (0.2-1 seconds)
-  sleep(Math.random() * 0.8 + 0.2);
+  // Shorter think time for read-only workload (0.2-1 seconds); suppressed in
+  // controlled A/B mode so the arrival-rate scenario drives the offered load.
+  maybeSleep(Math.random() * 0.8 + 0.2, readScenario !== null);
 }
 
 function listProducts(): void {
@@ -229,7 +234,7 @@ export function teardown(): void {
 }
 
 // Custom summary
-export function handleSummary(data: any): { stdout: string } {
+export function handleSummary(data: any): Record<string, string> {
   const listSuccess = data.metrics.list_products_success?.values?.rate || 0;
   const getSuccess = data.metrics.get_product_success?.values?.rate || 0;
   const avgDuration = data.metrics.http_req_duration?.values?.avg || 0;
@@ -252,7 +257,5 @@ P99 Response Time:       ${p99Duration.toFixed(2)}ms
 
   console.log(summary);
 
-  return {
-    stdout: summary,
-  };
+  return summaryOutputs(data, summary);
 }
