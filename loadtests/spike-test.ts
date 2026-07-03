@@ -17,11 +17,11 @@
 //   k6 run loadtests/spike-test.ts
 
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
 import { Rate, Trend, Gauge } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import type { RefinedResponse, ResponseType } from 'k6/http';
-import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers, resolveSpikeScenario, spikePhaseBoundaries, summaryOutputs, maybeSleep } from './config.ts';
 import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
@@ -31,15 +31,22 @@ const recoveryErrors = new Rate('recovery_errors');
 const currentStage = new Gauge('current_stage');
 const requestLatency = new Trend('request_latency');
 
-// Test configuration - spike profile
+// Test configuration - native VU spike stages by default; controlled
+// ramping-arrival-rate burst when PERF_SPIKE_PEAK/PERF_RATE is set (see
+// resolveSpikeScenario in config.ts). Phase labels track either mode.
+const spikeScenario = resolveSpikeScenario();
 export const options: Options = {
-  stages: [
-    { duration: '2m', target: 10 },    // Baseline: establish normal behavior
-    { duration: '30s', target: 300 },  // Spike: sudden jump to 300 VUs
-    { duration: '1m', target: 300 },   // Hold: maintain spike
-    { duration: '30s', target: 10 },   // Drop: sudden return to baseline
-    { duration: '2m', target: 10 },    // Recovery: monitor system recovery
-  ],
+  ...(spikeScenario
+    ? { scenarios: { spike: spikeScenario } }
+    : {
+        stages: [
+          { duration: '2m', target: 10 },    // Baseline: establish normal behavior
+          { duration: '30s', target: 300 },  // Spike: sudden jump to 300 VUs
+          { duration: '1m', target: 300 },   // Hold: maintain spike
+          { duration: '30s', target: 10 },   // Drop: sudden return to baseline
+          { duration: '2m', target: 10 },    // Recovery: monitor system recovery
+        ],
+      }),
   thresholds: {
     // Allow higher error rates during spike
     'http_req_duration': [
@@ -95,17 +102,21 @@ export default function (): void {
     requestLatency.add(response.timings.duration, { stage });
   }
 
-  // Adaptive think time based on stage
+  // Adaptive think time based on stage; suppressed in controlled A/B mode so the
+  // ramping-arrival-rate scenario drives the offered load. Gated on THIS
+  // script's resolved scenario, so PERF_RATE alone with an explicit
+  // PERF_SPIKE_PEAK=0 keeps a native spike run's pacing fully native.
   const thinkTime = stage.startsWith('spike') ? 0.1 : 0.5;
-  sleep(Math.random() * thinkTime);
+  maybeSleep(Math.random() * thinkTime, spikeScenario !== null);
 }
 
 function getCurrentStage(elapsed: number): string {
-  if (elapsed < 120) return 'baseline';        // 0-2m
-  if (elapsed < 150) return 'spike_ramp';      // 2m-2.5m
-  if (elapsed < 210) return 'spike_hold';      // 2.5m-3.5m
-  if (elapsed < 240) return 'spike_drop';      // 3.5m-4m
-  return 'recovery';                           // 4m+
+  const b = spikePhaseBoundaries();            // native VU windows or controlled-spike windows
+  if (elapsed < b.baselineEnd) return 'baseline';
+  if (elapsed < b.rampEnd) return 'spike_ramp';
+  if (elapsed < b.holdEnd) return 'spike_hold';
+  if (elapsed < b.dropEnd) return 'spike_drop';
+  return 'recovery';
 }
 
 function executeRandomOperation(): RefinedResponse<ResponseType | undefined> | null {
@@ -331,7 +342,7 @@ export function teardown(): void {
   console.log('   🚩 Cascading failures (errors in baseline after spike)');
 }
 
-export function handleSummary(data: any): { stdout: string } {
+export function handleSummary(data: any): Record<string, string> {
   const p95Duration = data.metrics.http_req_duration?.values['p(95)'] || 0;
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
   const totalErrors = data.metrics.http_req_failed?.values?.rate || 0;
@@ -371,7 +382,5 @@ Resilience Assessment:
   console.log(summary);
   console.log(assessment);
 
-  return {
-    stdout: summary + '\n' + assessment + '\n',
-  };
+  return summaryOutputs(data, summary + '\n' + assessment + '\n');
 }
