@@ -714,7 +714,7 @@ client := httpclient.NewBuilder(logger).
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.39.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.39.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.53.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.53.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -958,6 +958,39 @@ After this tour, you'll understand the module system, dependency injection, obse
 # Symptom (go-bricks < v0.43.0 only): configuration error on startup from a bare DEBUG env var.
 # As of v0.43.0 (#601) the framework drops a bare DEBUG var, so this workaround is no longer needed:
 unset DEBUG && make run
+```
+
+### DB Password Minimum Length (go-bricks v0.49.0)
+
+```bash
+# Symptom: app startup or a tenant migration fails with ErrDatabasePasswordTooShort.
+# As of go-bricks v0.49.0 (ADR-037), a NON-EMPTY database password shorter than
+# 8 bytes fails validation (config.MinDatabasePasswordLength = 8). Empty
+# passwords (trust/IAM auth) remain allowed.
+#
+# The default dev password `postgres` (config.development.yaml) is exactly 8
+# bytes — at the floor, zero margin. The multi-tenant demo derives per-tenant
+# passwords as `<tenant>_pass` (etc/docker/postgres/multitenant-init.sql +
+# config.multitenant.yaml) so even the shortest (acme_pass) is 9 bytes.
+# On a RETAINED postgres volume (old `_pw` roles already bootstrapped), just
+# re-run `make migrate-multitenant-init` — the bootstrap SQL now re-asserts each
+# role's password via ALTER ROLE, migrating `_pw` -> `_pass` without recreating
+# the volume.
+# Fix: use a password >= 8 bytes, or leave it empty for trust/IAM auth.
+```
+
+### Dev CORS Fails Closed (go-bricks v0.50.0)
+
+```bash
+# Symptom: after upgrading, a browser client on another origin (e.g. a SPA on
+# localhost:3000 calling the API on :8080) is blocked by CORS, and the server
+# logs a WARN at startup about wildcard CORS.
+# As of go-bricks v0.50.0 (ADR-038), permissive dev wildcard CORS is opt-in.
+# The `make run` target sets CORS_DEV_WILDCARD=true to preserve the pre-upgrade
+# permissive behavior for local development. To run the binary directly:
+CORS_DEV_WILDCARD=true APP_ENV=development ./bin/go-bricks-demo-project
+# Production: do NOT use the wildcard — set an explicit allowlist via CORS_ORIGINS.
+# curl/k6 and same-origin Grafana are unaffected (no browser CORS enforcement).
 ```
 
 ### Port Conflicts

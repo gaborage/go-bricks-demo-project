@@ -83,11 +83,17 @@ build: deps
 	go build -o bin/go-bricks-demo-project ./cmd/api/
 	@echo "✅ Build completed: bin/go-bricks-demo-project"
 
-# Run the application locally (requires running databases)
+# Run the application locally (requires running databases).
+#
+# CORS_DEV_WILDCARD=true restores permissive dev CORS: as of go-bricks v0.50.0
+# (ADR-038) dev wildcard CORS is opt-in — without it the server fails closed
+# (no Access-Control-Allow-Origin) and logs a WARN at boot. Dev-only convenience;
+# production should set an explicit allowlist via CORS_ORIGINS instead.
 run: build
 	@echo "🚀 Starting application..."
 	@echo "Make sure services are running: make docker-up"
 	unset DEBUG && APP_ENV=development \
+	CORS_DEV_WILDCARD=true \
 	./bin/go-bricks-demo-project
 
 # Run tests
@@ -192,7 +198,7 @@ MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
 # Framework version whose go-bricks-migrate CLI the demo targets.
-GO_BRICKS_REF               ?= v0.39.0
+GO_BRICKS_REF               ?= v0.53.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -212,16 +218,12 @@ migrate-multitenant-check:
 
 # Install the framework's multi-tenant migration CLI.
 #
-# The CLI lives in the independently-versioned tools/migration submodule. A
-# plain `go install ...@<ref>` from the module proxy does NOT yield a working
-# v0.39.0 CLI: the published submodule (tools/migration/v0.38.0, and the
-# d1d092d pseudo-version) still pins parent go-bricks v0.38.0 in its go.mod,
-# while the v0.39.0 CLI source references v0.39.0-only symbols
-# (migration.QuiesceController / QuiesceGate / QuiesceStatus) — so a proxy build
-# either lacks the new features (v0.38.0) or fails to compile (d1d092d). We
-# therefore build from a CHECKOUT, where the repo's root go.work resolves the
-# in-tree parent at v0.39.0. (Upstream follow-up: publish a tools/migration tag
-# whose go.mod requires go-bricks v0.39.0 to make this `go install`-able.)
+# The CLI lives in the independently-versioned tools/migration submodule, whose
+# published go.mod can pin an older parent go-bricks than the CLI source needs,
+# so a plain `go install ...@<ref>` from the module proxy may fail to compile or
+# silently lack newer features. We therefore build from a CHECKOUT, where the
+# repo's root go.work resolves the in-tree parent at $(GO_BRICKS_REF) — robust
+# across versions (the v0.53.0 CLI was verified to build this way).
 # Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
 migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."
