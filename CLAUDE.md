@@ -961,6 +961,7 @@ unset DEBUG && make run
 ```
 
 ### DB Password Minimum Length (go-bricks v0.49.0)
+
 ```bash
 # Symptom: app startup or a tenant migration fails with ErrDatabasePasswordTooShort.
 # As of go-bricks v0.49.0 (ADR-037), a NON-EMPTY database password shorter than
@@ -971,10 +972,15 @@ unset DEBUG && make run
 # bytes — at the floor, zero margin. The multi-tenant demo derives per-tenant
 # passwords as `<tenant>_pass` (etc/docker/postgres/multitenant-init.sql +
 # config.multitenant.yaml) so even the shortest (acme_pass) is 9 bytes.
+# On a RETAINED postgres volume (old `_pw` roles already bootstrapped), just
+# re-run `make migrate-multitenant-init` — the bootstrap SQL now re-asserts each
+# role's password via ALTER ROLE, migrating `_pw` -> `_pass` without recreating
+# the volume.
 # Fix: use a password >= 8 bytes, or leave it empty for trust/IAM auth.
 ```
 
 ### Dev CORS Fails Closed (go-bricks v0.50.0)
+
 ```bash
 # Symptom: after upgrading, a browser client on another origin (e.g. a SPA on
 # localhost:3000 calling the API on :8080) is blocked by CORS, and the server

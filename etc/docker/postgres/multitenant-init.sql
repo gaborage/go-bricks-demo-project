@@ -29,6 +29,11 @@ BEGIN
         -- Must stay in lockstep with the passwords in config.multitenant.yaml.
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = tenant) THEN
             EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', tenant, tenant || '_pass');
+        ELSE
+            -- Retained volume: re-assert the password so a role bootstrapped under
+            -- the old "_pw" suffix is migrated to "_pass" on re-run — keeps this
+            -- script truly idempotent, no volume recreation needed.
+            EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', tenant, tenant || '_pass');
         END IF;
 
         -- Schema (owned by the tenant role so DDL inside migrations doesn't
