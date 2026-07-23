@@ -32,6 +32,10 @@ type Repository interface {
 
 const (
 	dbUnavailableErrMsg = "failed to get database connection: %w"
+
+	// fieldKeyName is the JSON/updates-map key for the product name field,
+	// shared with repository_test.go where it is used as a map key literal.
+	fieldKeyName = "name"
 )
 
 type ProductRepository struct {
@@ -192,7 +196,7 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 
 	// Map JSON field names (camelCase per struct tags) to type-safe database column names
 	fieldToColumn := map[string]string{
-		"name":        r.cols.Col("Name"),
+		fieldKeyName:  r.cols.Col("Name"),
 		"description": r.cols.Col("Description"),
 		"price":       r.cols.Col("Price"),
 		"imageURL":    r.cols.Col("ImageURL"),

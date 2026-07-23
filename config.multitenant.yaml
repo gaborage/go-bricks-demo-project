@@ -9,6 +9,12 @@
 # etc/docker/postgres/multitenant-init.sql, plus the role-level search_path
 # that steers Flyway's default schema (and therefore flyway_schema_history)
 # into the tenant's schema.
+#
+# NOTE (go-bricks v0.49.0, ADR-037): a non-empty DB password shorter than 8
+# bytes now fails validation (ErrDatabasePasswordTooShort). The per-tenant
+# passwords below use the "<tenant>_pass" suffix so even the shortest one
+# (acme_pass = 9 bytes) clears the 8-byte floor. Keep them in lockstep with the
+# role passwords bootstrapped in etc/docker/postgres/multitenant-init.sql.
 
 app:
   name: go-bricks-demo-migrate
@@ -24,7 +30,7 @@ multitenant:
         port: 5432
         database: postgres
         username: acme
-        password: acme_pw
+        password: acme_pass
         timezone: UTC
     globex:
       database:
@@ -33,7 +39,7 @@ multitenant:
         port: 5432
         database: postgres
         username: globex
-        password: globex_pw
+        password: globex_pass
         timezone: UTC
     initech:
       database:
@@ -42,5 +48,5 @@ multitenant:
         port: 5432
         database: postgres
         username: initech
-        password: initech_pw
+        password: initech_pass
         timezone: UTC

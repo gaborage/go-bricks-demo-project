@@ -17,6 +17,8 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+const testID = "test-id"
+
 // mockService implements the subset of ProductServiceInterface needed by legacy handlers.
 type mockService struct {
 	getProductByIDFunc func(ctx context.Context, id string) (*domain.Product, error)
@@ -85,13 +87,13 @@ func TestGetProduct(t *testing.T) {
 	}{
 		{
 			name:      "successful get",
-			productID: "test-id",
+			productID: testID,
 			serviceFunc: func(_ context.Context, id string) (*domain.Product, error) {
 				return domain.New(id, "Test Product", "Description", 99.99, "https://example.com/image.jpg"), nil
 			},
 			wantStatus:    http.StatusOK,
 			checkResponse: true,
-			wantProductID: "test-id",
+			wantProductID: testID,
 		},
 		{
 			name:      "product not found",
@@ -104,7 +106,7 @@ func TestGetProduct(t *testing.T) {
 		},
 		{
 			name:      "internal error",
-			productID: "test-id",
+			productID: testID,
 			serviceFunc: func(_ context.Context, _ string) (*domain.Product, error) {
 				return nil, errors.New("database error")
 			},

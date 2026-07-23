@@ -34,7 +34,7 @@ FLYWAY_IMAGE="${FLYWAY_IMAGE:-flyway/flyway:11-alpine}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-go-bricks-postgres}"
 
 TENANT_ROLE=acme
-TENANT_PASSWORD=acme_pw
+TENANT_PASSWORD=acme_pass
 TENANT_SCHEMA=acme
 PG_HOST="${PG_HOST:-postgres}"
 PG_PORT="${PG_PORT:-5432}"
