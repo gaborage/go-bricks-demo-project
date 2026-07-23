@@ -42,13 +42,13 @@ Workaround used in this demo: **per-tenant Postgres roles with a role-level
 `search_path`**.
 
 ```sql
-CREATE ROLE acme LOGIN PASSWORD 'acme_pw';
+CREATE ROLE acme LOGIN PASSWORD 'acme_pass';
 CREATE SCHEMA acme AUTHORIZATION acme;
 ALTER ROLE acme SET search_path TO acme;
 GRANT CONNECT ON DATABASE postgres TO acme;
 ```
 
-When `go-bricks-migrate` connects as `acme/acme_pw` to the shared `postgres`
+When `go-bricks-migrate` connects as `acme/acme_pass` to the shared `postgres`
 database, the JDBC session picks up `search_path=acme` automatically.
 Flyway, when its `flyway.schemas` config is **unset** (see
 [`flyway/flyway-multitenant.conf`](../flyway/flyway-multitenant.conf)),
@@ -232,7 +232,7 @@ re-running `migrate-multitenant-init`.
            port: 5432
            database: postgres
            username: umbrella
-           password: umbrella_pw
+           password: umbrella_pass
    ```
 
 3. Run `make migrate-multitenant-up` — the new tenant gets V1+V2 applied;

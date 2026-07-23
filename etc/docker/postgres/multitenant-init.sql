@@ -23,9 +23,12 @@ DECLARE
     tenant_roles CONSTANT TEXT[] := ARRAY['acme', 'globex', 'initech'];
 BEGIN
     FOREACH tenant IN ARRAY tenant_roles LOOP
-        -- Role
+        -- Role. Password suffix "_pass" (not "_pw") keeps every derived password
+        -- >= 8 bytes, satisfying go-bricks v0.49.0's minimum-length rule — the
+        -- old "acme_pw" was 7 bytes and tripped ErrDatabasePasswordTooShort.
+        -- Must stay in lockstep with the passwords in config.multitenant.yaml.
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = tenant) THEN
-            EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', tenant, tenant || '_pw');
+            EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', tenant, tenant || '_pass');
         END IF;
 
         -- Schema (owned by the tenant role so DDL inside migrations doesn't
