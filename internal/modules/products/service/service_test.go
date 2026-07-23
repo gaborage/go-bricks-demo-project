@@ -15,6 +15,20 @@ import (
 	outboxtest "github.com/gaborage/go-bricks/outbox/testing"
 )
 
+const (
+	testProductName     = "Test Product"
+	testDescription     = "Test Description"
+	testImageURL        = "https://example.com/image.jpg"
+	requiredMsg         = "required"
+	invalidImageURLMsg  = "invalid image URL"
+	notAURLValue        = "not a url"
+	repositoryErrorName = "repository error"
+	testID              = "test-id"
+	productNotFoundName = "product not found"
+	missingID           = "missing-id"
+	httpOrHTTPSMsg      = "http or https"
+)
+
 // mockRepository implements repository methods for testing
 type mockRepository struct {
 	createFunc   func(ctx context.Context, product *domain.Product) error
@@ -96,27 +110,27 @@ func TestCreateProduct(t *testing.T) {
 	}{
 		{
 			name:        "successful create",
-			productName: "Test Product",
-			description: "Test Description",
+			productName: testProductName,
+			description: testDescription,
 			price:       99.99,
-			imageURL:    "https://example.com/image.jpg",
+			imageURL:    testImageURL,
 			repoErr:     nil,
 			wantErr:     false,
 		},
 		{
 			name:        "empty name",
 			productName: "",
-			description: "Test Description",
+			description: testDescription,
 			price:       99.99,
 			imageURL:    "",
 			wantErr:     true,
-			errContains: "required",
+			errContains: requiredMsg,
 			wantErrType: ErrValidation,
 		},
 		{
 			name:        "name too long",
 			productName: strings.Repeat("a", 151),
-			description: "Test Description",
+			description: testDescription,
 			price:       99.99,
 			imageURL:    "",
 			wantErr:     true,
@@ -125,8 +139,8 @@ func TestCreateProduct(t *testing.T) {
 		},
 		{
 			name:        "negative price",
-			productName: "Test Product",
-			description: "Test Description",
+			productName: testProductName,
+			description: testDescription,
 			price:       -10.00,
 			imageURL:    "",
 			wantErr:     true,
@@ -135,30 +149,30 @@ func TestCreateProduct(t *testing.T) {
 		},
 		{
 			name:        "invalid URL scheme",
-			productName: "Test Product",
-			description: "Test Description",
+			productName: testProductName,
+			description: testDescription,
 			price:       99.99,
 			imageURL:    "ftp://example.com/image.jpg",
 			wantErr:     true,
-			errContains: "invalid image URL",
+			errContains: invalidImageURLMsg,
 			wantErrType: ErrValidation,
 		},
 		{
 			name:        "invalid URL format",
-			productName: "Test Product",
-			description: "Test Description",
+			productName: testProductName,
+			description: testDescription,
 			price:       99.99,
-			imageURL:    "not a url",
+			imageURL:    notAURLValue,
 			wantErr:     true,
-			errContains: "invalid image URL",
+			errContains: invalidImageURLMsg,
 			wantErrType: ErrValidation,
 		},
 		{
-			name:        "repository error",
-			productName: "Test Product",
-			description: "Test Description",
+			name:        repositoryErrorName,
+			productName: testProductName,
+			description: testDescription,
 			price:       99.99,
-			imageURL:    "https://example.com/image.jpg",
+			imageURL:    testImageURL,
 			repoErr:     errors.New("database error"),
 			wantErr:     true,
 			errContains: "failed to create product",
@@ -327,20 +341,20 @@ func TestGetProductByID(t *testing.T) {
 	}{
 		{
 			name:      "successful get",
-			id:        "test-id",
+			id:        testID,
 			repoError: nil,
 			wantErr:   false,
-			wantName:  "Test Product",
+			wantName:  testProductName,
 		},
 		{
-			name:      "product not found",
-			id:        "missing-id",
+			name:      productNotFoundName,
+			id:        missingID,
 			repoError: repository.ErrProductNotFound,
 			wantErr:   true,
 		},
 		{
-			name:      "repository error",
-			id:        "test-id",
+			name:      repositoryErrorName,
+			id:        testID,
 			repoError: errors.New("database error"),
 			wantErr:   true,
 		},
@@ -353,7 +367,7 @@ func TestGetProductByID(t *testing.T) {
 					if tt.repoError != nil {
 						return nil, tt.repoError
 					}
-					return domain.New(id, "Test Product", "Description", 99.99, "https://example.com/image.jpg"), nil
+					return domain.New(id, testProductName, "Description", 99.99, testImageURL), nil
 				},
 			}
 
@@ -440,7 +454,7 @@ func TestListProducts(t *testing.T) {
 			wantErrType: ErrValidation,
 		},
 		{
-			name:        "repository error",
+			name:        repositoryErrorName,
 			page:        1,
 			pageSize:    10,
 			repoError:   errors.New("database error"),
@@ -524,7 +538,7 @@ func TestUpdateProduct(t *testing.T) {
 
 	name := "Updated Product"
 	price := 149.99
-	invalidURL := "not a url"
+	invalidURL := notAURLValue
 
 	tests := []struct {
 		name        string
@@ -540,7 +554,7 @@ func TestUpdateProduct(t *testing.T) {
 	}{
 		{
 			name:        "successful update name and price",
-			id:          "test-id",
+			id:          testID,
 			updateName:  &name,
 			updatePrice: &price,
 			updateErr:   nil,
@@ -549,14 +563,14 @@ func TestUpdateProduct(t *testing.T) {
 		},
 		{
 			name:        "no fields to update",
-			id:          "test-id",
+			id:          testID,
 			wantErr:     true,
 			errContains: "no fields to update",
 			wantErrType: ErrValidation,
 		},
 		{
-			name:        "product not found",
-			id:          "missing-id",
+			name:        productNotFoundName,
+			id:          missingID,
 			updateName:  &name,
 			updateErr:   repository.ErrProductNotFound,
 			wantErr:     true,
@@ -564,15 +578,15 @@ func TestUpdateProduct(t *testing.T) {
 		},
 		{
 			name:        "invalid URL",
-			id:          "test-id",
+			id:          testID,
 			updateURL:   &invalidURL,
 			wantErr:     true,
-			errContains: "invalid image URL",
+			errContains: invalidImageURLMsg,
 			wantErrType: ErrValidation,
 		},
 		{
 			name:        "repository error on fetch",
-			id:          "test-id",
+			id:          testID,
 			updateName:  &name,
 			updateErr:   nil,
 			getByIDErr:  errors.New("database error"),
@@ -591,7 +605,7 @@ func TestUpdateProduct(t *testing.T) {
 					if tt.getByIDErr != nil {
 						return nil, tt.getByIDErr
 					}
-					return domain.New(id, "Updated Product", "Description", 149.99, "https://example.com/image.jpg"), nil
+					return domain.New(id, "Updated Product", "Description", 149.99, testImageURL), nil
 				},
 			}
 
@@ -641,20 +655,20 @@ func TestDeleteProduct(t *testing.T) {
 	}{
 		{
 			name:    "successful delete",
-			id:      "test-id",
+			id:      testID,
 			repoErr: nil,
 			wantErr: false,
 		},
 		{
-			name:        "product not found",
-			id:          "missing-id",
+			name:        productNotFoundName,
+			id:          missingID,
 			repoErr:     repository.ErrProductNotFound,
 			wantErr:     true,
 			wantErrType: repository.ErrProductNotFound,
 		},
 		{
-			name:        "repository error",
-			id:          "test-id",
+			name:        repositoryErrorName,
+			id:          testID,
 			repoErr:     errors.New("database error"),
 			wantErr:     true,
 			wantErrType: ErrInternal,
@@ -702,20 +716,20 @@ func TestValidateName(t *testing.T) {
 	}{
 		{
 			name:        "valid name",
-			productName: "Test Product",
+			productName: testProductName,
 			wantErr:     false,
 		},
 		{
 			name:        "empty name",
 			productName: "",
 			wantErr:     true,
-			errContains: "required",
+			errContains: requiredMsg,
 		},
 		{
 			name:        "whitespace only",
 			productName: "   ",
 			wantErr:     true,
-			errContains: "required",
+			errContains: requiredMsg,
 		},
 		{
 			name:        "name too long",
@@ -766,7 +780,7 @@ func TestValidateURL(t *testing.T) {
 		},
 		{
 			name:    "valid https URL",
-			url:     "https://example.com/image.jpg",
+			url:     testImageURL,
 			wantErr: false,
 		},
 		{
@@ -778,19 +792,19 @@ func TestValidateURL(t *testing.T) {
 			name:        "invalid scheme",
 			url:         "ftp://example.com/image.jpg",
 			wantErr:     true,
-			errContains: "http or https",
+			errContains: httpOrHTTPSMsg,
 		},
 		{
 			name:        "no scheme",
 			url:         "example.com/image.jpg",
 			wantErr:     true,
-			errContains: "http or https",
+			errContains: httpOrHTTPSMsg,
 		},
 		{
 			name:        "invalid URL format",
-			url:         "not a url",
+			url:         notAURLValue,
 			wantErr:     true,
-			errContains: "http or https",
+			errContains: httpOrHTTPSMsg,
 		},
 		{
 			name:        "missing host",

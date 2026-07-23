@@ -137,8 +137,8 @@ func TestUpdate(t *testing.T) {
 
 		repo := NewSQLProductRepository(getDB)
 		err := repo.Update(ctx, "test-id", map[string]any{
-			"name":  "Updated Name",
-			"price": 149.99,
+			fieldKeyName: "Updated Name",
+			"price":      149.99,
 		})
 
 		if err != nil {
@@ -156,7 +156,7 @@ func TestUpdate(t *testing.T) {
 		}
 
 		repo := NewSQLProductRepository(getDB)
-		err := repo.Update(ctx, "missing-id", map[string]any{"name": "Updated"})
+		err := repo.Update(ctx, "missing-id", map[string]any{fieldKeyName: "Updated"})
 
 		if !errors.Is(err, ErrProductNotFound) {
 			t.Errorf("Update() error = %v, want %v", err, ErrProductNotFound)
@@ -177,7 +177,7 @@ func TestUpdate(t *testing.T) {
 		}
 
 		repo := NewSQLProductRepository(getDB)
-		err := repo.Update(ctx, "test-id", map[string]any{"name": "Updated Name"})
+		err := repo.Update(ctx, "test-id", map[string]any{fieldKeyName: "Updated Name"})
 
 		if !errors.Is(err, ErrProductNotFound) {
 			t.Errorf("Update() error = %v, want %v", err, ErrProductNotFound)

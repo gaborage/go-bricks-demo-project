@@ -16,6 +16,17 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+const (
+	testID              = "test-id"
+	missingID           = "missing-id"
+	productNotFoundName = "product not found"
+	internalErrorName   = "internal error"
+	validationErrorName = "validation error"
+	errCodeNotFound     = "NOT_FOUND"
+	errCodeInternal     = "INTERNAL_ERROR"
+	errCodeBadRequest   = "BAD_REQUEST"
+)
+
 // mockService implements service methods for testing
 type mockService struct {
 	createProductFunc  func(ctx context.Context, name, description string, price float64, imageURL string) (*domain.Product, error)
@@ -96,31 +107,31 @@ func TestGetProduct(t *testing.T) {
 	}{
 		{
 			name:      "successful get",
-			productID: "test-id",
+			productID: testID,
 			serviceFunc: func(ctx context.Context, id string) (*domain.Product, error) {
 				return domain.New(id, "Test Product", "Description", 99.99, "https://example.com/image.jpg"), nil
 			},
 			wantStatus:    http.StatusOK,
 			checkResponse: true,
-			wantProductID: "test-id",
+			wantProductID: testID,
 		},
 		{
-			name:      "product not found",
-			productID: "missing-id",
+			name:      productNotFoundName,
+			productID: missingID,
 			serviceFunc: func(ctx context.Context, id string) (*domain.Product, error) {
 				return nil, repository.ErrProductNotFound
 			},
 			wantStatus:  http.StatusNotFound,
-			wantErrCode: "NOT_FOUND",
+			wantErrCode: errCodeNotFound,
 		},
 		{
-			name:      "internal error",
-			productID: "test-id",
+			name:      internalErrorName,
+			productID: testID,
 			serviceFunc: func(ctx context.Context, id string) (*domain.Product, error) {
 				return nil, errors.New("database error")
 			},
 			wantStatus:  http.StatusInternalServerError,
-			wantErrCode: "INTERNAL_ERROR",
+			wantErrCode: errCodeInternal,
 		},
 	}
 
@@ -201,24 +212,24 @@ func TestListProducts(t *testing.T) {
 			wantCount:  0,
 		},
 		{
-			name:     "validation error",
+			name:     validationErrorName,
 			page:     0,
 			pageSize: 10,
 			serviceFunc: func(ctx context.Context, page, pageSize int) ([]*domain.Product, int, error) {
 				return nil, 0, fmt.Errorf("%w: page must be greater than 0", service.ErrValidation)
 			},
 			wantStatus:  http.StatusBadRequest,
-			wantErrCode: "BAD_REQUEST",
+			wantErrCode: errCodeBadRequest,
 		},
 		{
-			name:     "internal error",
+			name:     internalErrorName,
 			page:     1,
 			pageSize: 10,
 			serviceFunc: func(ctx context.Context, page, pageSize int) ([]*domain.Product, int, error) {
 				return nil, 0, fmt.Errorf("%w: failed to list products: database error", service.ErrInternal)
 			},
 			wantStatus:  http.StatusInternalServerError,
-			wantErrCode: "INTERNAL_ERROR",
+			wantErrCode: errCodeInternal,
 		},
 	}
 
@@ -289,7 +300,7 @@ func TestCreateProduct(t *testing.T) {
 			wantStatus: http.StatusCreated,
 		},
 		{
-			name: "validation error",
+			name: validationErrorName,
 			request: &CreateProductRequest{
 				Name:        "",
 				Description: "Description",
@@ -300,7 +311,7 @@ func TestCreateProduct(t *testing.T) {
 				return nil, errors.New("product name is required")
 			},
 			wantStatus:  http.StatusBadRequest,
-			wantErrCode: "BAD_REQUEST",
+			wantErrCode: errCodeBadRequest,
 		},
 	}
 
@@ -352,7 +363,7 @@ func TestUpdateProduct(t *testing.T) {
 		{
 			name: "successful update",
 			request: &UpdateProductRequest{
-				ID:    "test-id",
+				ID:    testID,
 				Name:  &updatedName,
 				Price: &updatedPrice,
 			},
@@ -362,28 +373,28 @@ func TestUpdateProduct(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name: "product not found",
+			name: productNotFoundName,
 			request: &UpdateProductRequest{
-				ID:   "missing-id",
+				ID:   missingID,
 				Name: &updatedName,
 			},
 			serviceFunc: func(ctx context.Context, id string, name *string, description *string, price *float64, imageURL *string) (*domain.Product, error) {
 				return nil, repository.ErrProductNotFound
 			},
 			wantStatus:  http.StatusNotFound,
-			wantErrCode: "NOT_FOUND",
+			wantErrCode: errCodeNotFound,
 		},
 		{
-			name: "validation error",
+			name: validationErrorName,
 			request: &UpdateProductRequest{
-				ID:   "test-id",
+				ID:   testID,
 				Name: &updatedName,
 			},
 			serviceFunc: func(ctx context.Context, id string, name *string, description *string, price *float64, imageURL *string) (*domain.Product, error) {
 				return nil, errors.New("validation failed")
 			},
 			wantStatus:  http.StatusBadRequest,
-			wantErrCode: "BAD_REQUEST",
+			wantErrCode: errCodeBadRequest,
 		},
 	}
 
@@ -429,29 +440,29 @@ func TestDeleteProduct(t *testing.T) {
 	}{
 		{
 			name:      "successful delete",
-			productID: "test-id",
+			productID: testID,
 			serviceFunc: func(ctx context.Context, id string) error {
 				return nil
 			},
 			wantStatus: http.StatusNoContent,
 		},
 		{
-			name:      "product not found",
-			productID: "missing-id",
+			name:      productNotFoundName,
+			productID: missingID,
 			serviceFunc: func(ctx context.Context, id string) error {
 				return repository.ErrProductNotFound
 			},
 			wantStatus:  http.StatusNotFound,
-			wantErrCode: "NOT_FOUND",
+			wantErrCode: errCodeNotFound,
 		},
 		{
-			name:      "internal error",
-			productID: "test-id",
+			name:      internalErrorName,
+			productID: testID,
 			serviceFunc: func(ctx context.Context, id string) error {
 				return errors.New("database error")
 			},
 			wantStatus:  http.StatusInternalServerError,
-			wantErrCode: "INTERNAL_ERROR",
+			wantErrCode: errCodeInternal,
 		},
 	}
 

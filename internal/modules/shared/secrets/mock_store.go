@@ -10,6 +10,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	localhostAddr = "localhost"
+)
+
 // MockTenantStore provides a mock implementation of the TenantStore interface
 // for local development and testing without requiring AWS Secrets Manager
 type MockTenantStore struct {
@@ -110,7 +114,7 @@ func (m *MockTenantStore) addSampleTenants() {
 	// Tenant 1 - PostgreSQL
 	m.configs["tenant1"] = &config.DatabaseConfig{
 		Type:     "postgresql",
-		Host:     "localhost",
+		Host:     localhostAddr,
 		Port:     5433,
 		Database: "tenant1_db",
 		Username: "tenant1_user",
@@ -139,7 +143,7 @@ func (m *MockTenantStore) addSampleTenants() {
 	// Tenant 2 - PostgreSQL with different configuration
 	m.configs["tenant2"] = &config.DatabaseConfig{
 		Type:     "postgresql",
-		Host:     "localhost",
+		Host:     localhostAddr,
 		Port:     5434,
 		Database: "tenant2_db",
 		Username: "tenant2_user",
@@ -168,7 +172,7 @@ func (m *MockTenantStore) addSampleTenants() {
 	// Tenant 3 - Oracle
 	m.configs["tenant3"] = &config.DatabaseConfig{
 		Type:     "oracle",
-		Host:     "localhost",
+		Host:     localhostAddr,
 		Port:     1522,
 		Database: "XE",
 		Username: "tenant3_user",

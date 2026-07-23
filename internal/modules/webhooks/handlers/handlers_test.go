@@ -18,6 +18,11 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+const (
+	testValue      = "test"
+	rs256Algorithm = "RS256"
+)
+
 type mockSigningService struct {
 	signFunc   func(ctx context.Context, payload string) (*domain.SignedPayload, error)
 	verifyFunc func(ctx context.Context, payload, sig string) (bool, error)
@@ -45,7 +50,7 @@ func newTestContext(cfg *config.Config) server.HandlerContext {
 
 func newMockConfig() *config.Config {
 	return &config.Config{
-		App: config.AppConfig{Name: "test", Version: "1.0.0", Env: "test"},
+		App: config.AppConfig{Name: testValue, Version: "1.0.0", Env: testValue},
 	}
 }
 
@@ -59,7 +64,7 @@ func TestSignPayload(t *testing.T) {
 				return &domain.SignedPayload{
 					Payload:   payload,
 					Signature: "dGVzdA==",
-					Algorithm: "RS256",
+					Algorithm: rs256Algorithm,
 					KeyName:   "webhook-signing",
 				}, nil
 			},
@@ -75,7 +80,7 @@ func TestSignPayload(t *testing.T) {
 		if result == nil {
 			t.Fatal("SignPayload() returned nil")
 		}
-		if result.Algorithm != "RS256" {
+		if result.Algorithm != rs256Algorithm {
 			t.Errorf("Algorithm = %q, want RS256", result.Algorithm)
 		}
 	})
@@ -114,7 +119,7 @@ func TestVerifyPayload(t *testing.T) {
 		handler := &WebhookHandler{service: svc, logger: log}
 		ctx := newTestContext(cfg)
 
-		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "c2ln"}, ctx)
+		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: testValue, Signature: "c2ln"}, ctx)
 		if apiErr != nil {
 			t.Fatalf("VerifyPayload() error = %v", apiErr)
 		}
@@ -133,7 +138,7 @@ func TestVerifyPayload(t *testing.T) {
 		handler := &WebhookHandler{service: svc, logger: log}
 		ctx := newTestContext(cfg)
 
-		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "bad"}, ctx)
+		resp, apiErr := handler.VerifyPayload(VerifyRequest{Payload: testValue, Signature: "bad"}, ctx)
 		if apiErr != nil {
 			t.Fatalf("VerifyPayload() error = %v", apiErr)
 		}
@@ -152,7 +157,7 @@ func TestVerifyPayload(t *testing.T) {
 		handler := &WebhookHandler{service: svc, logger: log}
 		ctx := newTestContext(cfg)
 
-		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "!!!"}, ctx)
+		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: testValue, Signature: "!!!"}, ctx)
 		if apiErr == nil {
 			t.Fatal("VerifyPayload() expected error")
 		}
@@ -171,7 +176,7 @@ func TestVerifyPayload(t *testing.T) {
 		handler := &WebhookHandler{service: svc, logger: log}
 		ctx := newTestContext(cfg)
 
-		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: "test", Signature: "c2ln"}, ctx)
+		_, apiErr := handler.VerifyPayload(VerifyRequest{Payload: testValue, Signature: "c2ln"}, ctx)
 		if apiErr == nil {
 			t.Fatal("VerifyPayload() expected error")
 		}
@@ -192,7 +197,7 @@ func TestSignPayloadIntegration(t *testing.T) {
 			return &domain.SignedPayload{
 				Payload:   payload,
 				Signature: "c2lnbmVk",
-				Algorithm: "RS256",
+				Algorithm: rs256Algorithm,
 				KeyName:   "webhook-signing",
 			}, nil
 		},
@@ -218,7 +223,7 @@ func TestSignPayloadIntegration(t *testing.T) {
 	if result == nil {
 		t.Fatal("result is nil")
 	}
-	if result.Algorithm != "RS256" {
+	if result.Algorithm != rs256Algorithm {
 		t.Errorf("Algorithm = %q, want RS256", result.Algorithm)
 	}
 	if result.Signature != "c2lnbmVk" {
