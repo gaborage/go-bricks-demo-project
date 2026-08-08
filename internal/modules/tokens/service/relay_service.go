@@ -80,20 +80,19 @@ func NewRelayService(cfg *RelayConfig) (*RelayService, error) {
 		Enc:        jose.DefaultEnc,
 		Cty:        jose.DefaultCty,
 	}
-	if err := outbound.Validate(); err != nil {
-		return nil, fmt.Errorf("outbound policy invalid: %w", err)
-	}
-	if err := inbound.Validate(); err != nil {
-		return nil, fmt.Errorf("inbound policy invalid: %w", err)
-	}
-
-	client := httpclient.NewBuilder(cfg.Logger).
+	// As of go-bricks v0.57.0 Build validates both JOSE policies itself (and
+	// rejects unsafe transport composition), so the client either comes back
+	// fully wired or not at all — no separate policy pre-check needed here.
+	client, err := httpclient.NewBuilder(cfg.Logger).
 		WithJOSE(httpclient.JOSEConfig{
 			Outbound: outbound,
 			Inbound:  inbound,
 			Resolver: resolver,
 		}).
 		Build()
+	if err != nil {
+		return nil, fmt.Errorf("build relay client: %w", err)
+	}
 
 	return &RelayService{client: client, url: cfg.PartnerURL, logger: cfg.Logger}, nil
 }

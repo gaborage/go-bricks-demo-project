@@ -59,7 +59,7 @@ make generate-keys
 make run
 
 # 4. Test the API
-curl http://localhost:8080/health
+curl http://localhost:8080/api/v1/health
 curl http://localhost:8080/api/v1/products
 ```
 
@@ -447,7 +447,7 @@ make docker-up
 make run
 
 # Test endpoints
-curl http://localhost:8080/health
+curl http://localhost:8080/api/v1/health
 curl http://localhost:8080/api/v1/products
 ```
 
@@ -554,8 +554,8 @@ make build  # Automatically picks up local changes
 Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 
 **Health checks:**
-- `GET /health` - Liveness probe
-- `GET /ready` - Readiness probe (checks DB + messaging)
+- `GET /api/v1/health` - Liveness probe
+- `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
 
 **Products module:**
 - `GET /api/v1/products` - List all products
@@ -701,20 +701,26 @@ type TokenizeResponse struct {
 
 **Outbound transport wiring:**
 ```go
-client := httpclient.NewBuilder(logger).
+// Build returns (Client, error) as of v0.56.0: it rejects unsafe transport
+// composition and (v0.57.0) validates both JOSE policies, so no separate
+// Policy.Validate() pre-check is needed at the call site.
+client, err := httpclient.NewBuilder(logger).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: outbound, // sign with our key, encrypt to peer
         Inbound:  inbound,  // decrypt with our key, verify peer signature
         Resolver: jose.NewKeyStoreResolver(keyStore),
     }).
     Build()
+if err != nil {
+    return nil, fmt.Errorf("build relay client: %w", err)
+}
 ```
 
 **Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokens-peer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.53.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.53.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.58.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.58.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -920,8 +926,8 @@ Experience the application running:
 3. **Exercise endpoints:**
    ```bash
    # Health checks
-   curl http://localhost:8080/health
-   curl http://localhost:8080/ready
+   curl http://localhost:8080/api/v1/health
+   curl http://localhost:8080/api/v1/ready
 
    # Products CRUD
    curl http://localhost:8080/api/v1/products
