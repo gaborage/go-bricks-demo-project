@@ -3,8 +3,11 @@
     // Target ES2015 for k6 compatibility
     "target": "ES2015",
     "lib": ["ES2015", "DOM"],
-    "module": "commonjs",
-    "moduleResolution": "node",
+    // k6 bundles the tests itself (esbuild), so resolve the way a bundler does.
+    // TypeScript 7 removed moduleResolution "node" (node10); "bundler" is the
+    // supported replacement and is what keeps extensionless + .ts imports working.
+    "module": "esnext",
+    "moduleResolution": "bundler",
 
     // k6 type definitions
     "types": ["k6"],

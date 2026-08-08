@@ -7,9 +7,6 @@
 # Ignore everything
 *
 
-.gomodcache/
-node_modules/
-
 # But not these files...
 !/.gitignore
 
@@ -79,3 +76,11 @@ node_modules/
 
 # ...even if they are in subdirectories
 !*/
+
+# Dependency trees, re-excluded LAST because last match wins. `!*/` above
+# re-includes every directory at any depth, and the filename allowlist above
+# (!*.go, !package.json, !README.md, !LICENSE, ...) matches at any depth too —
+# so an exclusion placed earlier in this file loses to both and `npm install`
+# would otherwise stage thousands of vendored files.
+node_modules/
+.gomodcache/

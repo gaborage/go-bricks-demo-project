@@ -108,3 +108,26 @@ func TestRelayServiceRejectsMissingKeyStore(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+// TestRelayServiceSurfacesBuildError pins the seam the v0.57.0 upgrade moved: policy
+// validation now lives inside httpclient's Build, not in a pre-check here. An outbound
+// policy missing its sign kid must therefore fail construction through the Build error
+// path — if that error were ever dropped, this returns a client with an unvalidated
+// policy that only fails on the first live partner call.
+func TestRelayServiceSurfacesBuildError(t *testing.T) {
+	ourPriv, _ := jositest.GenerateTestKeyPair(t)
+	ks := kstest.NewMockKeyStore().
+		WithPublicKey("tokens-our", &ourPriv.PublicKey).
+		WithPrivateKey("tokens-our", ourPriv)
+
+	_, err := NewRelayService(&RelayConfig{
+		PartnerURL: "http://example",
+		KeyStore:   ks,
+		SignKid:    "", // outbound policy requires both sign and encrypt kids
+		EncryptKid: "tokens-peer",
+		VerifyKid:  "tokens-peer",
+		DecryptKid: "tokens-our",
+		Logger:     logger.New("disabled", false),
+	})
+	require.ErrorContains(t, err, "build relay client")
+}
