@@ -720,7 +720,7 @@ if err != nil {
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.58.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.58.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.58.1 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.58.1/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
