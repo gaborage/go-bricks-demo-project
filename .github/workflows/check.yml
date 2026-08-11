@@ -1,0 +1,15 @@
+name: "CHECK"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  packages: read
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: check-code
+    uses: novopayment/devops-scripts-project/.github/workflows/go-check.yml@main
+    secrets: inherit

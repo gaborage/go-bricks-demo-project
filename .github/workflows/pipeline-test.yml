@@ -1,0 +1,40 @@
+name: "PIPELINE TEST"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: read
+  packages: read
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  approval:
+    name: approve-test
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    uses: novopayment/devops-scripts-project/.github/workflows/gnl-approve.yml@main
+    with:
+      environment: 'test'
+    secrets: inherit
+  build:
+    needs: approval
+    name: compile-push
+    uses: novopayment/devops-scripts-project/.github/workflows/go-build.yml@main
+    with:
+      ecr-repo: ${{ github.event.repository.name }}
+      environment: 'test'
+    secrets: inherit
+  deploy:
+    needs: build
+    name: deploy-test
+    uses: novopayment/devops-scripts-project/.github/workflows/go-deploy.yml@main
+    with:
+      environment: 'test'
+      full-image-tag: ${{ needs.build.outputs.image-tag }}
+      enable-swarmia-deploy: true
+    secrets: inherit

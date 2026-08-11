@@ -1,0 +1,38 @@
+name: "PIPELINE PROD"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: read
+on:
+  release:
+    types:
+      - released
+
+jobs:
+  tag-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: novopayment/devops-scripts-project/.github/actions/tag-validation@main
+        with:
+          tag: ${{ github.ref_name }}
+          environment: 'prod'
+  approval:
+    needs: tag-validation
+    name: approve-prod
+    uses: novopayment/devops-scripts-project/.github/workflows/gnl-approve.yml@main
+    with:
+      environment: 'prod'
+      release-tag: ${{ github.ref_name }}
+    secrets: inherit
+  deploy:
+    needs: approval
+    name: deploy-prod
+    uses: novopayment/devops-scripts-project/.github/workflows/go-deploy.yml@main
+    with:
+      environment: 'prod'
+      full-image-tag: ${{ needs.approval.outputs.full-image-tag }}
+      enable-swarmia-deploy: true
+      notify_release: true
+    secrets: inherit

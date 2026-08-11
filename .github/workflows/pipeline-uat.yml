@@ -1,0 +1,46 @@
+name: "PIPELINE UAT"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: read
+on:
+  release:
+    types: 
+      - prereleased
+jobs:
+  tag-validation:
+    runs-on: ubuntu-latest
+    if: github.event.release.prerelease == true
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: novopayment/devops-scripts-project/.github/actions/tag-validation@main
+        with:
+          tag: ${{ github.ref_name }}
+          environment: 'uat'
+  approval:
+    needs: tag-validation
+    name: approve-uat
+    uses: novopayment/devops-scripts-project/.github/workflows/gnl-approve.yml@main
+    with:
+      environment: 'uat'
+      release-tag: ${{ github.ref_name }}
+    secrets: inherit
+  build:
+    needs: approval
+    name: compile-push
+    uses: novopayment/devops-scripts-project/.github/workflows/go-build.yml@main
+    with:
+      ecr-repo: ${{ github.event.repository.name }}
+      environment: 'uat'
+      release-tag: ${{ github.event.release.tag_name }}
+    secrets: inherit
+  deploy:
+    needs: build
+    name: deploy-uat
+    uses: novopayment/devops-scripts-project/.github/workflows/go-deploy.yml@main
+    with:
+      environment: 'uat'
+      full-image-tag: ${{ needs.build.outputs.image-tag }}
+      enable-swarmia-deploy: true
+    secrets: inherit

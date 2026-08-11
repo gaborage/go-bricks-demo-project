@@ -1,0 +1,44 @@
+name: "REDEPLOY"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: read
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy to environment'
+        required: true
+        type: choice
+        options: [test, uat, prod]
+      tag:
+        description: 'Tag to deploy'
+        required: true
+        type: string
+
+jobs:
+  tag-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: novopayment/devops-scripts-project/.github/actions/tag-validation@main
+        with:
+          tag: ${{ inputs.tag }}
+          environment: ${{ inputs.environment }}
+  approval:
+    needs: tag-validation
+    name: approve-redeploy
+    uses: novopayment/devops-scripts-project/.github/workflows/gnl-approve.yml@main
+    with:
+      environment: ${{ inputs.environment }}
+      release-tag: ${{ inputs.tag }}
+    secrets: inherit
+  deploy:
+    needs: approval
+    name: deploy
+    uses: novopayment/devops-scripts-project/.github/workflows/go-deploy.yml@main
+    with:
+      environment: ${{ inputs.environment }}
+      full-image-tag: ${{ needs.approval.outputs.full-image-tag }}
+    secrets: inherit

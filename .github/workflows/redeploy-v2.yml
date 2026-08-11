@@ -1,0 +1,33 @@
+name: "REDEPLOY V2"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: read
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy to environment'
+        required: true
+        type: choice
+        options: [tst, stg, prd]
+      tag:
+        description: 'Tag to deploy'
+        required: true
+        type: string
+      client-name:
+        description: 'Client name for client-specific deployment'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  redeploy:
+    uses: novopayment/devops-scripts-project/.github/workflows/redeploy.yml@main
+    with:
+      environment: ${{ inputs.environment }}
+      tag: ${{ inputs.tag }}
+      client-name: ${{ inputs.client-name }}
+      cluster-name: nvpm-middleware-eks-cluster
+    secrets: inherit

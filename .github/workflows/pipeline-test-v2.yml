@@ -1,0 +1,50 @@
+name: "PIPELINE TEST V2"
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+  actions: write
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      client-name:
+        description: 'Client name.'
+        required: false
+        default: ""
+
+jobs:
+  approval:
+    name: approve-test
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    uses: novopayment/devops-scripts-project/.github/workflows/gnl-approve.yml@main
+    with:
+      environment: 'tst'
+    secrets: inherit
+  build:
+    needs: approval
+    name: compile-push
+    uses: novopayment/devops-scripts-project/.github/workflows/go-build-v2.yml@main
+    with:
+      ecr-repo: ${{ github.event.repository.name }}
+      environment: 'tst'
+      aws-role-arn: ${{ vars.NEW_TST_AWS_ROLE_ARN }}
+    secrets: inherit
+  deploy:
+    needs: build
+    name: deploy-test
+    uses: novopayment/devops-scripts-project/.github/workflows/deploy-v2.yml@main
+    with:
+      environment: 'tst'
+      full-image-tag: ${{ needs.build.outputs.full-image-tag }}
+      enable-swarmia-deploy: true
+      client-name: ${{ inputs.client-name }}
+      enable-tailscale: true
+      cluster-name: nvpm-middleware-eks-cluster
+    secrets: inherit
+    
