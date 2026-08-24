@@ -198,7 +198,7 @@ MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
 # Framework version whose go-bricks-migrate CLI the demo targets.
-GO_BRICKS_REF               ?= v0.58.0
+GO_BRICKS_REF               ?= v0.60.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -223,7 +223,7 @@ migrate-multitenant-check:
 # so a plain `go install ...@<ref>` from the module proxy may fail to compile or
 # silently lack newer features. We therefore build from a CHECKOUT, where the
 # repo's root go.work resolves the in-tree parent at $(GO_BRICKS_REF) — robust
-# across versions (the v0.58.0 CLI was verified to build this way).
+# across versions (the v0.60.0 CLI was verified to build this way).
 # Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
 migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."

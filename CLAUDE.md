@@ -720,7 +720,7 @@ if err != nil {
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.58.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.58.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.60.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.60.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -762,6 +762,23 @@ query, args, err := qb.Delete("products").
 **Filter methods:** `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
 
 **Important:** Always use `ToSQL()` (uppercase) not `ToSql()` for consistent API.
+
+**Identifier validation (go-bricks v0.60.0, ADR-082):** every identifier argument —
+`Select`/`Columns` column lists, `From`/JOIN tables, `OrderBy`/`GroupBy`, and every
+`Filter`/`JoinFilter` column — is validated against a safe identifier grammar. An
+expression, a function call, a constant or an alias is rejected from `ToSQL()`; move
+it to the declared expression hatch `qb.Expr()` / `qb.MustExpr()`:
+
+```go
+qb.Select("COUNT(*)")                        // REJECTED
+qb.Select(qb.MustExpr("COUNT(*)"))           // SAFE
+qb.Select(qb.MustExpr("AVG(price)", "avg"))  // SAFE — expression + alias
+qb.OrderBy("created_date DESC")              // SAFE — bounded direction is in the grammar
+```
+
+`Expr`/`MustExpr` carry SQL verbatim and are NOT escaped — never interpolate user
+input into them. `cols.As(alias)` is the one door that **panics** (at the `As` call,
+with `*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
 
 ### Migrations
 - Place SQL files in [migrations/](migrations/) directory
@@ -997,6 +1014,23 @@ unset DEBUG && make run
 CORS_DEV_WILDCARD=true APP_ENV=development ./bin/go-bricks-demo-project
 # Production: do NOT use the wildcard — set an explicit allowlist via CORS_ORIGINS.
 # curl/k6 and same-origin Grafana are unaffected (no browser CORS enforcement).
+```
+
+### Query Builder Rejects Expressions in `Select` (go-bricks v0.60.0)
+
+```bash
+# Symptom: a query that built fine before now fails at ToSQL() with
+#   invalid select identifier "COUNT(*)": must be a simple or qualified identifier,
+#   or a wildcard ("*", "t.*") — use qb.Expr()/Raw() for expressions and aliases
+# As of go-bricks v0.60.0 (ADR-082), every identifier door is validated against a
+# safe identifier grammar. This bit the products repository's pagination COUNT
+# query (internal/modules/products/repository/repository.go).
+# Fix: wrap the expression in the declared hatch.
+#   qb.Select("COUNT(*)")              ->  qb.Select(qb.MustExpr("COUNT(*)"))
+# Note this is a RUNTIME rejection, not a compile error — `go build` stays green,
+# so exercise the affected endpoint (GET /api/v1/products?page=1&pageSize=2) after
+# upgrading. `OrderBy("created_date DESC")` is unaffected: a bounded ASC/DESC
+# direction is part of the grammar.
 ```
 
 ### Port Conflicts

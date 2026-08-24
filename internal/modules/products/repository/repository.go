@@ -125,7 +125,7 @@ func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*dom
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 
 	// First, get total count
-	countQuery, countArgs, err := qb.Select("COUNT(*)").
+	countQuery, countArgs, err := qb.Select(qb.MustExpr("COUNT(*)")).
 		From("products").
 		ToSQL()
 	if err != nil {
