@@ -11,7 +11,7 @@ require (
 	github.com/gaborage/go-bricks v0.60.0
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo/v5 v5.3.1
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 )
 
 require (
@@ -106,5 +106,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/grpc v1.83.1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
