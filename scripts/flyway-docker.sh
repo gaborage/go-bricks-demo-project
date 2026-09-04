@@ -14,6 +14,7 @@
 #     since config.multitenant.yaml uses `host: localhost` (developer-friendly
 #     and works equally for a local Flyway install) but inside the wrapper
 #     container `localhost` would point at the wrapper itself.
+#   * The `-url=` argv element gets the same host rewrite (see ADR-085 below).
 #   * The host network is auto-detected from the running postgres container
 #     so this works regardless of the compose project name. Override with
 #     FLYWAY_NETWORK if you need to point elsewhere.
@@ -38,12 +39,32 @@ if [[ -z "$NETWORK" ]]; then
     exit 1
 fi
 
+CONTAINER_DB_HOST="${FLYWAY_POSTGRES_HOSTNAME:-postgres}"
+
 EFFECTIVE_DB_HOST="${DB_HOST:-}"
 case "$EFFECTIVE_DB_HOST" in
     localhost|127.0.0.1|::1)
-        EFFECTIVE_DB_HOST="${FLYWAY_POSTGRES_HOSTNAME:-postgres}"
+        EFFECTIVE_DB_HOST="$CONTAINER_DB_HOST"
         ;;
 esac
+
+# Since go-bricks v0.61.0 (ADR-085) the go-bricks-migrate CLI builds the PostgreSQL
+# JDBC URL itself from database.* and passes it as `-url=` on the argv, where it
+# outranks flyway.url in flyway/flyway-multitenant.conf. That URL is built from
+# config.multitenant.yaml's `host: localhost`, which the DB_HOST rewrite above no
+# longer reaches — so rewrite the host inside the URL too. Host only: the port,
+# database and query string (ApplicationName, sslmode, sslrootcert) pass through
+# untouched, as does every other argument.
+for ((_i = $#; _i > 0; _i--)); do
+    arg="$1"
+    shift
+    case "$arg" in
+        -url=jdbc:postgresql://*)
+            arg="$(printf '%s' "$arg" | sed -E "s#^(-url=jdbc:postgresql://)(localhost|127\.0\.0\.1|\[::1\])([:/])#\1${CONTAINER_DB_HOST}\3#")"
+            ;;
+    esac
+    set -- "$@" "$arg"
+done
 
 exec docker run --rm \
     --network="$NETWORK" \

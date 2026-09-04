@@ -24,7 +24,7 @@ Token rules:
 
 ## Project Overview
 
-This is a **go-bricks demo project** demonstrating production-ready patterns for building modular Go applications. It uses the `go-bricks` framework (located at `../go-bricks`) with local replacement via `go.mod`.
+This is a **go-bricks demo project** demonstrating production-ready patterns for building modular Go applications. It uses the `go-bricks` framework, resolved from the module proxy at the version pinned in `go.mod` (see [Framework Dependency](#framework-dependency)) — not a `replace` directive.
 
 **Key characteristics:**
 - Framework-based modular architecture
@@ -193,6 +193,8 @@ products/
 ```bash
 unset DEBUG && make run   # only needed on go-bricks < v0.43.0
 ```
+
+**Not to be confused with `app.debug`** (a different key from the `debug` section above). [config.development.yaml](config.development.yaml) sets `app.debug: true` because go-bricks v0.61.0 (ADR-084) gates response `error.details` on `app.debug` **and** a development environment; without it the demo's validation errors lose their details map.
 
 ### Database Access Pattern
 
@@ -550,15 +552,28 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks location:** `../go-bricks` (local replacement)
+**go-bricks version:** `go.mod` pins a pseudo-version of go-bricks `main`
+(`v0.62.1-0.20260904182202-8bebd2789ce1`, the unreleased v0.63.0). There is no
+`replace` directive — builds and CI resolve the framework from the module proxy
+like any other dependency.
 
-When modifying go-bricks:
+**Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
+file. It stays untracked — `.gitignore` is a deny-all allowlist, so `go.work` is
+ignored without an explicit rule — and it must: committing it would point CI and
+every clean clone at a checkout that does not exist there.
+
 ```bash
+go work init . ../go-bricks   # untracked by .gitignore — never force-add
 cd ../go-bricks
 # Make changes
 cd ../go-bricks-demo-project
-make build  # Automatically picks up local changes
+make build  # picks up local changes while go.work exists
 ```
+
+Delete or rename `go.work` (or build with `GOWORK=off`) to go back to the pinned
+pseudo-version. Promoting a framework change into the demo means bumping that
+pin with `go get github.com/gaborage/go-bricks@<commit-or-tag>`, not adding a
+`replace`.
 
 **go-bricks provides:**
 - `app` - Application bootstrap and module system
@@ -671,6 +686,8 @@ tx.Commit(ctx)
 
 **Config:** See `outbox:` section in [config.development.yaml](config.development.yaml).
 
+**The demo owns the outbox DDL** (`outbox.autocreatetable: false`). go-bricks v0.61.0 (ADR-088) reshaped the ledger — rows gained `seq` and `lane`, plus a companion `gobricks_outbox_leader` table so one replica drains — and framework autocreate only ever CREATEs a missing table, never ALTERs an existing one. `migrations/V3__upgrade_outbox_ledger.sql` carries that shape, so **run `make migrate` before `make run`**, on a fresh volume as well as a retained one.
+
 **Framework modules registered in main.go:**
 - `scheduler.NewModule()` — provides the job scheduler for the outbox relay
 - `outbox.NewModule()` — provides `deps.Outbox` (OutboxPublisher)
@@ -740,7 +757,7 @@ if err != nil {
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.60.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.60.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks llms.txt](https://github.com/gaborage/go-bricks/blob/main/llms.txt) (`main`, unreleased v0.63.0 — the version this demo pins) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -1051,6 +1068,59 @@ CORS_DEV_WILDCARD=true APP_ENV=development ./bin/go-bricks-demo-project
 # so exercise the affected endpoint (GET /api/v1/products?page=1&pageSize=2) after
 # upgrading. `OrderBy("created_date DESC")` is unaffected: a bounded ASC/DESC
 # direction is part of the grammar.
+```
+
+### Outbox TableUnusableError on Retained Volume (go-bricks v0.61.0)
+
+```bash
+# Symptom: startup fails with
+#   outbox: table "gobricks_outbox" is not usable (missing table or insufficient
+#   privileges); run migrations or set outbox.autocreatetable=true: ...
+# on a postgres volume that predates the upgrade.
+# go-bricks v0.61.0 (ADR-088) reshaped the ledger: rows gained `seq` (identity,
+# the drain order) and `lane`, and the relay takes a companion
+# gobricks_outbox_leader row FOR UPDATE NOWAIT so exactly one replica drains.
+# Framework autocreate only ever CREATEs a MISSING table — it never ALTERs an
+# existing one — so flipping autocreatetable back to true does NOT fix this.
+# The demo now owns the outbox DDL (outbox.autocreatetable: false).
+# Fix: apply the migration that reshapes the ledger.
+make migrate   # migrations/V3__upgrade_outbox_ledger.sql
+
+# Alternative (destroys all local data, then re-migrates from scratch):
+make docker-down && make dev
+```
+
+### Validation `error.details` Missing (go-bricks v0.61.0)
+
+```bash
+# Symptom: a 400 from POST /api/v1/products still carries code + message, but the
+# details map (validationErrors) is gone, so you can't see WHICH field failed.
+# As of go-bricks v0.61.0 (ADR-084), response error.details are gated on
+# app.debug: true AND a development environment — the env alone used to be
+# enough. Both gates must pass.
+# Fix: the demo's dev config now sets app.debug (config.development.yaml).
+APP_ENV=development make run   # app.debug: true is already in config.development.yaml
+# Production keeps details off on purpose: they render schema facts that a public
+# error body should not carry.
+```
+
+### Direct AMQP Publish APIs Removed (go-bricks v0.63.0)
+
+```bash
+# Symptom: build fails with "c.Publish undefined" / "PublishToExchange undefined"
+# / "undefined: messaging.PublishOptions", or a test double stops compiling
+# (MockMessagingClient.Publish, MockAMQPClient.PublishToExchange are gone).
+# go-bricks v0.63.0 (ADR-096) made the typed publisher the ONLY module-facing
+# publish door; the raw-bytes methods left the module-facing types with it.
+# Fix: declare a typed publisher and publish values, not bytes.
+#   pub := messaging.DeclareTypedPublisher[ProductEvent](decls, opts)  // DeclareMessaging
+#   pub.Publish(ctx, client, evt)                                      // service/handler
+# Swap the handle in tests behind messaging.EventPublisher[T]
+# (messaging/testing.CapturePublisher[T] satisfies it).
+# Runtime failure mode: a hand-written AMQPClient or an app.Options
+# MessagingClientFactory product carries no byte door, so every publish fails
+# with messaging.ErrPublishDoorUnavailable — publish through a framework-built
+# client instead.
 ```
 
 ### Port Conflicts

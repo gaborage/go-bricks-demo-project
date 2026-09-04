@@ -197,8 +197,12 @@ MULTITENANT_INIT_SQL        := etc/docker/postgres/multitenant-init.sql
 MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
-# Framework version whose go-bricks-migrate CLI the demo targets.
-GO_BRICKS_REF               ?= v0.60.0
+# Framework revision whose go-bricks-migrate CLI the demo targets. Must match the
+# go-bricks pseudo-version in go.mod: the `-url=` argv rewrite in
+# scripts/flyway-docker.sh only fires against an ADR-085 CLI (go-bricks v0.61.0+),
+# so a v0.60.0 pin here silently defeats it. A commit hash is used because that
+# work is not tagged yet — swap to the v0.63.0 tag once it is released.
+GO_BRICKS_REF               ?= 8bebd2789ce1
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -224,6 +228,12 @@ migrate-multitenant-check:
 # silently lack newer features. We therefore build from a CHECKOUT, where the
 # repo's root go.work resolves the in-tree parent at $(GO_BRICKS_REF) — robust
 # across versions (the v0.60.0 CLI was verified to build this way).
+#
+# The clone is deliberately NOT `--depth 1 --branch $(GO_BRICKS_REF)`: `--branch`
+# takes a branch or tag only, and $(GO_BRICKS_REF) is currently a commit hash. We
+# clone the default branch with `--filter=blob:none` (full commit graph, blobs
+# fetched lazily — so any commit OR tag is checkoutable, at roughly shallow-clone
+# cost) and then check the ref out explicitly.
 # Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
 migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."
@@ -234,8 +244,9 @@ migrate-multitenant-install:
 	else \
 		TMP=$$(mktemp -d); \
 		trap 'rm -rf "$$TMP"' EXIT; \
-		echo "  cloning framework $(GO_BRICKS_REF) into $$TMP"; \
-		git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$(GO_BRICKS_REF)" https://github.com/gaborage/go-bricks.git "$$TMP"; \
+		echo "  cloning framework into $$TMP, checking out $(GO_BRICKS_REF)"; \
+		git clone --quiet --filter=blob:none https://github.com/gaborage/go-bricks.git "$$TMP"; \
+		git -c advice.detachedHead=false -C "$$TMP" checkout --quiet "$(GO_BRICKS_REF)"; \
 		go -C "$$TMP/tools/migration" install ./cmd/go-bricks-migrate; \
 	fi
 	@echo "✅ go-bricks-migrate installed (verify with: which go-bricks-migrate)"
