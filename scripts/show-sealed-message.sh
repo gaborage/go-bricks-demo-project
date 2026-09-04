@@ -111,6 +111,27 @@ b64url_decode() {
     printf '%s' "$data" | "${B64_DECODE[@]}"
 }
 
+# --- endpoint guard -------------------------------------------------------
+
+# Every management call below sends RABBIT_USER / RABBIT_PASS. Plaintext HTTP is
+# only defensible when the request cannot leave the host, so http:// is accepted
+# for loopback and https:// is required for anything else. RABBIT_MGMT keeps
+# working as an override — it just has to name one of the two. The authority is
+# matched whole so a `user@real-host` form cannot hide the real host behind
+# loopback-looking userinfo. (This guard must precede the credential curls; it
+# sits here rather than beside the defaults because fail() is defined above.)
+case "$RABBIT_MGMT" in
+    https://*) ;;
+    http://*)
+        RABBIT_MGMT_HOST="${RABBIT_MGMT#http://}"
+        RABBIT_MGMT_HOST="${RABBIT_MGMT_HOST%%/*}"
+        [[ "$RABBIT_MGMT_HOST" =~ ^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ ]] \
+            || fail "RABBIT_MGMT='$RABBIT_MGMT' would send broker credentials in the clear to non-loopback host '$RABBIT_MGMT_HOST' — use https://, or a loopback host (localhost, 127.0.0.1, [::1])"
+        unset RABBIT_MGMT_HOST
+        ;;
+    *) fail "RABBIT_MGMT='$RABBIT_MGMT' must start with https://, or http:// for a loopback host (localhost, 127.0.0.1, [::1])" ;;
+esac
+
 # --- credentials ----------------------------------------------------------
 
 # Broker credentials never reach argv: `curl -u user:pass` is readable by every
@@ -243,7 +264,8 @@ KID="$(jq -r '.kid // empty' <<<"$HEADER_JSON")"
 ETYP="$(jq -r '.etyp // empty' <<<"$HEADER_JSON")"
 
 [[ "$TYP" == "$EXPECTED_TYP" ]] || fail "typ is '$TYP', expected '$EXPECTED_TYP'"
-[[ "$ALG" == "PS256" || "$ALG" == "RS256" ]] || fail "alg '$ALG' is outside the sealed allowlist {PS256, RS256}"
+[[ "$ALG" == "PS256" ]] \
+    || fail "alg is '$ALG', expected PS256 — this demo's producer signs with PS256 only, so anything else on this wire is a foreign producer"
 [[ "$KID" =~ ^${SIGN_FAMILY}-v[0-9]+$ ]] \
     || fail "kid '$KID' is not a generation of the '$SIGN_FAMILY' family"
 
@@ -284,14 +306,22 @@ jq . <<<"$JWE_HEADER_JSON"
 
 JWE_KID="$(jq -r '.kid // empty' <<<"$JWE_HEADER_JSON")"
 JWE_ISS="$(jq -r '.iss // empty' <<<"$JWE_HEADER_JSON")"
+JWE_ALG="$(jq -r '.alg // empty' <<<"$JWE_HEADER_JSON")"
+JWE_ENC="$(jq -r '.enc // empty' <<<"$JWE_HEADER_JSON")"
 [[ "$JWE_KID" =~ ^${ENCRYPT_FAMILY}-v[0-9]+$ ]] \
     || fail "inner kid '$JWE_KID' is not a generation of the '$ENCRYPT_FAMILY' family"
 [[ "$JWE_ISS" == "$KID" ]] \
     || fail "inner iss '$JWE_ISS' != outer kid '$KID' — the authorship binding is broken"
+[[ "$JWE_ALG" == "RSA-OAEP-256" ]] \
+    || fail "inner alg is '$JWE_ALG', expected RSA-OAEP-256 — the content key was wrapped by something other than this demo's sealer"
+[[ "$JWE_ENC" == "A256GCM" ]] \
+    || fail "inner enc is '$JWE_ENC', expected A256GCM — the Subject was encrypted with an unexpected content cipher"
 
 echo
 echo "  kid = $JWE_KID   ← audience encrypt generation"
 echo "  iss = $JWE_ISS      ← equals the outer kid: the binding that kills strip-and-re-sign"
+echo "  alg = $JWE_ALG           ← how the content key is wrapped to that audience"
+echo "  enc = $JWE_ENC                ← AEAD over the card itself"
 
 # --- 4. the assertion that matters ---------------------------------------
 
@@ -315,8 +345,9 @@ echo "currency, event type, the producing key family — and the Subject's size 
 echo "That is the ADR-097 trade: routable + triageable, never readable."
 echo
 echo "Next:"
-echo "  * consumer side: the app log line for the 'payments.authorized' delivery"
-echo "    shows the plaintext card only after the open, deduped through the inbox."
+echo "  * consumer side: after the open the handler holds the card in memory only —"
+echo "    the app log line for the 'payments.authorized' delivery carries cardLast4,"
+echo "    never the plaintext card, and the delivery is deduped through the inbox."
 echo "  * rotation: provision payments-sign-v2, then pin it with the commented-out"
 echo "    'messaging.seal.active' selector in config.development.yaml, and re-run"
 echo "    this script — the kid above moves, the seal tag never changes."

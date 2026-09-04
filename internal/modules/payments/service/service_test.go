@@ -81,7 +81,9 @@ func TestAuthorizeRejectsInvalidRequests(t *testing.T) {
 		"zero amount":     func(r *AuthorizeRequest) { r.Amount = 0 },
 		"negative amount": func(r *AuthorizeRequest) { r.Amount = -1 },
 		"short currency":  func(r *AuthorizeRequest) { r.Currency = "US" },
-		"non-numeric PAN": func(r *AuthorizeRequest) { r.Card.PAN = "4111-1111-1111-1111" },
+		// Three bytes, so a length-only check would let this through.
+		"non-alpha currency": func(r *AuthorizeRequest) { r.Currency = "U$D" },
+		"non-numeric PAN":    func(r *AuthorizeRequest) { r.Card.PAN = "4111-1111-1111-1111" },
 		// Both of these are 13-19 characters, so only the digits-only `number`
 		// tag rejects them — `numeric` would let them through.
 		"signed PAN":         func(r *AuthorizeRequest) { r.Card.PAN = "-41111111111111" },
