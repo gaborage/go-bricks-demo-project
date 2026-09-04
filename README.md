@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/gaborage/go-bricks-demo-project/actions/workflows/ci.yml/badge.svg)](https://github.com/gaborage/go-bricks-demo-project/actions/workflows/ci.yml)
 
-Production-ready demonstration of the [go-bricks framework](../go-bricks) showcasing modular architecture, REST APIs, observability, and performance testing.
+Production-ready demonstration of the [go-bricks framework](https://github.com/gaborage/go-bricks) showcasing modular architecture, REST APIs, observability, and performance testing.
 
 ## Features
 
@@ -315,4 +315,4 @@ This project is fully open source and free to use, modify, and distribute.
 
 ---
 
-**Built with [go-bricks](../go-bricks)** - Production-ready modular framework for Go.
+**Built with [go-bricks](https://github.com/gaborage/go-bricks)** - Production-ready modular framework for Go.

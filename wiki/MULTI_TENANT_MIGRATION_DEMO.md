@@ -32,11 +32,20 @@ patterns coexist in this repo.
 This is the most surprising piece of the design, so it gets called out
 first.
 
-The framework's `migration/flyway.go` only propagates **five** environment
+The framework's `migration/flyway.go` propagates exactly **five** environment
 variables to the Flyway subprocess: `DB_HOST`, `DB_PORT`, `DB_USER`,
-`DB_PASSWORD`, `DB_NAME`. The `database.postgresql.schema` field exists in
-the config struct but is **not** exported to Flyway, so you can't drive
-schema-per-tenant by setting it in the fleet YAML.
+`DB_PASSWORD`, `DB_NAME`. Since go-bricks v0.61.0 (ADR-085) that is no longer
+the whole story: `migration/flyway_url.go` (`urlArgs`) also builds the
+PostgreSQL JDBC URL from the tenant's `database.*` block and passes it as a
+`-url=` **argv** element, which Flyway ranks above any config file — so a
+`flyway.url` in the conf is silently ignored on this path. `scripts/flyway-docker.sh`
+rewrites the host inside that `-url=` to the postgres container hostname, so the
+`host: localhost` in `config.multitenant.yaml` still resolves from inside the
+Flyway container (it already did the same rewrite for `DB_HOST`).
+
+Neither channel carries a schema. The `database.postgresql.schema` field exists
+in the config struct but is exported neither as an env var nor into the URL, so
+you can't drive schema-per-tenant by setting it in the fleet YAML.
 
 Workaround used in this demo: **per-tenant Postgres roles with a role-level
 `search_path`**.

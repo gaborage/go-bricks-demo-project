@@ -12,15 +12,24 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// The request structs below carry `validate:` tags, NOT `binding:`. go-bricks
+// never reads a `binding:` tag — server.Validator wraps a bare
+// go-playground/validator instance (internal/validation.New), whose default tag
+// name is `validate`. A rule written as `binding:"required"` is therefore inert:
+// the field reaches the handler unvalidated and only the service layer's own
+// checks fire. With `validate:` the framework rejects the request before the
+// handler runs and answers with its structured VALIDATION_ERROR envelope
+// (details.validationErrors, ADR-084).
+
 type CreateProductRequest struct {
-	Name        string  `json:"name" binding:"required"`
+	Name        string  `json:"name" validate:"required"`
 	Description string  `json:"description"`
-	Price       float64 `json:"price" binding:"required"`
+	Price       float64 `json:"price" validate:"gte=0"`
 	ImageURL    string  `json:"imageURL"`
 }
 
 type UpdateProductRequest struct {
-	ID          string   `param:"id" binding:"required"`
+	ID          string   `param:"id" validate:"required"`
 	Name        *string  `json:"name"`
 	Description *string  `json:"description"`
 	Price       *float64 `json:"price"`
@@ -28,16 +37,16 @@ type UpdateProductRequest struct {
 }
 
 type GetProductRequest struct {
-	ID string `param:"id"  binding:"required"`
+	ID string `param:"id"  validate:"required"`
 }
 
 type ListProductsRequest struct {
-	Page     int `query:"page" binding:"required"`
-	PageSize int `query:"pageSize" binding:"required"`
+	Page     int `query:"page" validate:"required"`
+	PageSize int `query:"pageSize" validate:"required"`
 }
 
 type DeleteProductRequest struct {
-	ID string `param:"id" binding:"required"`
+	ID string `param:"id" validate:"required"`
 }
 
 type ProductResponse struct {
