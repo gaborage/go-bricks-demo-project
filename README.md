@@ -101,6 +101,38 @@ file-backed (production pattern for Kubernetes secret mounts), and
 `tokens-peer` mixes file-backed private with inline base64 public (the
 `value:` style typical of secret-manager projection).
 
+### Payments (Sealed AMQP Messages Example)
+A `seal:`-tagged event type: the framework encrypts the one declared Subject
+(the card) and signs the whole document on publish, then verifies and decrypts
+on consume — no crypto at any call site. The module is both producer and
+consumer, so the demo is self-contained.
+
+- `POST /api/v1/payments/authorize` — publishes a sealed `payment.authorized`
+  event and answers `202 Accepted`. The response carries `cardLast4` only; the
+  PAN never comes back out of the API and never appears in the clear on the
+  broker.
+
+#### Walkthrough
+
+```bash
+# 1. Keypairs, migrations (V4 creates the inbox ledger), and the app.
+make generate-keys
+make migrate
+make run
+
+# 2. Authorize a payment.
+#    DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
+curl -s -X POST http://localhost:8080/api/v1/payments/authorize \
+     -H 'Content-Type: application/json' \
+     -d '{"amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}'
+# {"data":{"orderId":"...","status":"authorized","amount":4599,"currency":"USD","cardLast4":"1111"},"meta":{...}}
+
+# 3. Read the published message off the broker and see what an operator with
+#    full queue access actually gets: a compact JWS whose `card` member is a
+#    JWE, with the PAN nowhere on the wire.
+make show-sealed-message
+```
+
 ### System
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
@@ -176,6 +208,8 @@ make dev            # docker-up + migrate
 make build          # Build binary
 make run            # Build + run
 make check          # fmt + lint + test (pre-commit)
+
+make show-sealed-message   # Publish a sealed payment, dump the raw broker body
 ```
 
 ### Adding a Module
@@ -298,6 +332,7 @@ go-bricks-demo-project/
 │   ├── legacy/                  # Legacy module (WithRawResponse example)
 │   ├── webhooks/                # Webhooks module (KeyStore signing example)
 │   ├── tokens/                  # Tokens module (JOSE middleware: nested JWE-of-JWS + outbound relay)
+│   ├── payments/                # Payments module (sealed AMQP messages: signed document, encrypted Subject)
 │   └── shared/secrets/          # Multi-tenant AWS integration
 ├── migrations/                  # Flyway migrations (default database)
 ├── migrations-analytics/        # Flyway migrations (analytics database)

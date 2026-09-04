@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api show-sealed-message generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -39,7 +39,7 @@ help:
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate RSA keypairs (webhook-signing, tokens-our, tokens-peer); patches tokens-peer public into config.development.yaml"
+	@echo "  generate-keys     Generate RSA keypairs (webhook-signing, tokens-our, tokens-peer, payments-sign-v1, payments-encrypt-v1); patches tokens-peer public into config.development.yaml"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -47,6 +47,7 @@ help:
 	@echo ""
 	@echo "API Testing:"
 	@echo "  test-products-api Test products API endpoints"
+	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
 	@echo ""
 	@echo "Load Testing:"
 	@echo "  loadtest-install          Install k6 load testing tool"
@@ -314,6 +315,14 @@ test-products-api:
 	@echo "🧪 Testing products API..."
 	@./scripts/test-products-api.sh
 
+# Broker-visibility proof for the sealed-messages demo: publish one
+# PaymentAuthorized event, then read it off the consumerless tap queue via the
+# RabbitMQ management API and assert the PAN never reaches the wire.
+# Requires the app running (make run) and infra up (make docker-up).
+show-sealed-message:
+	@echo "🔐 Inspecting a sealed message on the broker..."
+	@./scripts/show-sealed-message.sh
+
 # Update dependencies to latest versions
 update:
 	@echo "📦 Updating dependencies..."
@@ -322,10 +331,19 @@ update:
 	@echo "✅ Dependencies updated"
 
 # Generate RSA key pairs for the KeyStore-backed demos:
-#   - webhook-signing : webhooks module (file/file)
-#   - tokens-our      : tokens module, our half  (file/file)
-#   - tokens-peer     : tokens module, peer half (value/file — public is inlined
-#                       into config.development.yaml between BEGIN/END markers)
+#   - webhook-signing     : webhooks module (file/file)
+#   - tokens-our          : tokens module, our half  (file/file)
+#   - tokens-peer         : tokens module, peer half (value/file — public is inlined
+#                           into config.development.yaml between BEGIN/END markers)
+#   - payments-sign-v1    : payments module, sealed-event SIGN family generation v1
+#   - payments-encrypt-v1 : payments module, sealed-event ENCRYPT family generation v1
+#
+# The two payments-* entries are sealing GENERATIONS (go-bricks v0.63.0, ADR-097):
+# the "-v<N>" suffix is what gives the entry family semantics, so the seal tag names
+# only the logical kid ("payments-sign") and rotation adds a -v2 entry rather than
+# rewriting code. Both halves are generated for each family because this demo is
+# producer AND consumer in one process (producer needs sign-private + encrypt-public,
+# consumer needs sign-public + encrypt-private). A real deployment splits them.
 generate-keys:
 	@echo "🔑 Generating RSA key pairs..."
 	@mkdir -p certs
@@ -335,6 +353,10 @@ generate-keys:
 	@openssl rsa -in certs/tokens_our_private.der -inform DER -pubout -outform DER -out certs/tokens_our_public.der 2>/dev/null
 	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_peer_private.der 2>/dev/null
 	@openssl rsa -in certs/tokens_peer_private.der -inform DER -pubout -outform DER -out certs/tokens_peer_public.der 2>/dev/null
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/payments_sign_v1_private.der 2>/dev/null
+	@openssl rsa -in certs/payments_sign_v1_private.der -inform DER -pubout -outform DER -out certs/payments_sign_v1_public.der 2>/dev/null
+	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/payments_encrypt_v1_private.der 2>/dev/null
+	@openssl rsa -in certs/payments_encrypt_v1_private.der -inform DER -pubout -outform DER -out certs/payments_encrypt_v1_public.der 2>/dev/null
 	@echo "🔁 Patching tokens-peer public key (base64) into config.development.yaml..."
 	@grep -q 'BEGIN_TOKENS_PEER_PUB' config.development.yaml || { \
 		echo "❌ config.development.yaml is missing the 'BEGIN_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
@@ -352,10 +374,12 @@ generate-keys:
 			{print}' config.development.yaml > config.development.yaml.tmp \
 		&& mv config.development.yaml.tmp config.development.yaml
 	@echo "✅ Keys generated in certs/ and base64 patched into config.development.yaml"
-	@echo "   webhook-signing : certs/webhook_signing_{public,private}.der"
-	@echo "   tokens-our      : certs/tokens_our_{public,private}.der"
-	@echo "   tokens-peer     : certs/tokens_peer_private.der (private)"
-	@echo "                   : config.development.yaml between BEGIN_/END_TOKENS_PEER_PUB markers (public)"
+	@echo "   webhook-signing     : certs/webhook_signing_{public,private}.der"
+	@echo "   tokens-our          : certs/tokens_our_{public,private}.der"
+	@echo "   tokens-peer         : certs/tokens_peer_private.der (private)"
+	@echo "                       : config.development.yaml between BEGIN_/END_TOKENS_PEER_PUB markers (public)"
+	@echo "   payments-sign-v1    : certs/payments_sign_v1_{public,private}.der"
+	@echo "   payments-encrypt-v1 : certs/payments_encrypt_v1_{public,private}.der"
 
 # Development environment setup
 dev: docker-up migrate-all generate-keys

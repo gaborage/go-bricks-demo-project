@@ -30,7 +30,7 @@ const maxClaimAge = 5 * time.Minute
 // handler is invoked — the handler sees a plain Go struct.
 type TokenizeRequest struct {
 	_   struct{} `jose:"decrypt=tokens-our,verify=tokens-peer"`
-	PAN string   `json:"pan" validate:"required,numeric,min=13,max=19"`
+	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
 // TokenizeResponse is the JOSE-protected response. Outbound = sign with our private
@@ -50,7 +50,7 @@ type TokenizeResponse struct {
 // sides of the keystore.
 type PeerSimRequest struct {
 	_   struct{} `jose:"decrypt=tokens-peer,verify=tokens-our"`
-	PAN string   `json:"pan" validate:"required,numeric,min=13,max=19"`
+	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
 // PeerSimResponse is the simulator's outbound seal — peer signs, peer encrypts to us.

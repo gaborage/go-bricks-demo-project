@@ -38,6 +38,25 @@ messaging:
   broker:
     url: "amqp://localhost:5672/"
 
+  # Sealed messages — payments module (go-bricks v0.63.0, ADR-097).
+  # A `seal:`-tagged event type encrypts its one declared Subject and signs the
+  # whole document. Key material lives in keystore.keys below (generations
+  # payments-sign-v1 / payments-encrypt-v1); this block only SELECTS which
+  # provisioned generation seals NEW traffic — it never widens what can be
+  # opened, since every message names the generation that sealed it.
+  #
+  # Deliberately absent here: a family with exactly one provisioned generation
+  # auto-activates. Provision a second and startup refuses to guess — that is
+  # when the selector below stops being optional.
+  #
+  # Rotation (framework wiki/sealing.md, "Rotation runbooks"): provision v2
+  # everywhere FIRST, then flip the selector and redeploy. Both at once strands
+  # in-flight and outbox-replayed v1 traffic in the DLQ as
+  # SEAL_KID_UNKNOWN_GENERATION.
+  # seal:
+  #   active:
+  #     payments-sign: "v2"
+
 # --- Application ------------------------------------------------------------
 # Rate limiting: framework defaults are app.rate.limit=100 / burst=200 per IP.
 # The bundled k6 load tests (50+ VUs) blow through that limit and surface as
@@ -157,6 +176,40 @@ outbox:
   # reconnect connection timeout.
   publishtimeout: 60s
 
+# --- Inbox (consumer-side idempotency) --------------------------------------
+# The durable complement to the outbox above: the inbox records processed event
+# ids in a ledger and commits that row in the SAME transaction as the business
+# write, so a redelivery is skipped instead of reprocessed.
+#
+# The sealed payments consumer REQUIRES it. A seal-tagged consumer dedups on the
+# sealed envelope's "<sign family>:<jti>" key (messaging.Metadata.DedupKey), and
+# the payments module refuses to Init when deps.Inbox is nil — so inbox.NewModule()
+# must be registered in cmd/api/main.go before the payments module.
+#
+# Same koanf key rule as the outbox block above: keys are flat-smushed
+# (`tablename`, `autocreatetable`, `retentionperiod`). An underscored key
+# silently STOPS binding and falls back to its zero value with no error.
+inbox:
+  enabled: true
+  # Framework default name, spelled out so the DDL and the config visibly agree.
+  tablename: gobricks_inbox
+  # The demo owns the inbox DDL (migrations/V4__create_inbox_ledger.sql), exactly
+  # like the outbox above — run `make migrate` before `make run`. Framework
+  # autocreate only ever CREATEs a missing table, it never ALTERs an existing
+  # one, so managed migrations are the honest production pattern to showcase.
+  autocreatetable: false
+  # RETENTION IS THE REPLAY WINDOW. A message redelivered after its ledger row
+  # was swept is processed AGAIN, so this MUST exceed the broker's maximum
+  # redelivery window. It also bounds every DLQ drain, every outbox re-drive,
+  # and the drain gate of a sealed-key rotation (wiki/sealing.md). 168h (7d) is
+  # the framework default, pinned explicitly so the window is visible rather
+  # than implied. Written as hours because Go durations have no "d" unit.
+  retentionperiod: 168h
+  # Where the ledger lives under multi-tenancy. "per-tenant" is the framework
+  # default; in this single-tenant demo (multitenant.enabled is false) both
+  # values behave identically — named here for the reader, not for effect.
+  tenancy: per-tenant
+
 # --- Scheduler --------------------------------------------------------------
 # The scheduler drives the outbox relay job above. go-bricks v0.39.0
 # (go-bricks#527) added scheduler.timezone — the IANA name used to interpret
@@ -199,7 +252,41 @@ keystore:
     tokens-peer:
       public:
         # BEGIN_TOKENS_PEER_PUB — managed by `make generate-keys`, do not edit by hand.
-        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2FtEGnB6qA9O0z/6CgU+mgNGLNoy40swlf4pjgu2ruGXEgcLex0AbvRjttRQIykko8SydN7PTcymeNGhRLBW9xocpbO+JY+BsAvV5EBCCrY8tXmES7JBb7VnRadnYq+FFfQ+Cwn8VtChVxSweBcq3PHbkw04SSHvtO5gekPiWhpbVLA3l26BdKU1SMtWhGnzOPYAAamUcr12YxPQS1/9QAT6Xb5dOYU5ADlqi3rYbFZqQyhJ2mBXC9HfUIfbgQ1MTP0vEyHKzkYI2hVEvJZaRYF9koG8q3cRshXP7wh3frVdWTCmJ/8OFDVkxbLdH58fnRpu6Yu0PAghXx3QU4f2gQIDAQAB"
+        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzBJwU1fpl0EuievbI9UwdSE5s+ynSVQPaOGyCXNEbdZwlwyol3CnFdn9XGe8OcSnkD4A3pXX8Ue5a4+FNVWfdjC1FpWwoff0AS6BkepGknx7T0NIGJ2Ev/iNEm/O2+CNqp/zaoaFrtSZL0dKydok5yautay/gRG+aK7bOitj7bBpx8HhyYw0zbrWtLA+/xFfUWoIGZ2aUIPulwT7bqjK41Q8iFfE7PKBOpK6cd6nwvl6ImP0EQjCW43NMyYFcPsteSOaCZuUyBiH7STptB434NXWvI7+PlJmFSP88aJKYXsQG9/cV8c2aYDkAuxCqULje13vyVD7WEao7FrA9E7kfwIDAQAB"
         # END_TOKENS_PEER_PUB
       private:
         file: "certs/tokens_peer_private.der"
+
+    # --- Sealed messages: payments module (go-bricks v0.63.0, ADR-097) --------
+    # These two are sealing GENERATION entries, not plain named keys. The
+    # "-v<N>" name suffix is what gives an entry family semantics: the event
+    # struct names only the LOGICAL kids —
+    #     _ struct{} `seal:"sign=payments-sign,encrypt=payments-encrypt"`
+    # — and the keystore resolves each family to its provisioned generations.
+    # Rotation therefore never touches Go code: it adds payments-sign-v2 next to
+    # v1 and flips messaging.seal.active (see the commented selector in the
+    # messaging section above). Each family here has exactly ONE generation, so
+    # that single generation auto-activates and no selector is needed.
+    #
+    # Both halves are provisioned for both families because this demo publishes
+    # AND consumes in one process: the producer signs with payments-sign-v1
+    # PRIVATE and encrypts to payments-encrypt-v1 PUBLIC, while the consumer
+    # verifies with payments-sign-v1 PUBLIC and decrypts with
+    # payments-encrypt-v1 PRIVATE. Split across two services, each side holds
+    # only its own two halves — the roles invert, which is why the two families
+    # rotate in opposite order. Deep dive: go-bricks wiki/sealing.md.
+    #
+    # Never reuse an entry name between the HTTP jose keys above and these: the
+    # framework records which role tag resolved an entry and WARNs at startup
+    # when one entry serves both.
+    payments-sign-v1:
+      public:
+        file: "certs/payments_sign_v1_public.der"
+      private:
+        file: "certs/payments_sign_v1_private.der"
+
+    payments-encrypt-v1:
+      public:
+        file: "certs/payments_encrypt_v1_public.der"
+      private:
+        file: "certs/payments_encrypt_v1_private.der"

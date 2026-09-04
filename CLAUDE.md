@@ -612,6 +612,9 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/tokens/relay` - Plaintext entry that drives the outbound `JOSETransport` against the peer simulator
 - `POST /api/v1/__sim/peer/tokens` - In-process peer simulator (inverse JOSE policy; demo-only)
 
+**Payments module** (sealed AMQP messages demo):
+- `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -758,6 +761,31 @@ if err != nil {
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
 **Reference:** [go-bricks llms.txt](https://github.com/gaborage/go-bricks/blob/main/llms.txt) (`main`, unreleased v0.63.0 — the version this demo pins) JOSE section for the full API surface, error-code table, and security invariants.
+
+### Sealed Messages (JWE-of-JWS on AMQP)
+
+The payments module ([internal/modules/payments/](internal/modules/payments/)) demonstrates **payload sealing**: one declared Subject field crosses the broker encrypted while its siblings stay readable for routing and DLQ triage, and the producer signs the whole document. The typed publish and consume doors engage sealing from the tags alone — no call site touches go-jose.
+
+```go
+// The import gate `_ "github.com/gaborage/go-bricks/messaging/sealed"` registers
+// the codec; without it a seal-tagged declaration fails Validate at startup with
+// messaging.ErrSealingNotLinked.
+type PaymentAuthorized struct {
+    _        struct{}    `seal:"sign=payments-sign,encrypt=payments-encrypt"`
+    OrderID  string      `json:"orderId" validate:"required"`
+    Amount   int64       `json:"amount" validate:"required,gt=0"` // minor units
+    Currency string      `json:"currency" validate:"required,len=3,alpha"`
+    Card     CardDetails `json:"card" seal:"subject"` // "card" is the signed sp entry
+}
+```
+
+Ordering is the security decision: **encrypt the Subject first, then sign the whole result** — signing a plaintext PAN would be a confirmation oracle, so the signature always covers ciphertext. `delivery.Body` is one compact JWS whose payload is the business JSON with the `card` member replaced in place by a compact JWE, and `typ: vnd.gobricks.sealed.v1+json` is the only sealed marker (there is no `x-sealed` AMQP header). The tag names **Logical kids**, never key generations: the keystore holds `payments-sign-v1` and `payments-encrypt-v1`, and with a single generation provisioned the producer auto-activates it — so this demo ships no `messaging.seal.active` selector, only a commented-out one in [config.development.yaml](config.development.yaml) for the rotation story (rotation flips the selector; the tag never changes). Lane rules: sealing rides the classic typed lane only — `DeclareTypedPublisher[T]` plus `DeclareTypedConsumerWithMeta` (the meta-less consume door refuses a seal-tagged `T`, since `Meta.DedupKey()` is what the inbox dedups on), while streams typed declarations refuse a seal-tagged `T` and `outbox.Publish` refuses a seal-tagged struct payload with `outbox.ErrSealedPayloadNeedsBytes` (that lane takes `publisher.Seal(ctx, evt)` bytes instead).
+
+**Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
+
+**Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
+
+**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/main/wiki/sealing.md) and [ADR-097](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -958,10 +986,17 @@ Explore the code in this order:
    - In-process peer simulator with the inverse policy makes the demo self-contained
    - [cmd/seal-payload/](cmd/seal-payload/) is the developer tool that produces compact JWE-of-JWS bodies for `curl`
 
-9. **[config.development.yaml](config.development.yaml)** - Configuration
-   - Outbox configuration (poll interval, batch size, retention)
-   - KeyStore configuration (DER file paths for RSA keys)
-   - See `make generate-keys` for key generation
+9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
+   - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
+   - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the DLQ queue and the consumerless `payments.authorized.tap` queue
+   - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
+   - `make show-sealed-message` proves the PAN never reaches the broker
+
+10. **[config.development.yaml](config.development.yaml)** - Configuration
+    - Outbox configuration (poll interval, batch size, retention)
+    - KeyStore configuration (DER file paths for RSA keys, including the sealing generations)
+    - The commented-out `messaging.seal.active` selector (rotation story)
+    - See `make generate-keys` for key generation
 
 ### Runtime Tour (15-20 minutes)
 
