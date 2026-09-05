@@ -4,10 +4,12 @@ package main
 import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks"
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/inbox"
 	"github.com/gaborage/go-bricks/keystore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/outbox"
@@ -40,7 +42,7 @@ type ModuleConfig struct {
 
 func getModulesToLoad() []ModuleConfig {
 	return []ModuleConfig{
-		// --- Framework modules (order matters: scheduler → outbox → keystore) ---
+		// --- Framework modules (order matters: scheduler → outbox → inbox → keystore) ---
 		{
 			// Scheduler provides cron/fixed-rate job execution.
 			// Must be registered before outbox (the relay runs as a scheduled job).
@@ -56,8 +58,17 @@ func getModulesToLoad() []ModuleConfig {
 			Module:  outbox.NewModule(),
 		},
 		{
+			// Inbox provides consumer-side exactly-once processing: ProcessOnce
+			// commits the handler's writes and the dedup row in one transaction.
+			// Must be registered before any module that consumes with it (payments).
+			Name:    "inbox",
+			Enabled: true,
+			Module:  inbox.NewModule(),
+		},
+		{
 			// KeyStore loads named RSA key pairs from DER files at startup.
-			// Used by the webhooks module for payload signing/verification.
+			// Used by the webhooks module for payload signing/verification, the
+			// tokens module's JOSE routes, and the payments module's sealed events.
 			Name:    "keystore",
 			Enabled: true,
 			Module:  keystore.NewModule(),
@@ -96,6 +107,16 @@ func getModulesToLoad() []ModuleConfig {
 			Name:    "tokens",
 			Enabled: true,
 			Module:  tokens.NewModule(),
+		},
+		{
+			// Payments module demonstrates sealed AMQP messages (ADR-097): the
+			// event's seal tags encrypt the card Subject and sign the document,
+			// and the consumer dedups on the verified envelope's jti.
+			// Requires the keystore module (key material) and the inbox module
+			// (exactly-once ledger) above.
+			Name:    "payments",
+			Enabled: true,
+			Module:  payments.NewModule(),
 		},
 	}
 }
