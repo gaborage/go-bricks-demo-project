@@ -304,7 +304,7 @@ keystore:
     tokens-peer:
       public:
         # BEGIN_TOKENS_PEER_PUB — managed by `make generate-keys`, do not edit by hand.
-        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzBJwU1fpl0EuievbI9UwdSE5s+ynSVQPaOGyCXNEbdZwlwyol3CnFdn9XGe8OcSnkD4A3pXX8Ue5a4+FNVWfdjC1FpWwoff0AS6BkepGknx7T0NIGJ2Ev/iNEm/O2+CNqp/zaoaFrtSZL0dKydok5yautay/gRG+aK7bOitj7bBpx8HhyYw0zbrWtLA+/xFfUWoIGZ2aUIPulwT7bqjK41Q8iFfE7PKBOpK6cd6nwvl6ImP0EQjCW43NMyYFcPsteSOaCZuUyBiH7STptB434NXWvI7+PlJmFSP88aJKYXsQG9/cV8c2aYDkAuxCqULje13vyVD7WEao7FrA9E7kfwIDAQAB"
+        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvZH5xiLOQPsA0tne8WoW/IOl5THDii1he9dGtK9bvSr0wDv3VAp07CZPBCyK+DiTd78JrcV/fwkknTpFq4qanOni/8InlcfUtITmzb+7+XtrvUMmsp8/KOt8+o+2rrkPLLPTnnsgXnKyqlNiUXKhX1r/nclwsMnreqvtFD3QA9IXIW/b6NSs1jCc0F1EKhq7Dlud0sXXz9Mljir/kBkwXa7KEZyYG+npiibUdkoVURv+EKq7OYNHTHuxfGdafjJs6er1oMdQdNyf8Ay7D4y/HZoOYG6bzhEYdNA1JlKaXH++membtG1aOgOnSmc2OBmcD3j2QhTgP2eCkaVj/c4ifQIDAQAB"
         # END_TOKENS_PEER_PUB
       private:
         file: "certs/tokens_peer_private.der"
