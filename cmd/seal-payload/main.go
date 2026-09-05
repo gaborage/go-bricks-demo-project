@@ -80,10 +80,12 @@ func run() error {
 		return fmt.Errorf("load --peer-priv: %w", err)
 	}
 
-	resolver := &literalResolver{
-		publics:  map[string]*rsa.PublicKey{ourKid: ourPub},
-		privates: map[string]*rsa.PrivateKey{peerKid: peerPriv},
-	}
+	resolver := jose.NewKeyStoreResolver(&producerKeys{
+		signKid:    peerKid,
+		signPriv:   peerPriv,
+		encryptKid: ourKid,
+		encPub:     ourPub,
+	})
 
 	policy := &jose.Policy{
 		Direction:  jose.DirectionOutbound,
@@ -112,27 +114,41 @@ func run() error {
 	return nil
 }
 
-// literalResolver is a tiny in-memory KeyResolver that returns wrapped jose.Errors
-// when a kid is missing — matching the contract of jose.KeyStoreResolver.
-type literalResolver struct {
-	publics  map[string]*rsa.PublicKey
-	privates map[string]*rsa.PrivateKey
+// producerKeys holds the two keys this CLI needs to play the peer: the peer's
+// PRIVATE signing key and our PUBLIC encryption key.
+//
+// Its method set is exactly jose.KeyStoreLike — two lookups returning plain
+// errors — which is the narrow seam an app.KeyStore also satisfies. Wrapping it
+// in jose.NewKeyStoreResolver (see run) is what supplies the jose.KeyResolver
+// contract: the wrapper translates a plain "not registered" error into a
+// *jose.Error carrying the ErrKidUnknown sentinel, so a kid typo here fails the
+// same way, with the same JOSE_KID_UNKNOWN code, as it would in the server.
+// Implementing jose.KeyResolver directly would have skipped that translation.
+type producerKeys struct {
+	signKid    string
+	signPriv   *rsa.PrivateKey
+	encryptKid string
+	encPub     *rsa.PublicKey
 }
 
-func (r *literalResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
-	pk, ok := r.publics[kid]
-	if !ok {
-		return nil, fmt.Errorf("public key %q not loaded", kid)
+// Compile-time proof that the CLI feeds the resolver the same interface the
+// framework's keystore module does.
+var _ jose.KeyStoreLike = (*producerKeys)(nil)
+
+// PrivateKey returns the signing key for signKid; every other kid is unknown.
+func (k *producerKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	if kid == k.signKid {
+		return k.signPriv, nil
 	}
-	return pk, nil
+	return nil, fmt.Errorf("no private key registered for kid %q", kid)
 }
 
-func (r *literalResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
-	pk, ok := r.privates[kid]
-	if !ok {
-		return nil, fmt.Errorf("private key %q not loaded", kid)
+// PublicKey returns the encryption key for encryptKid; every other kid is unknown.
+func (k *producerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
+	if kid == k.encryptKid {
+		return k.encPub, nil
 	}
-	return pk, nil
+	return nil, fmt.Errorf("no public key registered for kid %q", kid)
 }
 
 func loadPublicKey(path string) (*rsa.PublicKey, error) {

@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api show-sealed-message generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api show-sealed-message seal-event-demo generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
 
 # Default target
 help:
@@ -48,6 +48,7 @@ help:
 	@echo "API Testing:"
 	@echo "  test-products-api Test products API endpoints"
 	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
+	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject"
 	@echo ""
 	@echo "Load Testing:"
 	@echo "  loadtest-install          Install k6 load testing tool"
@@ -200,11 +201,10 @@ MULTITENANT_FLYWAY_PATH     := scripts/flyway-docker.sh
 MULTITENANT_POSTGRES_CONT   := go-bricks-postgres
 GO_BRICKS_MIGRATE           := go-bricks-migrate
 # Framework revision whose go-bricks-migrate CLI the demo targets. Must match the
-# go-bricks pseudo-version in go.mod: the `-url=` argv rewrite in
+# go-bricks version in go.mod: the `-url=` argv rewrite in
 # scripts/flyway-docker.sh only fires against an ADR-085 CLI (go-bricks v0.61.0+),
-# so a v0.60.0 pin here silently defeats it. A commit hash is used because that
-# work is not tagged yet — swap to the v0.63.0 tag once it is released.
-GO_BRICKS_REF               ?= 8bebd2789ce1
+# so a v0.60.0 pin here silently defeats it.
+GO_BRICKS_REF               ?= v0.63.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -232,10 +232,11 @@ migrate-multitenant-check:
 # across versions (the v0.60.0 CLI was verified to build this way).
 #
 # The clone is deliberately NOT `--depth 1 --branch $(GO_BRICKS_REF)`: `--branch`
-# takes a branch or tag only, and $(GO_BRICKS_REF) is currently a commit hash. We
-# clone the default branch with `--filter=blob:none` (full commit graph, blobs
-# fetched lazily — so any commit OR tag is checkoutable, at roughly shallow-clone
-# cost) and then check the ref out explicitly.
+# takes a branch or tag only, so it breaks whenever GO_BRICKS_REF is overridden
+# with a commit hash (as it was pinned before the v0.63.0 tag existed). We clone
+# the default branch with `--filter=blob:none` (full commit graph, blobs fetched
+# lazily — so any commit OR tag is checkoutable, at roughly shallow-clone cost)
+# and then check the ref out explicitly.
 # Set GO_BRICKS_PATH to a pre-existing framework checkout to skip the clone.
 migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."
@@ -323,6 +324,19 @@ test-products-api:
 show-sealed-message:
 	@echo "🔐 Inspecting a sealed message on the broker..."
 	@./scripts/show-sealed-message.sh
+
+# Consumer-side proof for the sealed-messages demo, using the framework's
+# seal-event CLI (go-bricks v0.63.0, #1417) to mint event bodies OUTSIDE the app
+# from the demo's own DER keys, then publishing them straight to the exchange.
+# Shows three things the in-app POST flow cannot: an externally-minted event is
+# opened, the SAME bytes published twice trip inbox dedup (the jti is stable per
+# seal, while every HTTP call mints a fresh one), and a wrong -event-type is
+# refused at open-rule 7 (SEAL_EVENT_TYPE_MISMATCH) and parks on the DLQ.
+# Requires the app running (make run), infra up (make docker-up), the inbox
+# ledger migrated (make migrate) and keys present (make generate-keys).
+seal-event-demo:
+	@echo "🔐 Minting sealed events outside the app with the seal-event CLI..."
+	@./scripts/seal-event-demo.sh
 
 # Update dependencies to latest versions
 update:

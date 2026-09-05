@@ -553,8 +553,7 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` pins a pseudo-version of go-bricks `main`
-(`v0.62.1-0.20260904182202-8bebd2789ce1`, the unreleased v0.63.0). There is no
+**go-bricks version:** `go.mod` is pinned to go-bricks `v0.63.0`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
 like any other dependency.
 
@@ -572,9 +571,8 @@ make build  # picks up local changes while go.work exists
 ```
 
 Delete or rename `go.work` (or build with `GOWORK=off`) to go back to the pinned
-pseudo-version. Promoting a framework change into the demo means bumping that
-pin with `go get github.com/gaborage/go-bricks@<commit-or-tag>`, not adding a
-`replace`.
+release. Promoting a framework change into the demo means bumping that pin with
+`go get github.com/gaborage/go-bricks@<commit-or-tag>`, not adding a `replace`.
 
 **go-bricks provides:**
 - `app` - Application bootstrap and module system
@@ -765,7 +763,7 @@ if err != nil {
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks llms.txt](https://github.com/gaborage/go-bricks/blob/main/llms.txt) (`main`, unreleased v0.63.0 — the version this demo pins) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.63.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.63.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Sealed Messages (JWE-of-JWS on AMQP)
 
@@ -790,7 +788,35 @@ Ordering is the security decision: **encrypt the Subject first, then sign the wh
 
 **Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
 
-**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/main/wiki/sealing.md) and [ADR-097](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
+**Minting sealed events outside the app:** `make seal-event-demo` runs
+[scripts/seal-event-demo.sh](scripts/seal-event-demo.sh), which uses the
+framework's `seal-event` CLI (v0.63.0, #1417) to build event bodies in the shell
+from `certs/payments_sign_v1_private.der` (sign PRIVATE) plus
+`certs/payments_encrypt_v1_public.der` (encrypt PUBLIC) — the producer half of
+both families — and publishes them to `payment-events` / `payment.authorized`
+through the RabbitMQ management API. It demonstrates the three consumer-side
+behaviors the in-app `POST /payments/authorize` flow cannot show: an
+externally-minted body is opened (acceptance is key material plus declaration
+agreement, never process identity); republishing the SAME bytes trips inbox
+dedup on the stable `<sign family>:<jti>` key (every HTTP call mints a fresh
+`jti`, so two calls never collide — only a replayed body does); and a body sealed
+with a wrong `-event-type` is refused at open-rule 7 with
+`SEAL_EVENT_TYPE_MISMATCH` and parks on `payments.authorized.dlq`. The broker
+records only the `x-death` rejection — the `SEAL_*` code lives in the app log, as
+a `*messaging.PayloadError` at stage `open`.
+
+```bash
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+  -sign-key-file certs/payments_sign_v1_private.der \
+  -encrypt-key-file certs/payments_encrypt_v1_public.der \
+  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -subject card -event-type payment.authorized
+```
+
+`-tenant-id` is omitted on purpose: `multitenant.enabled` is false here, so the
+signed `tid` carries no rule and is only surfaced on the envelope.
+
+**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md) (its "Minting test events" section covers the CLI) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 

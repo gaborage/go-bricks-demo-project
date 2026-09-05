@@ -13,6 +13,15 @@ import (
 
 const (
 	dbUnavailableErrMsg = "failed to get analytics database connection: %w"
+
+	// productViewsTable is the analytics fact table, named here for the builder
+	// query in buildTopViewedQuery. The other two spellings of it stay where they
+	// are on purpose: GetViewStats is one hand-written statement whose FROM reads
+	// with the rest of the SQL, and RecordView takes the name from
+	// entity.TableName(), which the domain entity owns.
+	productViewsTable = "product_views"
+	// totalViewsAlias is the projected COUNT(*) alias that ORDER BY sorts on.
+	totalViewsAlias = "total_views"
 )
 
 // Repository defines the interface for analytics data access.
@@ -78,8 +87,12 @@ func (r *AnalyticsRepository) GetViewStats(ctx context.Context, productID string
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	startOfWeek := startOfDay.AddDate(0, 0, -int(now.Weekday()))
 
-	// Query to get total views, views today, views this week, and last viewed time.
-	// Using raw SQL here for the aggregate functions with FILTER clauses.
+	// Stays hand-written on purpose: the COUNT(*) FILTER (WHERE viewed_at >= $2)
+	// clauses each bind a parameter, and the builder's expression hatch
+	// (qb.Expr / qb.MustExpr) carries SQL text only — it has no argument list to
+	// attach $2/$3 to. Compare GetTopViewed below, whose aggregate binds nothing
+	// and therefore does go through the builder. The placeholders here are still
+	// real bind parameters, never interpolated values.
 	query := `
 		SELECT
 			COUNT(*) as total_views,
@@ -107,23 +120,63 @@ func (r *AnalyticsRepository) GetViewStats(ctx context.Context, productID string
 	return &stats, nil
 }
 
+// buildTopViewedQuery renders the top-viewed aggregate on the type-safe query
+// builder: GROUP BY + aliased COUNT(*) + ORDER BY on that alias + LIMIT.
+//
+// COUNT(*) goes through the declared expression hatch (qb.MustExpr) because, as
+// of go-bricks v0.60.0 (ADR-082), every identifier door is validated and a bare
+// "COUNT(*)" in Select is rejected at ToSQL time. Both arguments are compile-time
+// constants, which is exactly the static-initialization use MustExpr is for.
+// "total_views DESC" needs no hatch of its own — a bounded ASC/DESC direction is
+// part of the identifier grammar.
+//
+// Split out from GetTopViewed so a unit test can assert the rendered SQL without
+// a database, catching that runtime-rejection class at test time.
+//
+// limit must be positive. Builder.Limit takes a uint64, so a negative int would
+// wrap to ~1.8e19, and a zero is dropped as "unset" — emitting no LIMIT clause
+// at all and turning a bounded top-N into an unbounded scan of the fact table.
+// Both are refused here rather than clamped, so neither can reach the database.
+func buildTopViewedQuery(limit int) (query string, args []any, err error) {
+	if limit < 1 {
+		return "", nil, fmt.Errorf("top viewed limit must be positive, got %d", limit)
+	}
+
+	qb := database.NewQueryBuilder(database.PostgreSQL)
+	return qb.Select("product_id", qb.MustExpr("COUNT(*)", totalViewsAlias)).
+		From(productViewsTable).
+		GroupBy("product_id").
+		OrderBy(totalViewsAlias + " DESC").
+		Limit(uint64(limit)).
+		ToSQL()
+}
+
 // GetTopViewed retrieves the top viewed products.
 func (r *AnalyticsRepository) GetTopViewed(ctx context.Context, limit int) ([]*domain.TopProductStats, error) {
+	// A non-positive limit asks for no rows, so answer it before touching the
+	// database — resolving a connection for a query that will never run is
+	// wasted work and would surface a DB-unavailable error for a request whose
+	// answer is already known. The two halves are not equivalent to what came
+	// before: limit 0 is preserved exactly — the old `LIMIT $1` bound with 0
+	// returned zero rows — while a NEGATIVE limit used to reach postgres and
+	// fail ("LIMIT must not be negative") and now returns empty instead. That
+	// widening is deliberate: asking for fewer than no rows gets the same
+	// nothing, and neither value can reach the database as an unlimited query.
+	if limit <= 0 {
+		return nil, nil
+	}
+
 	db, err := r.getDB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(dbUnavailableErrMsg, err)
 	}
 
-	// Query to get top viewed products with their view counts.
-	query := `
-		SELECT product_id, COUNT(*) as total_views
-		FROM product_views
-		GROUP BY product_id
-		ORDER BY total_views DESC
-		LIMIT $1
-	`
+	query, args, err := buildTopViewedQuery(limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build top viewed query: %w", err)
+	}
 
-	rows, err := db.Query(ctx, query, limit)
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top viewed products: %w", err)
 	}

@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.43.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.44.7
-	github.com/gaborage/go-bricks v0.62.1-0.20260904182202-8bebd2789ce1
+	github.com/gaborage/go-bricks v0.63.0
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/stretchr/testify v1.12.1

@@ -150,6 +150,48 @@ curl -s -X POST http://localhost:8080/api/v1/payments/authorize \
 make show-sealed-message
 ```
 
+#### Minting events outside the app (`seal-event` CLI)
+
+`make show-sealed-message` proves the **producer** half. `make seal-event-demo`
+proves the **consumer** half by taking the app out of the producing role: the
+framework's `seal-event` CLI (go-bricks v0.63.0) builds the event body in the
+shell from the demo's own DER keys, and it is published straight to the exchange.
+
+```bash
+# The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
+# DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
+echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+      -sign-key-file certs/payments_sign_v1_private.der \
+      -encrypt-key-file certs/payments_encrypt_v1_public.der \
+      -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+      -subject card -event-type payment.authorized > body.txt
+
+# Publish it. `rabbitmqadmin` is the shorthand; the script uses the same
+# management API through curl so the broker password stays out of argv.
+rabbitmqadmin publish exchange=payment-events routing_key=payment.authorized \
+  payload="$(cat body.txt)" \
+  properties='{"content_type":"application/octet-stream"}'
+```
+
+Three things the in-app `POST /payments/authorize` flow cannot show:
+
+| # | What | Why it needs an out-of-band producer |
+|---|------|--------------------------------------|
+| 1 | **The consumer opens it.** | The app never produced this body. It is accepted because the wire `kid` is a provisioned generation of the family its `seal` tag names and the signature verifies — acceptance is key material plus declaration agreement, never process identity. |
+| 2 | **The same bytes twice trip inbox dedup.** | The `jti` is minted once per **seal**, so republishing one `body.txt` gives two deliveries with the same `payments-sign:<jti>` dedup key and the second is skipped. Every HTTP call seals afresh, so two `POST`s never collide — and re-running the CLI is a new seal, not a replay. |
+| 3 | **A wrong `-event-type` lands on the DLQ.** | Re-seal the same document with `-event-type payment.captured`: signature, kids and manifest all still valid, only the signed `etyp` disagrees. Open-rule 7 refuses it with `SEAL_EVENT_TYPE_MISMATCH` and the delivery is nacked without requeue onto `payments.authorized.dlq`. This is the cross-type reroute class the ledger cannot close. |
+
+The broker records only `x-death` on the parked message — the `SEAL_*` code is in
+the **app log**, as a `*messaging.PayloadError` at stage `open`. The script prints
+the neighboring codes the CLI can actually reach: one `-sign-kid` change each for
+`SEAL_KID_UNKNOWN_GENERATION` and `SEAL_KID_FAMILY_MISMATCH`, plus the rule class a
+flipped byte lands on (rule 5 `SEAL_SIGNATURE_INVALID` for a payload or signature
+byte, an earlier header rule otherwise). `SEAL_MANIFEST_MISMATCH` is deliberately
+not on that list — no flag mints it. See
+[scripts/seal-event-demo.sh](scripts/seal-event-demo.sh) and the
+framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md).
+
 ### Activity (RabbitMQ Super-Stream Example)
 The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the
 AMQP lane on 5672. `product-activity` is a super stream of 3 partitions — the broker
@@ -350,6 +392,7 @@ make run            # Build + run
 make check          # fmt + lint + test (pre-commit)
 
 make show-sealed-message   # Publish a sealed payment, dump the raw broker body
+make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject
 ```
 
 ### Adding a Module
