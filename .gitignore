@@ -38,8 +38,9 @@
 # Flyway configs (per-vendor + multi-tenant)
 !flyway/*.conf
 
-# Shell scripts under scripts/
+# Shell scripts under scripts/, plus the helper lib the sealed-message demos source
 !scripts/*.sh
+!scripts/lib/*.sh
 
 # Postgres bootstrap SQL for the multi-tenant demo
 !etc/docker/postgres/*.sql

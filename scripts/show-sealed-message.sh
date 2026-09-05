@@ -39,6 +39,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Endpoint guard + credential-file writer, shared with seal-event-demo.sh.
+# shellcheck source-path=SCRIPTDIR source=lib/rabbitmq-mgmt.sh
+source "$SCRIPT_DIR/lib/rabbitmq-mgmt.sh"
+
 API_BASE="${API_BASE:-http://localhost:8080/api/v1}"
 RABBIT_MGMT="${RABBIT_MGMT:-http://localhost:15672}"
 RABBIT_USER="${RABBIT_USER:-guest}"
@@ -113,48 +119,18 @@ b64url_decode() {
 
 # --- endpoint guard -------------------------------------------------------
 
-# Every management call below sends RABBIT_USER / RABBIT_PASS. Plaintext HTTP is
-# only defensible when the request cannot leave the host, so http:// is accepted
-# for loopback and https:// is required for anything else. RABBIT_MGMT keeps
-# working as an override — it just has to name one of the two. The authority is
-# matched whole so a `user@real-host` form cannot hide the real host behind
-# loopback-looking userinfo. (This guard must precede the credential curls; it
-# sits here rather than beside the defaults because fail() is defined above.)
-case "$RABBIT_MGMT" in
-    https://*) ;;
-    http://*)
-        RABBIT_MGMT_HOST="${RABBIT_MGMT#http://}"
-        RABBIT_MGMT_HOST="${RABBIT_MGMT_HOST%%/*}"
-        [[ "$RABBIT_MGMT_HOST" =~ ^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ ]] \
-            || fail "RABBIT_MGMT='$RABBIT_MGMT' would send broker credentials in the clear to non-loopback host '$RABBIT_MGMT_HOST' — use https://, or a loopback host (localhost, 127.0.0.1, [::1])"
-        unset RABBIT_MGMT_HOST
-        ;;
-    *) fail "RABBIT_MGMT='$RABBIT_MGMT' must start with https://, or http:// for a loopback host (localhost, 127.0.0.1, [::1])" ;;
-esac
+# Must precede the credential curls; it sits here rather than beside the
+# defaults because fail() is defined above.
+guard_mgmt_endpoint "$RABBIT_MGMT"
 
 # --- credentials ----------------------------------------------------------
 
-# Broker credentials never reach argv: `curl -u user:pass` is readable by every
-# process on the host through ps(1). A 0600 config file passed with -K keeps
-# them off the command line while RABBIT_USER / RABBIT_PASS keep working as
-# overrides. Both scratch files are created here so one trap owns the cleanup.
+# Both scratch files are created here so one trap owns the cleanup.
 CURL_CFG="$(mktemp)"
 AUTH_RESPONSE_FILE="$(mktemp)"
-chmod 600 "$CURL_CFG"
 trap 'rm -f "$CURL_CFG" "$AUTH_RESPONSE_FILE"' EXIT INT TERM HUP
 
-# curl's config parser reads a double-quoted value with \" and \\ escapes, so
-# escape backslashes first and then quotes — a password containing either would
-# otherwise truncate or corrupt the credential.
-esc_user="${RABBIT_USER//\\/\\\\}"; esc_user="${esc_user//\"/\\\"}"
-esc_pass="${RABBIT_PASS//\\/\\\\}"; esc_pass="${esc_pass//\"/\\\"}"
-printf 'user = "%s:%s"\n' "$esc_user" "$esc_pass" >"$CURL_CFG"
-unset esc_user esc_pass
-
-# For a loopback http:// endpoint (the guard above already forbids non-loopback
-# http), forbid curl from honoring a stray http_proxy/HTTP_PROXY so credentials
-# can never be routed through a proxy.
-if [[ "$RABBIT_MGMT" == http://* ]]; then printf 'noproxy = "*"\n' >>"$CURL_CFG"; fi
+write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 
 # --- preflight ------------------------------------------------------------
 
