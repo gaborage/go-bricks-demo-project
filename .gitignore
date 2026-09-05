@@ -73,6 +73,11 @@
 
 # Docker infrastructure configs (committed for reproducibility)
 !etc/docker/rabbitmq/*.conf
+# Extensionless on purpose — RabbitMQ's plugin manifest has no suffix, so the
+# *.conf allowlist above does not reach it. Without this line the allowlist
+# gitignore drops the file and a fresh clone's `docker compose up` bind-mounts
+# a path that does not exist.
+!etc/docker/rabbitmq/enabled_plugins
 
 # ...even if they are in subdirectories
 !*/

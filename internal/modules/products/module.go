@@ -60,6 +60,19 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
+// SetActivityRecorder injects the product-activity stream recorder into the
+// product service. Valid only after Init has built that service — so the caller
+// must have seen this module ENABLED — and it must be called during startup
+// (cmd/api/main.go does so right after module registration, before app.Run()).
+//
+// The framework has no ModuleDeps field for a cross-module seam, so the wiring is
+// explicit at the composition root rather than discovered at runtime. The seam's
+// interface and payload are declared in this module's service package: products
+// is the core module and must build without the demo activity module.
+func (m *Module) SetActivityRecorder(r service.ActivityRecorder) {
+	m.service.SetActivityRecorder(r)
+}
+
 // RegisterRoutes registers HTTP endpoints for tenant operations
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Registrar rutas HTTP para operaciones de productos

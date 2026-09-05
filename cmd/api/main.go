@@ -2,6 +2,7 @@
 package main
 
 import (
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/activity"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments"
@@ -23,10 +24,35 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize application")
 	}
 
-	modulesToLoad := getModulesToLoad()
+	// Concrete handles kept so the products → activity seam can be wired below.
+	// Everything else reaches modules through app.ModuleDeps.
+	productsModule := products.NewModule()
+	activityModule := activity.NewModule()
+
+	modulesToLoad := getModulesToLoad(productsModule, activityModule)
 
 	if err := registerModules(application, modulesToLoad, log); err != nil {
 		log.Fatal().Err(err).Msg("Failed to register modules")
+	}
+
+	// Cross-module wiring. It happens HERE, at the composition root, because the
+	// framework has no ModuleDeps field for a module-to-module seam — and it
+	// happens AFTER registration because that is when Init has run on both
+	// modules and their services exist. It is still before app.Run(), so the
+	// write lands before the server goroutine that will read it is spawned.
+	//
+	// Both ends must be ENABLED: registerModules skips Init for a disabled module,
+	// which leaves its service nil. Wiring unconditionally would either call a
+	// setter on a products module that has no service, or hand products a recorder
+	// backed by nothing. (The activity module's Recorder() is nil-safe on its own
+	// side too — belt and braces on a seam whose failure mode is a panic on the
+	// first product write.)
+	//
+	// Every successful product write then also lands on the product-activity super
+	// stream. A failure on that lane is logged and swallowed: the transactional
+	// outbox remains the reliable path for product lifecycle events.
+	if moduleEnabled(modulesToLoad, "products") && moduleEnabled(modulesToLoad, "activity") {
+		productsModule.SetActivityRecorder(activityModule.Recorder())
 	}
 
 	if err := application.Run(); err != nil {
@@ -40,7 +66,9 @@ type ModuleConfig struct {
 	Module  app.Module
 }
 
-func getModulesToLoad() []ModuleConfig {
+// getModulesToLoad takes the two modules main() holds concrete handles to; the
+// rest are constructed inline.
+func getModulesToLoad(productsModule *products.Module, activityModule *activity.Module) []ModuleConfig {
 	return []ModuleConfig{
 		// --- Framework modules (order matters: scheduler → outbox → inbox → keystore) ---
 		{
@@ -78,7 +106,17 @@ func getModulesToLoad() []ModuleConfig {
 		{
 			Name:    "products",
 			Enabled: true,
-			Module:  products.NewModule(),
+			Module:  productsModule,
+		},
+		{
+			// Activity module demonstrates the RabbitMQ streams lane (native
+			// stream protocol) over a 3-partition super stream: a publisher keyed
+			// by product id, a typed super-stream consumer projecting every
+			// partition, and a poison simulator. Importing it links the stream
+			// runtime (ADR-091) — messaging.streams.uri must be configured.
+			Name:    "activity",
+			Enabled: true,
+			Module:  activityModule,
 		},
 		{
 			// Analytics module demonstrates the go-bricks named databases feature.
@@ -119,6 +157,18 @@ func getModulesToLoad() []ModuleConfig {
 			Module:  payments.NewModule(),
 		},
 	}
+}
+
+// moduleEnabled reports whether the named module is present and enabled in the
+// registration list — the same list registerModules walks, so the two can never
+// disagree about which modules actually got their Init called.
+func moduleEnabled(modules []ModuleConfig, name string) bool {
+	for _, mod := range modules {
+		if mod.Name == name {
+			return mod.Enabled
+		}
+	}
+	return false
 }
 
 func registerModules(appInstance *app.App, modules []ModuleConfig, log logger.Logger) error {

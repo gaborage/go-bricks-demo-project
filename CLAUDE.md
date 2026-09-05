@@ -33,6 +33,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - REST API with Echo web framework
 - Transactional Outbox for reliable event publishing (dual-write pattern)
 - KeyStore for named RSA key pair management (signing/verification)
+- RabbitMQ native streams: a partitioned super stream (`product-activity`, 3 partitions) consumed by a typed, replayable projection
 - Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - Comprehensive load testing with k6
 
@@ -615,6 +616,10 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 **Payments module** (sealed AMQP messages demo):
 - `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
 
+**Activity module** (RabbitMQ super-stream demo):
+- `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, and a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on)
+- `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -787,6 +792,71 @@ Ordering is the security decision: **encrypt the Subject first, then sign the wh
 
 **Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/main/wiki/sealing.md) and [ADR-097](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
+### Streams & Super-Streams (native RabbitMQ stream protocol)
+
+The activity module ([internal/modules/activity/](internal/modules/activity/)) demonstrates the **native stream lane** — RabbitMQ's stream protocol on port 5552 (`rabbitmq_stream` plugin), not the AMQP lane on 5672. Streams are append-only replicated logs: reads are non-destructive, positions are offsets, and the broker itself remembers where a named consumer got to, so a restart resumes instead of replaying from scratch.
+
+The demo declares one **super stream** — `product-activity`, 3 partitions, which the broker materializes as `product-activity-0` … `product-activity-2` — publishes to it keyed by product ID, and projects it back through a typed consumer:
+
+```go
+// The lane is opt-in at the build graph (ADR-091): importing
+// github.com/gaborage/go-bricks/messaging/streams is what registers the runtime.
+// A `messaging.streams.uri` with no import anywhere in the build fails startup with
+// app.ErrStreamsNotLinked. Any import of the package links the lane:
+// internal/modules/activity/module.go imports it by name and uses it, because the
+// module declares topology. A blank `_` import is what a process that declares no
+// topology of its own would need.
+func (m *Module) DeclareStreams(decls *streams.Declarations) {
+    // Streams never shrink when consumed — retention is explicit or there is none.
+    decls.DeclareSuperStream("product-activity", 3, &streams.StreamSpec{
+        MaxAge: 24 * time.Hour, // applies to every partition
+    })
+
+    // Hold the handle: there is no ModuleDeps field and no accessor to look one up again.
+    m.publisher = decls.DeclareSuperStreamPublisher(&streams.SuperStreamPublisherOptions{
+        SuperStream: "product-activity",
+    })
+
+    // Decode (JSON) -> validate (the same `validate` tags HTTP handlers use) -> handler.
+    // WithMeta is how a typed handler still reads msg.Stream (the partition) and msg.Offset.
+    streams.DeclareTypedSuperStreamConsumerWithMeta(decls, &streams.SuperStreamConsumerOptions{
+        SuperStream: "product-activity",
+        Name:        "product-activity-projector", // the offset-tracking key, per partition
+        Start:       streams.OffsetFirst(),
+    }, m.service.Project) // func(ctx, domain.ProductActivity, *streams.Message) error
+}
+
+// RoutingKey picks the partition. Same product -> same partition -> ordered per product.
+err := m.publisher.Publish(ctx, &streams.PublishMessage{
+    Data:       payload,
+    RoutingKey: activity.ProductID,
+})
+```
+
+**Semantics that shape the handler:**
+- **At-least-once, with batched offset commits → handlers must be idempotent.** An offset is committed only *after* its handler returned successfully, and then only in batches: every `offsetstore.countbeforestorage` successes (framework default 500; this demo lowers it to 10 so the count-driven commit is reachable at demo volume — the 5s flush would commit either way), every `offsetstore.flushinterval` (5s), and once more as a final flush at shutdown. That flush narrows the replay window without closing it, so a crash re-delivers everything after the last stored offset.
+- **A super-stream handler is called concurrently across partitions → it must be goroutine-safe.** Each partition is its own connection with its own delivery loop: sequential and ordered *within* a partition, concurrent *between* them. There is no worker pool and no handler timeout — bound your own slow work with `context.WithTimeout`.
+- **Poison is skipped, never parked (ADR-092).** A body that fails to decode, or decodes but fails `validate`, is deterministic poison: it fails the same way on every attempt and every replica. The lane returns it `Permanent` (no in-place retry whatever `Retry` says), never parks it in the hold ledger, and skips its offset. It survives only in the failure log line and the consume metric — match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` / `streams.ErrPayloadInvalid`. This is what `POST /api/v1/__sim/streams/poison` proves: the consumer logs and moves on rather than stalling the partition.
+- **A stored offset always wins over `Start`.** At startup — and at each SAC promotion — the framework asks the broker for the consumer name's stored offset and resumes at `stored + 1`. `OffsetFirst()` therefore replays the whole log only on the *first* run under that consumer name; after that it is ignored. A failed offset query never silently falls back to `Start`.
+- **Routing is murmur3, and that is a compatibility guarantee.** The client hashes `RoutingKey` with murmur3 under RabbitMQ's shared seed, modulo the partition list — the cross-client default, so the Java, .NET and Python clients place the same key on the same partition. `msg.Stream` reports the partition a message actually reached.
+
+**Two traps:**
+- **Changing the partition count on an existing super stream is accepted silently.** Where `DeclareStream` surfaces a retention mismatch as precondition-failed and aborts startup, the client swallows "already exists" for super streams — an edited `partitions` value neither reshapes the topology nor fails, and the service just keeps consuming the partitions that exist. (The count is also the murmur3 divisor, so changing it would move existing keys anyway.) Change it by declaring a *new* super stream and cutting over.
+- **Under Docker port mapping you need `addressresolver`.** Without it the client dials the address the broker advertises in its metadata response, which is unreachable from outside the container. Both `host` and `port` are set, or neither.
+
+**Lane rules:**
+- **Sealing is refused on this lane.** All four typed stream entry points panic at declaration on a `seal:`-tagged `T` — payload sealing is classic-lane only, and a stream consumer decoding a sealed body as plaintext would poison every delivery silently. Sealed events go through the AMQP typed consumer (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)).
+- **One publisher per target per process.** A second `DeclareSuperStreamPublisher` on `product-activity` panics at startup, which is why the poison simulator publishes through the *same* handle the products lane uses rather than declaring its own. The same rule is why a super stream listed in `outbox.superstreams` cannot also be published to directly — this demo lists none, so the direct publisher stays available.
+- **Publishing is synchronous and confirmed.** `Publish` blocks until the broker confirms, the client fails, `ctx` expires, or the publisher closes. A `nil` means the broker acknowledged. An error *after* submission (context expiry, confirmation timeout, shutdown sweep) means the outcome is **unknown** — the message may still have landed — so retries are safe only because consumers are idempotent. A super-stream publisher also rejects an empty `RoutingKey` before touching the client: hashing `""` would pile every message onto one partition.
+- **Publishing here is the best-effort lane, on purpose.** The products service publishes a `ProductActivity` after each successful create/update/delete through a narrow `ActivityRecorder` interface — declared products-side, so products and legacy compile without the activity module, and injected in [cmd/api/main.go](cmd/api/main.go) only when both modules are enabled. A publish failure is logged at WARN and does **not** fail the HTTP request — the transactional outbox stays the reliable path for anything that must not be lost.
+- **Best-effort still means the request waits.** That publish is synchronous and inline, so a broker in trouble blocks the product write's HTTP response for up to the service's 2s `publishTimeout` before the failure is swallowed; it is kept synchronous because moving it off-thread would let two events for one product id reorder on their shared partition. The outbox lane is the reliable path and never blocks on the broker.
+
+**Config:** see the `messaging.streams` section in [config.development.yaml](config.development.yaml) — `uri` (`rabbitmq-stream://…@localhost:5552/%2f`, never derived from `messaging.broker.url`), `addressresolver`, and `offsetstore.countbeforestorage`.
+
+**Requires RabbitMQ 3.13+** — `DeclareSuperStream` is a 3.13-only command — plus the `rabbitmq_stream` plugin enabled and port 5552 published.
+
+**Reference:** framework [wiki/streams.md](https://github.com/gaborage/go-bricks/blob/main/wiki/streams.md) for the full lane, plus [ADR-059](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_059_streams_consumption.md) (consumption and skip-on-failure), [ADR-063](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_063_streams_native_publishing.md) (native publishing), [ADR-091](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_091_streams_opt_in_registration.md) (opt-in at the build graph) and [ADR-092](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_092_typed_stream_consumers_skip_poison.md) (typed consumers skip poison).
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -854,6 +924,7 @@ with `*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
 
 All Docker-related files are in [etc/docker/](etc/docker/) directory:
 - `docker-compose.yml` - Main compose file with service profiles
+- `rabbitmq/` - Broker config: `rabbitmq.conf` (guest-user loopback override) and `enabled_plugins` (turns on `rabbitmq_stream` for the streams lane on 5552)
 - `otel/` - OpenTelemetry Collector configurations (Prometheus vs. New Relic)
 - `prometheus/` - Prometheus scrape configuration
 - `promtail/` - Promtail log collection configuration
@@ -992,10 +1063,18 @@ Explore the code in this order:
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
    - `make show-sealed-message` proves the PAN never reaches the broker
 
-10. **[config.development.yaml](config.development.yaml)** - Configuration
+10. **[internal/modules/activity/](internal/modules/activity/)** - Activity module (RabbitMQ super-stream demo)
+    - `module.go` carries the `messaging/streams` import that opts the lane in (ADR-091) and holds the `DeclareStreams` topology: super stream, publisher handle, typed consumer
+    - `domain/` declares `ProductActivity`, the `validate`-tagged struct the typed consumer decodes into
+    - `service/` holds the projection (per-product counts, per-partition counts, last-50 ring) — goroutine-safe because partitions deliver concurrently, idempotent because delivery is at-least-once
+    - `handlers/` serves `GET /api/v1/products/activity` and the guarded `POST /api/v1/__sim/streams/poison`
+    - Products publishes into it via the `ActivityRecorder` seam — interface and payload declared in `products/service` (the consumer owns the contract), adapted onto `activity/domain` in `module.go`, wired in [cmd/api/main.go](cmd/api/main.go) — best-effort, WARN on failure
+
+11. **[config.development.yaml](config.development.yaml)** - Configuration
     - Outbox configuration (poll interval, batch size, retention)
     - KeyStore configuration (DER file paths for RSA keys, including the sealing generations)
     - The commented-out `messaging.seal.active` selector (rotation story)
+    - `messaging.streams` — stream URI (port 5552), `addressresolver` for Docker port mapping, and the lowered `offsetstore.countbeforestorage`
     - See `make generate-keys` for key generation
 
 ### Runtime Tour (15-20 minutes)
