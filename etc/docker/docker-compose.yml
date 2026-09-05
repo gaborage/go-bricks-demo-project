@@ -52,11 +52,25 @@ services:
     ports:
       - "5672:5672"   # AMQP port
       - "15672:15672" # Management UI
+      # Native stream protocol (rabbitmq_stream plugin). A SEPARATE listener from
+      # AMQP — the streams lane never reaches the broker through 5672, so this
+      # must be published for `make run` on the host to reach it.
+      # NOTE: behind this port mapping the broker still advertises its own
+      # container-internal address in stream metadata, so the CLIENT pins the
+      # entry point via messaging.streams.addressresolver in
+      # config.development.yaml. That is what the framework prescribes
+      # (go-bricks wiki/streams.md, Configuration + Operations) — no broker-side
+      # stream.advertised_host is set here.
+      - "5552:5552"   # RabbitMQ stream protocol
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       # Drops the loopback-only restriction on the built-in `guest` user so the
       # demo can connect with a credential-less URL (amqp://host:5672/).
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-loopback.conf:ro
+      # Turns on rabbitmq_stream (+ its management tab). Replaces the image's own
+      # plugin manifest, so the file restates the defaults it shipped — see the
+      # comments in etc/docker/rabbitmq/enabled_plugins.
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s

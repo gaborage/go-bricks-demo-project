@@ -125,6 +125,7 @@ docker-up-local: check-deps
 	@echo "  PostgreSQL (main):    localhost:5432"
 	@echo "  PostgreSQL (analytics): localhost:5433"
 	@echo "  RabbitMQ AMQP:        localhost:5672"
+	@echo "  RabbitMQ Streams:     localhost:5552"
 	@echo "  RabbitMQ Management:  http://localhost:15672"
 	@echo "  Prometheus:           http://localhost:9090"
 	@echo "  Grafana:              http://localhost:3000 (admin/admin)"

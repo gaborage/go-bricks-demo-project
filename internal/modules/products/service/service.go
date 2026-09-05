@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
@@ -15,11 +16,78 @@ import (
 	"github.com/google/uuid"
 )
 
+// Activity action values carried by ProductActivity.Action: the bare verbs of the
+// product.* outbox event types this service already publishes.
+const (
+	ActivityCreated = "created"
+	ActivityUpdated = "updated"
+	ActivityDeleted = "deleted"
+)
+
+// ProductActivity is what this service hands to an ActivityRecorder after a
+// successful write.
+//
+// It is declared HERE, on the consumer side of the seam, rather than in the
+// activity module that happens to implement it today: products is the core module
+// and must compile — with the legacy module that reuses it — in a build that
+// carries no demo activity module at all. The recorder's implementation adapts
+// this type onto whatever wire format it publishes.
+type ProductActivity struct {
+	ProductID  string
+	Action     string
+	Name       string
+	Price      float64
+	OccurredAt time.Time
+}
+
+// ActivityRecorder is the narrow seam this service uses to mirror each successful
+// write onto the product-activity super stream. It is implemented by the activity
+// module and injected in cmd/api/main.go — the same cross-module reuse the legacy
+// module demonstrates, with the direction inverted.
+//
+// It returns nothing on purpose. The stream lane is best-effort demo telemetry:
+// the implementation logs and swallows its own failures so a broker hiccup can
+// never fail an HTTP request whose database work already committed. The
+// transactional outbox below stays the reliable path for product lifecycle
+// events.
+type ActivityRecorder interface {
+	RecordActivity(ctx context.Context, evt ProductActivity)
+}
+
 type ProductService struct {
 	repository repository.Repository
 	logger     logger.Logger
 	outbox     app.OutboxPublisher
 	getDB      func(context.Context) (database.Interface, error)
+	activity   ActivityRecorder
+}
+
+// SetActivityRecorder injects the stream-lane recorder. Call it during startup,
+// before app.Run() spawns the server goroutine: the field is written once there
+// and read from request goroutines afterwards, so the goroutine's own
+// happens-before is what makes the handoff safe.
+//
+// Leaving it unset is a supported configuration — the legacy module builds this
+// service without one, and so do the unit tests.
+func (s *ProductService) SetActivityRecorder(r ActivityRecorder) {
+	s.activity = r
+}
+
+// recordActivity mirrors a successful write onto the stream lane. Nil-safe: a
+// service with no recorder wired simply skips it. The guard is a plain interface
+// comparison, so the wiring side must never hand it a typed nil — see the
+// activity module's Recorder(), which returns the interface and an explicit nil.
+func (s *ProductService) recordActivity(ctx context.Context, productID, action, name string, price float64) {
+	if s.activity == nil {
+		return
+	}
+	s.activity.RecordActivity(ctx, ProductActivity{
+		ProductID:  productID,
+		Action:     action,
+		Name:       name,
+		Price:      price,
+		OccurredAt: time.Now().UTC(),
+	})
 }
 
 func NewService(repo repository.Repository, log logger.Logger, outbox app.OutboxPublisher, getDB func(context.Context) (database.Interface, error)) *ProductService {
@@ -76,6 +144,8 @@ func (s *ProductService) CreateProduct(ctx context.Context, name, description st
 			return nil, fmt.Errorf("%w: failed to create product: %v", ErrInternal, err)
 		}
 	}
+
+	s.recordActivity(ctx, product.ID, ActivityCreated, product.Name, product.Price)
 
 	s.logger.Info().Str("productID", id).Str("name", name).Msg("Product created successfully")
 	return product, nil
@@ -242,6 +312,8 @@ func (s *ProductService) UpdateProduct(ctx context.Context, id string, name *str
 	// Publish outbox event after successful update (best-effort, non-transactional)
 	s.publishEvent(ctx, "product.updated", id, product)
 
+	s.recordActivity(ctx, product.ID, ActivityUpdated, product.Name, product.Price)
+
 	s.logger.Info().Str("productID", id).Msg("Product updated successfully")
 	return product, nil
 }
@@ -267,6 +339,10 @@ func (s *ProductService) DeleteProduct(ctx context.Context, id string) error {
 			return fmt.Errorf("%w: failed to delete product: %v", ErrInternal, err)
 		}
 	}
+
+	// The row is gone, so name and price are no longer knowable here; the
+	// projection tallies the delete by product id.
+	s.recordActivity(ctx, id, ActivityDeleted, "", 0)
 
 	s.logger.Info().Str("productID", id).Msg("Product deleted successfully")
 	return nil

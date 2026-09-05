@@ -11,6 +11,7 @@ Production-ready demonstration of the [go-bricks framework](https://github.com/g
 - **Transactional Outbox** - Reliable event publishing via dual-write pattern
 - **KeyStore** - Named RSA key pair management for signing/verification
 - **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls
+- **RabbitMQ Streams** - Partitioned super stream on the native stream protocol, projected by a typed consumer
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
@@ -36,6 +37,22 @@ make run
 curl http://localhost:8080/api/v1/health
 curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
+
+> **Upgrading an existing checkout?** The streams demo needs a RabbitMQ container
+> with the `rabbitmq_stream` plugin enabled and port 5552 published, so the broker's
+> compose definition changed. `docker-compose restart rabbitmq` will **not** pick
+> that up — the container has to be recreated:
+>
+> ```bash
+> make docker-up          # recreates whatever the compose file changed
+> ```
+>
+> Run it from the repository root. Invoking `docker-compose` from `etc/docker`
+> instead fails before it starts anything: the compose file's New Relic service
+> declares `NEW_RELIC_LICENSE_KEY` as required, and interpolation covers the whole
+> file even when you name a single service, so it needs the root `.env` that the
+> Makefile passes with `--env-file`. Without the recreated container, startup
+> cannot reach the stream endpoint on 5552.
 
 ## API Endpoints
 
@@ -133,6 +150,124 @@ curl -s -X POST http://localhost:8080/api/v1/payments/authorize \
 make show-sealed-message
 ```
 
+### Activity (RabbitMQ Super-Stream Example)
+The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the
+AMQP lane on 5672. `product-activity` is a super stream of 3 partitions — the broker
+materializes `product-activity-0` … `product-activity-2` — published to with the
+product ID as the routing key and projected back by a typed consumer.
+
+- `GET /api/v1/products/activity` — the projection: per-product event counts,
+  per-partition delivery counts, and a ring of the last 50 events with the
+  partition each arrived on.
+- `POST /api/v1/__sim/streams/poison` — publishes malformed bytes through the same
+  publisher handle. Demo-only; it exists to show the consumer *skipping* poison.
+
+#### Walkthrough
+
+```bash
+# 1. Create two products. Each successful write publishes a ProductActivity onto
+#    product-activity, keyed by the product id.
+WIDGET=$(curl -s -X POST http://localhost:8080/api/v1/products \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Widget","description":"A widget","price":19.99}' | jq -r '.data.id')
+
+GADGET=$(curl -s -X POST http://localhost:8080/api/v1/products \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Gadget","description":"A gadget","price":49.50}' | jq -r '.data.id')
+
+# 2. Update, then delete, the widget — three events sharing one routing key.
+curl -s -X PUT "http://localhost:8080/api/v1/products/$WIDGET" \
+  -H 'Content-Type: application/json' -d '{"price":24.99}' > /dev/null
+curl -s -X DELETE "http://localhost:8080/api/v1/products/$WIDGET" > /dev/null
+
+# 3. Read the projection.
+curl -s http://localhost:8080/api/v1/products/activity | jq '.data'
+```
+
+```jsonc
+{
+  "superStream": "product-activity",
+  "partitions": 3,                                   // declared partition count
+  "consumerName": "product-activity-projector",      // the offset-tracking key
+  "delivered": 4,
+  "productCounts": {                                 // product id -> action -> count
+    "<WIDGET>": { "created": 1, "updated": 1, "deleted": 1 },
+    "<GADGET>": { "created": 1 }
+  },
+  "partitionCounts": {                               // partition -> deliveries
+    "product-activity-1": 3,
+    "product-activity-2": 1
+  },
+  "recent": [                                        // newest FIRST, capped at 50
+    { "productId": "<WIDGET>", "action": "deleted", "name": "", "price": 0,
+      "occurredAt": "2026-01-31T18:04:12.881Z",
+      "partition": "product-activity-1", "offset": 2 },
+    { "productId": "<WIDGET>", "action": "updated", "name": "Widget", "price": 24.99,
+      "occurredAt": "2026-01-31T18:04:12.744Z",
+      "partition": "product-activity-1", "offset": 1 },
+    { "productId": "<GADGET>", "action": "created", "name": "Gadget", "price": 49.5,
+      "occurredAt": "2026-01-31T18:04:12.602Z",
+      "partition": "product-activity-2", "offset": 0 },
+    { "productId": "<WIDGET>", "action": "created", "name": "Widget", "price": 19.99,
+      "occurredAt": "2026-01-31T18:04:12.470Z",
+      "partition": "product-activity-1", "offset": 0 }
+  ]
+}
+```
+
+`?limit=N` (1–50) trims `recent`. The delete carries an empty `name` and a zero
+`price` on purpose: the row is gone by the time the event is minted, so the
+projection tallies a delete by product id alone. Which `product-activity-N` a given
+id lands on is decided by the hash, so expect different partition names than the
+ones above.
+
+**Partition stickiness is the thing to notice:** all three widget events land on the
+same `product-activity-N`, because the client hashes the routing key with murmur3
+under RabbitMQ's shared seed and takes the remainder over the partition list. That is
+the cross-client default, so the Java, .NET and Python clients would place the same
+key on the same partition. Order is guaranteed *within* a partition, not across the
+super stream — which is exactly why a per-product key is the right key here.
+
+`offset` counts **within** its partition, so the numbers are only comparable between
+events sharing a `partition`. Gaps in that sequence (0, 1, 2, 3, 5, 6 …) are normal:
+the broker writes its own offset-tracking chunk entries into the stream, so a missing
+number is bookkeeping, not a lost message.
+
+```bash
+# 4. Publish deliberately malformed bytes. productId is the routing key, so this
+#    lands on the SAME partition the Gadget's events use. (Omit it and the
+#    simulator falls back to the "poison-demo" key, which hashes wherever it
+#    hashes — pass one when you want to choose the partition.)
+curl -s -X POST http://localhost:8080/api/v1/__sim/streams/poison \
+  -H 'Content-Type: application/json' \
+  -d "{\"productId\":\"$GADGET\"}"
+
+# 5. Write to that same product again — same key, same partition, right behind the
+#    poison — then re-read the projection.
+curl -s -X PUT "http://localhost:8080/api/v1/products/$GADGET" \
+  -H 'Content-Type: application/json' -d '{"price":44.50}' > /dev/null
+
+curl -s http://localhost:8080/api/v1/products/activity | jq '.data.partitionCounts'
+```
+
+The poisoned partition **keeps delivering** — the Gadget's `updated` event is queued
+behind the malformed body on that same partition, and it still lands in the
+projection. A body that fails to decode or fails validation is deterministic poison:
+it would fail identically on every retry and every replica, so the framework returns
+it `Permanent`, never parks it, skips its offset and logs it. Nothing durable records
+it, which is the deliberate trade (framework ADR-092). Watch the app log for the
+skip line.
+
+Restarting the app does **not** rebuild this projection. Offsets are stored
+server-side per consumer name, and a stored offset always wins over the declared
+`OffsetFirst()` start, so the consumer resumes just past what it already handled and
+the in-memory projection stays empty until new writes arrive. The idempotency guard
+in the projection is there for the narrower case — a crash that loses uncommitted
+offsets, or a consumer re-promotion re-attaching a partition at its last stored
+offset. `countbeforestorage` is lowered to 10 in
+[config.development.yaml](config.development.yaml) so the count-driven commit is
+reachable at demo volume; the 5s flush interval would commit either way.
+
 ### System
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
@@ -198,6 +333,11 @@ database.pool.max.connections: 25    # Increase for high load
 app.rate.limit: 100                  # Requests per second
 observability.enabled: true          # Enable telemetry
 multitenant.enabled: false           # Multi-tenant mode (disabled)
+
+messaging.streams.uri: rabbitmq-stream://guest:guest@localhost:5552/%2f
+messaging.streams.addressresolver.host: localhost      # Required under Docker port mapping
+messaging.streams.addressresolver.port: 5552
+messaging.streams.offsetstore.countbeforestorage: 10   # Framework default 500
 ```
 
 ## Development
@@ -308,6 +448,10 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 
 **Port conflicts:** `make docker-down && make docker-up`
 
+**Streams demo can't reach the broker:** the `rabbitmq_stream` plugin and port 5552 arrived with a compose change. Recreate the container with `make docker-up` from the repository root — a `restart` does not apply it, and a bare `docker-compose` from `etc/docker` fails on the New Relic service's required `NEW_RELIC_LICENSE_KEY` because it has no `--env-file`.
+
+**`messaging.streams.uri is set but the streams lane is not linked`:** the lane is opt-in at the build graph. Something must import `github.com/gaborage/go-bricks/messaging/streams`; [internal/modules/activity/](internal/modules/activity/) imports it by name to declare its topology, and that import is what links the lane (a blank `_` import would do for a process declaring none).
+
 **Connection pool exhausted:** Increase `database.pool.max.connections` in [config.development.yaml](config.development.yaml)
 
 **Observability not working:** Check OTel Collector: `docker-compose ps | grep otel-collector`
@@ -333,6 +477,7 @@ go-bricks-demo-project/
 │   ├── webhooks/                # Webhooks module (KeyStore signing example)
 │   ├── tokens/                  # Tokens module (JOSE middleware: nested JWE-of-JWS + outbound relay)
 │   ├── payments/                # Payments module (sealed AMQP messages: signed document, encrypted Subject)
+│   ├── activity/                # Activity module (RabbitMQ super-stream: partitioned publish + typed projection)
 │   └── shared/secrets/          # Multi-tenant AWS integration
 ├── migrations/                  # Flyway migrations (default database)
 ├── migrations-analytics/        # Flyway migrations (analytics database)

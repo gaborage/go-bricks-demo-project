@@ -38,6 +38,58 @@ messaging:
   broker:
     url: "amqp://localhost:5672/"
 
+  # --- Native stream protocol — activity module (ADR-059 / ADR-063 / ADR-091) -
+  # A SECOND, independent lane. Streams speak the rabbitmq_stream protocol on
+  # 5552, not AMQP on 5672, so this URI is deliberately NOT derived from
+  # messaging.broker.url above: a deployment may expose one listener and not the
+  # other. etc/docker/docker-compose.yml publishes 5552 and mounts
+  # etc/docker/rabbitmq/enabled_plugins to turn the plugin on.
+  #
+  # ADR-091 (opt-in at the build graph): setting this uri is only half the
+  # switch. The `messaging/streams` package must also be linked into the binary,
+  # and any import of it does that. internal/modules/activity/module.go imports
+  # it by NAME and uses it — it declares the topology, so it needs the package's
+  # types anyway, and that same import is what links the lane. Only a process
+  # that declares no topology of its own would need a blank `_` import instead.
+  # With neither, startup FAILS with app.ErrStreamsNotLinked rather than
+  # silently dropping every stream declaration. Neither uri nor import (the
+  # state before this demo) starts clean.
+  #
+  # Credentials are spelled out here, unlike the AMQP url above: the stream
+  # client does not default them. %2f is the URL-encoded default vhost "/".
+  # Plaintext rabbitmq-stream:// is fine in development but WARNs outside it —
+  # production terminates TLS in front of the broker or uses
+  # rabbitmq-stream+tls:// (5551).
+  streams:
+    uri: "rabbitmq-stream://guest:guest@localhost:5552/%2f"
+
+    # THE DOCKER TRAP (go-bricks wiki/streams.md, Configuration): a stream
+    # client opens ONE connection per partition, and it learns where to dial
+    # from the broker's own metadata response. Inside Docker the broker
+    # advertises its container-internal address, which is unreachable from the
+    # host — so the first connection (to the address in `uri`) succeeds and the
+    # per-partition connections then fail. The address resolver pins every
+    # connection to this one entry point instead. Required behind any port
+    # mapping, NAT, or load balancer. Set BOTH fields or neither.
+    addressresolver:
+      host: localhost
+      port: 5552
+
+    # Offsets are stored SERVER-SIDE for a named consumer, which is what lets a
+    # restart resume where it left off. They are committed only AFTER a handler
+    # returns successfully, so this knob trades commit traffic against how much
+    # already-handled work a crash replays.
+    offsetstore:
+      # A pending offset is committed on whichever comes FIRST: this many
+      # successfully handled messages, or `flushinterval` since the last commit.
+      # So the framework default of 500 would not stop a low-volume demo from
+      # committing at all — the 5s flush below does it regardless. Lowering the
+      # count to 10 only makes the COUNT-driven commit reachable, so a short
+      # burst of product writes exercises that path instead of always the timer.
+      # Production leaves this at the default.
+      countbeforestorage: 10
+      # flushinterval: 5s   # default: commit a pending offset after this long
+
   # Sealed messages — payments module (go-bricks v0.63.0, ADR-097).
   # A `seal:`-tagged event type encrypts its one declared Subject and signs the
   # whole document. Key material lives in keystore.keys below (generations

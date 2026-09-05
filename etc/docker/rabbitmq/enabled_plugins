@@ -1,0 +1,22 @@
+%% RabbitMQ plugin manifest, mounted over the image's own
+%% /etc/rabbitmq/enabled_plugins (an Erlang term file read with file:consult/1 —
+%% one bracketed list, trailing period required, %% starts a comment).
+%%
+%% Mounting REPLACES the file the image ships, so this list must restate the
+%% defaults it carried ([rabbitmq_management, rabbitmq_prometheus]) or they are
+%% silently turned off.
+%%
+%%   rabbitmq_management        — Management UI on 15672 (image default, kept).
+%%   rabbitmq_prometheus        — Broker metrics on 15692 (image default, kept;
+%%                                nothing scrapes it today, but dropping a
+%%                                default is not this change's business).
+%%   rabbitmq_stream            — The native stream protocol listener on 5552.
+%%                                This is the one the demo adds: go-bricks'
+%%                                messaging/streams lane speaks this protocol,
+%%                                NOT AMQP on 5672 (go-bricks wiki/streams.md,
+%%                                "Which lane"). Super streams additionally need
+%%                                RabbitMQ 3.13+ — this image is 4.x.
+%%   rabbitmq_stream_management — Streams/super-streams tab in the Management UI,
+%%                                so partitions and offsets are inspectable at
+%%                                http://localhost:15672.
+[rabbitmq_management,rabbitmq_prometheus,rabbitmq_stream,rabbitmq_stream_management].
