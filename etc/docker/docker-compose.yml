@@ -5,7 +5,7 @@ services:
     image: postgres:18-alpine
     container_name: go-bricks-postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_DB=postgres
       - POSTGRES_USER=postgres
@@ -28,7 +28,7 @@ services:
     image: postgres:18-alpine
     container_name: go-bricks-postgres-analytics
     ports:
-      - "5433:5432"  # Different host port to avoid conflict with main postgres
+      - "127.0.0.1:5433:5432"  # Different host port to avoid conflict with main postgres
     environment:
       - POSTGRES_DB=analytics
       - POSTGRES_USER=postgres
@@ -50,8 +50,8 @@ services:
     image: rabbitmq:4-management-alpine
     container_name: go-bricks-rabbitmq
     ports:
-      - "5672:5672"   # AMQP port
-      - "15672:15672" # Management UI
+      - "127.0.0.1:5672:5672"   # AMQP port
+      - "127.0.0.1:15672:15672" # Management UI
       # Native stream protocol (rabbitmq_stream plugin). A SEPARATE listener from
       # AMQP — the streams lane never reaches the broker through 5672, so this
       # must be published for `make run` on the host to reach it.
@@ -138,10 +138,10 @@ services:
     container_name: go-bricks-otel-collector-newrelic
     command: ["--config=/etc/otel-collector-newrelic.yaml"]
     ports:
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
-      - "8888:8888"   # Prometheus metrics (collector's own metrics)
-      - "13133:13133" # Health check
+      - "127.0.0.1:4317:4317"   # OTLP gRPC receiver
+      - "127.0.0.1:4318:4318"   # OTLP HTTP receiver
+      - "127.0.0.1:8888:8888"   # Prometheus metrics (collector's own metrics)
+      - "127.0.0.1:13133:13133" # Health check
     environment:
       - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:?NEW_RELIC_LICENSE_KEY environment variable is required}
       - NEW_RELIC_REGION=${NEW_RELIC_REGION:-US}
@@ -170,9 +170,9 @@ services:
       - "--storage.path=/var/lib/alloy/data"
       - "/etc/alloy/config.alloy"
     ports:
-      - "4317:4317"   # OTLP gRPC receiver (same as OTel Collector)
-      - "4318:4318"   # OTLP HTTP receiver (same as OTel Collector)
-      - "12345:12345" # Alloy UI (new!)
+      - "127.0.0.1:4317:4317"   # OTLP gRPC receiver (same as OTel Collector)
+      - "127.0.0.1:4318:4318"   # OTLP HTTP receiver (same as OTel Collector)
+      - "127.0.0.1:12345:12345" # Alloy UI (new!)
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy/data
@@ -192,7 +192,7 @@ services:
     image: prom/prometheus:latest
     container_name: go-bricks-prometheus
     ports:
-      - "9090:9090"   # Prometheus UI
+      - "127.0.0.1:9090:9090"   # Prometheus UI
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -217,7 +217,7 @@ services:
     image: grafana/grafana:latest
     container_name: go-bricks-grafana
     ports:
-      - "3000:3000"   # Grafana UI
+      - "127.0.0.1:3000:3000"   # Grafana UI
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -240,7 +240,7 @@ services:
     container_name: go-bricks-tempo
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "3200:3200"   # Tempo HTTP API (for Grafana datasource and TraceQL queries)
+      - "127.0.0.1:3200:3200"   # Tempo HTTP API (for Grafana datasource and TraceQL queries)
     volumes:
       - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
       - tempo_data:/var/tempo
@@ -257,8 +257,8 @@ services:
     image: grafana/loki:latest
     container_name: go-bricks-loki
     ports:
-      - "3100:3100"   # Loki API / OTLP HTTP
-      - "9096:9096"   # Loki gRPC
+      - "127.0.0.1:3100:3100"   # Loki API / OTLP HTTP
+      - "127.0.0.1:9096:9096"   # Loki gRPC
     command: -config.file=/etc/loki/loki-config.yaml
     volumes:
       - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
