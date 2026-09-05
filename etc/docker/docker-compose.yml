@@ -61,7 +61,10 @@ services:
       # config.development.yaml. That is what the framework prescribes
       # (go-bricks wiki/streams.md, Configuration + Operations) — no broker-side
       # stream.advertised_host is set here.
-      - "5552:5552"   # RabbitMQ stream protocol
+      # Loopback-only on the host: the guest user's loopback restriction is
+      # dropped (20-loopback.conf), so publishing this on 0.0.0.0 would expose
+      # an authenticated-by-default-credentials listener to the network.
+      - "127.0.0.1:5552:5552" # RabbitMQ stream protocol
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       # Drops the loopback-only restriction on the built-in `guest` user so the
