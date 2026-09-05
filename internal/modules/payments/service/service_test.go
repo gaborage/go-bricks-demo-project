@@ -83,7 +83,9 @@ func TestAuthorizeRejectsInvalidRequests(t *testing.T) {
 		"short currency":  func(r *AuthorizeRequest) { r.Currency = "US" },
 		// Three bytes, so a length-only check would let this through.
 		"non-alpha currency": func(r *AuthorizeRequest) { r.Currency = "U$D" },
-		"non-numeric PAN":    func(r *AuthorizeRequest) { r.Card.PAN = "4111-1111-1111-1111" },
+		// ToUpper would fold this to SSD, so folding-before-validation would accept it.
+		"unicode currency": func(r *AuthorizeRequest) { r.Currency = "ſSD" },
+		"non-numeric PAN":  func(r *AuthorizeRequest) { r.Card.PAN = "abcd-efgh-ijkl" },
 		// Both of these are 13-19 characters, so only the digits-only `number`
 		// tag rejects them — `numeric` would let them through.
 		"signed PAN":         func(r *AuthorizeRequest) { r.Card.PAN = "-41111111111111" },

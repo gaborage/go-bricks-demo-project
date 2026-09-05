@@ -113,9 +113,14 @@ func validate(req *AuthorizeRequest) error {
 	if req.Amount <= 0 {
 		return fmt.Errorf("%w: amount must be positive minor units", ErrValidation)
 	}
-	// Length alone is not the rule: `U$D` is three bytes and no currency. Check
-	// the same upper-cased form Authorize puts on the event.
-	if currency := strings.ToUpper(req.Currency); len(currency) != 3 || !isAlpha(currency) {
+	// Length alone is not the rule: `U$D` is three bytes and no currency. This
+	// check runs on the raw input BEFORE any case folding: strings.ToUpper
+	// folds Unicode (e.g. 'ſ' U+017F LATIN SMALL LETTER LONG S upper-cases to
+	// 'S'), so validating the upper-cased form would let a look-alike like
+	// "ſSD" (4 raw bytes) through as if it were "SSD" (3 bytes). Authorize's
+	// own strings.ToUpper call stays as normalization that happens only after
+	// validation passes.
+	if len(req.Currency) != 3 || !isAlpha(req.Currency) {
 		return fmt.Errorf("%w: currency must be a 3-letter ISO-4217 code", ErrValidation)
 	}
 	if !isDigits(req.Card.PAN) || len(req.Card.PAN) < 13 || len(req.Card.PAN) > 19 {
@@ -145,14 +150,18 @@ func isDigits(s string) bool {
 	return true
 }
 
-// isAlpha reports whether s is made up entirely of ASCII letters A-Z. Callers
-// upper-case first, so a lower-case code is normalized rather than rejected.
+// isAlpha reports whether s is made up entirely of ASCII letters, upper or
+// lower case (A-Z, a-z). It iterates bytes rather than runes so that a
+// multi-byte rune — a non-ASCII look-alike smuggled in before any case
+// folding — fails on its individual bytes instead of being read as one
+// (possibly in-range) code point.
 func isAlpha(s string) bool {
 	if s == "" {
 		return false
 	}
-	for _, r := range s {
-		if r < 'A' || r > 'Z' {
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if (b < 'A' || b > 'Z') && (b < 'a' || b > 'z') {
 			return false
 		}
 	}

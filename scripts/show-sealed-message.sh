@@ -151,6 +151,11 @@ esc_pass="${RABBIT_PASS//\\/\\\\}"; esc_pass="${esc_pass//\"/\\\"}"
 printf 'user = "%s:%s"\n' "$esc_user" "$esc_pass" >"$CURL_CFG"
 unset esc_user esc_pass
 
+# For a loopback http:// endpoint (the guard above already forbids non-loopback
+# http), forbid curl from honoring a stray http_proxy/HTTP_PROXY so credentials
+# can never be routed through a proxy.
+if [[ "$RABBIT_MGMT" == http://* ]]; then printf 'noproxy = "*"\n' >>"$CURL_CFG"; fi
+
 # --- preflight ------------------------------------------------------------
 
 curl -fsS -o /dev/null "$API_BASE/health" 2>/dev/null \
