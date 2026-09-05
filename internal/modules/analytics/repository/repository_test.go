@@ -118,13 +118,15 @@ func TestGetTopViewed(t *testing.T) {
 	})
 
 	// The previous hand-written `LIMIT $1` bound with 0 returned no rows. Keep
-	// that, and prove no statement reaches the driver — the builder would have
-	// dropped a zero LIMIT and scanned the whole table.
-	t.Run("non-positive limit returns no rows without querying", func(t *testing.T) {
+	// that, and prove the short-circuit answers before the database is touched
+	// at all: getDB here fails AND counts its invocations, so the subtest breaks
+	// both if a statement is built and if a connection is even resolved.
+	t.Run("non-positive limit returns no rows without touching the database", func(t *testing.T) {
 		for _, limit := range []int{0, -1} {
-			db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+			getDBCalls := 0
 			repo := NewAnalyticsRepository(func(context.Context) (database.Interface, error) {
-				return db, nil
+				getDBCalls++
+				return nil, errors.New("getDB must not be called for a non-positive limit")
 			})
 
 			stats, err := repo.GetTopViewed(ctx, limit)
@@ -134,8 +136,8 @@ func TestGetTopViewed(t *testing.T) {
 			if len(stats) != 0 {
 				t.Errorf("GetTopViewed(%d) returned %d rows, want 0", limit, len(stats))
 			}
-			if got := len(db.QueryLog()); got != 0 {
-				t.Errorf("GetTopViewed(%d) executed %d queries, want 0", limit, got)
+			if getDBCalls != 0 {
+				t.Errorf("GetTopViewed(%d) resolved a database connection %d times, want 0", limit, getDBCalls)
 			}
 		}
 	})

@@ -153,20 +153,22 @@ func buildTopViewedQuery(limit int) (query string, args []any, err error) {
 
 // GetTopViewed retrieves the top viewed products.
 func (r *AnalyticsRepository) GetTopViewed(ctx context.Context, limit int) ([]*domain.TopProductStats, error) {
+	// A non-positive limit asks for no rows, so answer it before touching the
+	// database — resolving a connection for a query that will never run is
+	// wasted work and would surface a DB-unavailable error for a request whose
+	// answer is already known. The two halves are not equivalent to what came
+	// before: limit 0 is preserved exactly — the old `LIMIT $1` bound with 0
+	// returned zero rows — while a NEGATIVE limit used to reach postgres and
+	// fail ("LIMIT must not be negative") and now returns empty instead. That
+	// widening is deliberate: asking for fewer than no rows gets the same
+	// nothing, and neither value can reach the database as an unlimited query.
+	if limit <= 0 {
+		return nil, nil
+	}
+
 	db, err := r.getDB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(dbUnavailableErrMsg, err)
-	}
-
-	// A non-positive limit asks for no rows, so answer it here rather than build
-	// a statement buildTopViewedQuery would refuse outright. The two halves are
-	// not equivalent to what came before: limit 0 is preserved exactly — the old
-	// `LIMIT $1` bound with 0 returned zero rows — while a NEGATIVE limit used to
-	// reach postgres and fail ("LIMIT must not be negative") and now returns empty
-	// instead. That widening is deliberate: asking for fewer than no rows gets the
-	// same nothing, and neither value can reach the database as an unlimited query.
-	if limit <= 0 {
-		return nil, nil
 	}
 
 	query, args, err := buildTopViewedQuery(limit)
