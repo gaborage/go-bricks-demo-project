@@ -30,6 +30,8 @@ type Module struct {
 	getDB   func(context.Context) (database.Interface, error)
 }
 
+var _ app.MessagingDeclarer = (*Module)(nil)
+
 // NewModule creates a new legacy module instance.
 func NewModule() *Module {
 	return &Module{}

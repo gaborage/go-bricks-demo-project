@@ -54,7 +54,10 @@ type Module struct {
 // not through ModuleDeps — see streams.StreamDeclarer and app/streams_setup.go.
 // A typo in the method name would therefore be silent: the module would register
 // fine and declare nothing. This assertion makes that a compile error.
-var _ streams.StreamDeclarer = (*Module)(nil)
+var (
+	_ streams.StreamDeclarer = (*Module)(nil)
+	_ app.MessagingDeclarer  = (*Module)(nil)
+)
 
 // NewModule returns an unwired Module. Init populates dependencies.
 func NewModule() *Module {

@@ -18,6 +18,8 @@ type Module struct {
 	logger  logger.Logger
 }
 
+var _ app.MessagingDeclarer = (*Module)(nil)
+
 // NewModule creates a new webhooks module instance.
 func NewModule() *Module {
 	return &Module{}

@@ -98,18 +98,29 @@ func NewRelayService(cfg *RelayConfig) (*RelayService, error) {
 }
 
 // Relay seals a tokenization request to the partner URL and unwraps the response.
+//
+// The request goes out as a plaintext {"pan":...} body; the JOSETransport below
+// the retry loop is what turns it into a compact JWE(JWS(...)) and opens the
+// reply. Nothing here touches go-jose.
 func (s *RelayService) Relay(ctx context.Context, pan string) (*domain.Token, error) {
+	return postTokenizeRequest(ctx, s.client, s.url, pan)
+}
+
+// postTokenizeRequest is the wire half both relay services share: POST the
+// plaintext {"pan":...} body and decode the plaintext the transport hands back.
+// The two services differ only in how their client is wired — nested JWE-of-JWS
+// versus bare-JWE behind Visa's encData envelope — so the HTTP call itself is
+// written once.
+//
+// The transport names the Content-Type in both shapes (application/jose, or
+// whatever the envelope declares), so no header is set here.
+func postTokenizeRequest(ctx context.Context, client httpclient.Client, url, pan string) (*domain.Token, error) {
 	body, err := json.Marshal(map[string]string{"pan": pan})
 	if err != nil {
 		return nil, fmt.Errorf("marshal relay body: %w", err)
 	}
 
-	resp, err := s.client.Post(ctx, &httpclient.Request{
-		URL:  s.url,
-		Body: body,
-		// JOSETransport sets Content-Type: application/jose itself; setting it
-		// here would be redundant. Leaving Headers nil keeps that contract clear.
-	})
+	resp, err := client.Post(ctx, &httpclient.Request{URL: url, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("partner call failed: %w", err)
 	}

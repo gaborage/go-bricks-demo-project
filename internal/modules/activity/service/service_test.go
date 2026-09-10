@@ -196,6 +196,17 @@ func TestSnapshotLimit(t *testing.T) {
 	}
 }
 
+// A service with no publisher bound reports not-ready rather than panicking on
+// the nil handle. This is the state between Init and DeclareStreams, and the
+// permanent state of a build where the stream lane never started.
+func TestSnapshotPublisherReadyIsFalseWithoutAPublisher(t *testing.T) {
+	svc := newTestService()
+
+	if svc.Snapshot(0).PublisherReady {
+		t.Error("Snapshot reported publisherReady with no publisher bound")
+	}
+}
+
 // The snapshot must be a defensive copy: a caller mutating it cannot reach the
 // live projection the consumer keeps writing to.
 func TestSnapshotIsADefensiveCopy(t *testing.T) {

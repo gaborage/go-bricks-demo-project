@@ -91,6 +91,12 @@ type Snapshot struct {
 	PartitionCounts map[string]int64            `json:"partitionCounts"`
 	// Recent is newest-first and capped at the requested limit.
 	Recent []RecentEvent `json:"recent"`
+	// PublisherReady is the producer-side half of the picture: whether the one
+	// super-stream publisher handle is connected to the broker right now
+	// (streams.Publisher.Ready, v0.64.0). False before DeclareStreams has bound a
+	// handle, and while the handle is reconnecting or closed. It is a snapshot,
+	// not a delivery guarantee — a true answer can be stale by the next publish.
+	PublisherReady bool `json:"publisherReady"`
 }
 
 // ActivityService projects the product-activity super stream and publishes onto it.
@@ -317,6 +323,13 @@ func (s *ActivityService) Snapshot(limit int) Snapshot {
 		limit = recentCapacity
 	}
 
+	// Read outside the lock: the handle lives in an atomic, and Ready() asks the
+	// client's HA layer — mu guards the projection only.
+	publisherReady := false
+	if pub := s.publisher.Load(); pub != nil {
+		publisherReady = pub.Ready()
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -350,5 +363,6 @@ func (s *ActivityService) Snapshot(limit int) Snapshot {
 		ProductCounts:   products,
 		PartitionCounts: partitions,
 		Recent:          recent,
+		PublisherReady:  publisherReady,
 	}
 }

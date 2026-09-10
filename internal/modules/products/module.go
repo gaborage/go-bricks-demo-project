@@ -26,6 +26,11 @@ type Module struct {
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
 }
 
+// Compile-time guard: the framework finds the declarer by type assertion, and
+// v0.64.0 logs a per-module declaration count at startup — a mis-signatured or
+// misspelled DeclareMessaging would otherwise register fine and declare nothing.
+var _ app.MessagingDeclarer = (*Module)(nil)
+
 // NewModule creates a new tenant module instance
 func NewModule() *Module {
 	return &Module{}

@@ -178,6 +178,25 @@ queue_depth() {
         | jq -r 'if type == "object" and has("messages") then .messages else empty end'
 }
 
+# wait_queue_depth_above NAME BASELINE — poll until the queue's depth exceeds
+# BASELINE, up to ~20s, echoing the depth that satisfied it (or the last read).
+# The DLQ is a quorum queue as of go-bricks v0.64.0 (ADR-106), and the
+# management API surfaces a quorum queue's `messages` on the stats emission
+# tick (~5s) — a single read right after a publish reliably under-reports.
+wait_queue_depth_above() {
+    local depth="" deadline=$((SECONDS + 20))
+    while ((SECONDS < deadline)); do
+        depth="$(queue_depth "$1")"
+        if [[ -n "$depth" && "$depth" -gt "$2" ]] 2>/dev/null; then
+            echo "$depth"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "$depth"
+    return 1
+}
+
 # publish_body FILE — publish the file's contents to the exchange with the demo's
 # routing key. This is the management API's publish endpoint, which is exactly
 # what `rabbitmqadmin publish` drives; curl is used here so the broker password
@@ -443,9 +462,7 @@ echo "published to '$EXCHANGE' with routing key '$ROUTING_KEY' (routed=true)"
 echo "— the PUBLISH succeeds: the broker routes on the routing key and never opens"
 echo "  the envelope. The refusal happens in the consumer."
 
-sleep "$SETTLE_SECONDS"
-
-DLQ_AFTER_WRONG="$(queue_depth "$DLQ")"
+DLQ_AFTER_WRONG="$(wait_queue_depth_above "$DLQ" "$DLQ_BEFORE")" || true
 echo
 echo "DLQ depth: $DLQ_BEFORE -> $DLQ_AFTER_WRONG"
 

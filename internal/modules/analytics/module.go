@@ -38,6 +38,8 @@ type Module struct {
 	getAnalyticsDB func(context.Context) (database.Interface, error)
 }
 
+var _ app.MessagingDeclarer = (*Module)(nil)
+
 // NewModule creates a new analytics module instance.
 func NewModule() *Module {
 	return &Module{}
