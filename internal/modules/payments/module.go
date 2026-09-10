@@ -66,6 +66,8 @@ type Module struct {
 	authorized *messaging.Publisher[domain.PaymentAuthorized]
 }
 
+var _ app.MessagingDeclarer = (*Module)(nil)
+
 // NewModule returns an unwired Module. Init populates dependencies.
 func NewModule() *Module {
 	return &Module{}
@@ -123,7 +125,18 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// Consumer side. A message that fails any open rule — bad signature, unknown
 	// key generation, wrong event type inside the envelope — is poison: nacked
 	// without requeue, so it parks on the DLQ this queue declares.
-	queue := decls.DeclareQueueWithDLQ(queueName, nil)
+	//
+	// QueueType is spelled out rather than left to the empty-value default:
+	// v0.64.0 (ADR-106) changed what an empty value resolves to on BOTH queues,
+	// from the broker default (classic) to quorum. A broker volume retained from
+	// before that carries classic queues under these names, and the re-declare
+	// fails with 406 PRECONDITION_FAILED — x-queue-type has no in-place
+	// conversion, so both payments.authorized and payments.authorized.dlq must be
+	// drained and deleted once. Only QueueType is set: the derived names still
+	// apply, so the parking queue stays payments.authorized.dlq.
+	queue := decls.DeclareQueueWithDLQ(queueName, &messaging.DeadLetterSpec{
+		QueueType: messaging.QueueTypeQuorum,
+	})
 	decls.DeclareBinding(queue.Name, exchangeName, routingKey)
 
 	// Consumerless tap: exists only for the broker-visibility proof, so it is

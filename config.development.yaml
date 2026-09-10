@@ -90,6 +90,23 @@ messaging:
       countbeforestorage: 10
       # flushinterval: 5s   # default: commit a pending offset after this long
 
+  # Aggregate per-publish bound (go-bricks v0.64.0, ADR-103). When set, the
+  # WHOLE logical publish — the readiness pre-flight plus every retry attempt —
+  # runs under one deadline, layered under any tighter caller deadline. Unset
+  # (the default) is unbounded, which is what this demo runs.
+  #
+  # Startup validates a floor of messaging.reconnect.readytimeout +
+  # messaging.reconnect.connectiontimeout — 35s at framework defaults (5s + 30s)
+  # — because a shorter bound would truncate a healthy cold-path first attempt
+  # into a false failure. So demo-scale values like 5s are REFUSED at startup,
+  # not merely ineffective; pick a value above the floor or leave it unset.
+  #
+  # On expiry the caller sees context.DeadlineExceeded wrapping the last
+  # attempt's cause (messaging.ErrPublishNacked or ErrPublishConfirmTimeout),
+  # so a timed-out publish's outcome is UNKNOWN — the message may still have
+  # landed. Consumers must be idempotent before this is safe to enable.
+  # publishtimeout: 40s
+
   # Sealed messages — payments module (go-bricks v0.63.0, ADR-097).
   # A `seal:`-tagged event type encrypts its one declared Subject and signs the
   # whole document. Key material lives in keystore.keys below (generations
@@ -139,6 +156,13 @@ app:
 log:
   output:
     format: auto   # auto | console | json
+
+  # Extends logger.DefaultFilterConfig (case-insensitive substring on the field
+  # name). `pan` is not a framework default: the tokens relays hand httpclient a
+  # PRE-SEAL plaintext {"pan":...} body, which appendBodyPreview logs verbatim
+  # when LogPayloads + debug are on.
+  sensitivefields:
+    - pan
 
 # --- Default Database -------------------------------------------------------
 # Accessed by modules via deps.DB(ctx).

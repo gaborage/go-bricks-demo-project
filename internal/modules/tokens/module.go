@@ -28,8 +28,11 @@ const (
 type Module struct {
 	handler      *handlers.Handler
 	relayHandler *handlers.RelayHandler
+	mleHandler   *handlers.MLEHandler
 	logger       logger.Logger
 }
+
+var _ app.MessagingDeclarer = (*Module)(nil)
 
 // NewModule returns an unwired Module. Init populates dependencies.
 func NewModule() *Module {
@@ -66,9 +69,44 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 	m.relayHandler = handlers.NewRelayHandler(relaySvc, m.logger)
 
+	if err := m.initMLE(deps); err != nil {
+		return err
+	}
+
 	m.logger.Info().
 		Str("partner_url", peerSimulatorURL).
-		Msg("tokens module initialized — JOSE-protected /tokens + relay + peer simulator")
+		Str("mle_partner_url", mlePeerSimulatorURL).
+		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + peer simulators")
+	return nil
+}
+
+// initMLE wires the Visa Message Level Encryption half of the module: the
+// bare-JWE relay and the counterparty it calls. Both reuse the SAME keypairs as
+// the nested demo — the kid names an identity, not a wire shape.
+func (m *Module) initMLE(deps *app.ModuleDeps) error {
+	mleRelay, err := service.NewMLERelayService(&service.MLERelayConfig{
+		PartnerURL: mlePeerSimulatorURL,
+		KeyStore:   deps.KeyStore,
+		EncryptKid: PeerKid, // bare outbound declares an encrypt kid and nothing else
+		DecryptKid: OurKid,  // bare inbound declares a decrypt kid and nothing else
+		Logger:     m.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("init MLE relay service: %w", err)
+	}
+
+	// Inverse identities: the simulator decrypts with the peer key and encrypts
+	// back to ours.
+	mlePeer, err := service.NewMLEPeerSimulator(&service.MLEPeerConfig{
+		KeyStore:   deps.KeyStore,
+		DecryptKid: PeerKid,
+		EncryptKid: OurKid,
+	})
+	if err != nil {
+		return fmt.Errorf("init MLE peer simulator: %w", err)
+	}
+
+	m.mleHandler = handlers.NewMLEHandler(mleRelay, mlePeer, m.logger)
 	return nil
 }
 
@@ -79,6 +117,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	m.handler.RegisterPartnerRoute(hr, r)
 	m.handler.RegisterSimulatorRoute(hr, r)
 	m.relayHandler.RegisterRoute(hr, r)
+	m.mleHandler.RegisterRoutes(hr, r)
 }
 
 // DeclareMessaging is a no-op — the module only speaks HTTP.
@@ -97,3 +136,8 @@ func (m *Module) Shutdown() error { return nil }
 // outbound httpclient is a fully external caller from the loopback's
 // perspective, so the URL must be absolute. Demo-only.
 const peerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/tokens"
+
+// mlePeerSimulatorURL is the Visa MLE counterpart of peerSimulatorURL: same
+// process, different wire shape ({"encData":"<compact JWE>"} rather than a bare
+// compact). Demo-only.
+const mlePeerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/mle"

@@ -89,6 +89,19 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
   in-process peer simulator.
 - `POST /api/v1/__sim/peer/tokens` — peer simulator with the inverse JOSE
   policy. Demo-only; real integrations point at a counterparty URL instead.
+- `POST /api/v1/tokens/mle-relay` — plaintext entry for Visa **Message Level
+  Encryption**: a bare JWE (no inner JWS, `A128GCM`, `typ: JOSE`, millisecond
+  `iat`) carried inside `{"encData":"<compact>"}` by
+  `httpclient.VisaMLEEnvelope()`.
+- `POST /api/v1/__sim/peer/mle` — the MLE counterparty. It opens and seals by
+  hand (`jose.Open`/`jose.Seal`): the `jose:` tag grammar has no `mode` key, so
+  an inbound server route cannot select bare mode. Demo-only.
+
+> **Bare-JWE authenticates nothing about the sender.** A successful open proves
+> only that the payload was encrypted to your public key — which any holder of
+> that public key can do. Visa closes that gap out of band with mTLS and
+> `X-Pay-Token`; a production wiring pairs this policy pair with
+> `WithTransport(mTLS)`. See go-bricks ADR-107.
 
 #### Walkthrough
 
@@ -111,6 +124,11 @@ curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
      -H 'Content-Type: application/json' \
      -d '{"pan":"4111111111111111"}'
 # {"data":{"token":{"token":"tok_...","masked_pan":"************1111", ...}}}
+
+# 5. Drive the Visa MLE (bare-JWE + encData envelope) path.
+curl -s -X POST http://localhost:8080/api/v1/tokens/mle-relay \
+     -H 'Content-Type: application/json' \
+     -d '{"pan":"4111111111111111"}'
 ```
 
 The keystore exercises both source styles for a single keypair: `tokens-our` is

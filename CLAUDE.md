@@ -610,12 +610,14 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/tokens` - JOSE-protected partner endpoint (decrypt+verify in, sign+encrypt out)
 - `POST /api/v1/tokens/relay` - Plaintext entry that drives the outbound `JOSETransport` against the peer simulator
 - `POST /api/v1/__sim/peer/tokens` - In-process peer simulator (inverse JOSE policy; demo-only)
+- `POST /api/v1/tokens/mle-relay` - Plaintext entry that drives the outbound bare-JWE + Visa MLE envelope transport against the MLE peer simulator
+- `POST /api/v1/__sim/peer/mle` - In-process MLE peer simulator (bare-JWE, manual `jose.Open`; demo-only)
 
 **Payments module** (sealed AMQP messages demo):
 - `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
 
 **Activity module** (RabbitMQ super-stream demo):
-- `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, and a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on)
+- `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on), and `publisherReady` — the v0.64.0 `streams.Publisher.Ready()` snapshot for the module's publisher handle
 - `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
 
 ## Configuration Files
@@ -760,6 +762,8 @@ if err != nil {
 ```
 
 **Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokens-peer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
+
+**Bare-JWE / Visa MLE (v0.64.0, ADR-107 + #1585):** the MLE relay endpoint exercises the second seal mode — `jose.Policy{Mode: jose.SealModeBareJWE}` is encrypt-only `JWE(payload)` (no inner JWS), paired with `httpclient.VisaMLEEnvelope()` on `JOSEConfig.Envelope`, which wraps the compact as `{"encData":"<compact>"}` `application/json` on the wire and unwraps inbound responses by shape. Bare mode admits `A128GCM` (via a direct `go-jose/v4` import — no go-bricks alias) and stamps `iat` in milliseconds when `IATMillis: true`. Two invariants shape the demo: bare mode does **not** authenticate the sender (no signature — production pairs it with mTLS / X-Pay-Token), and there is no `mode` key in the `jose:` struct-tag grammar, so a server route cannot select bare mode — the MLE peer simulator binds the envelope as plain JSON and opens/seals manually with `jose.Open`/`jose.Seal`. See [internal/modules/tokens/service/mle_relay_service.go](internal/modules/tokens/service/mle_relay_service.go).
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
@@ -1085,7 +1089,7 @@ Explore the code in this order:
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
-   - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the DLQ queue and the consumerless `payments.authorized.tap` queue
+   - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the quorum DLQ pair (explicit `DeadLetterSpec.QueueType`; quorum is the v0.64.0 default, see Troubleshooting for the retained-volume trap) and the consumerless `payments.authorized.tap` queue
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
    - `make show-sealed-message` proves the PAN never reaches the broker
 
@@ -1242,6 +1246,26 @@ make docker-down && make dev
 APP_ENV=development make run   # app.debug: true is already in config.development.yaml
 # Production keeps details off on purpose: they render schema facts that a public
 # error body should not carry.
+```
+
+### DLQ PRECONDITION_FAILED on Retained Broker Volume (go-bricks v0.64.0)
+
+```bash
+# Symptom: startup fails declaring payments.authorized / payments.authorized.dlq
+# with PRECONDITION_FAILED (inequivalent arg 'x-queue-type').
+# As of go-bricks v0.64.0 (ADR-106), DeclareQueueWithDLQ resolves an empty
+# DeadLetterSpec.QueueType to QUORUM on both the primary and the parking queue
+# (was: broker default, classic). The demo declares this explicitly
+# (internal/modules/payments/module.go). RabbitMQ cannot convert a queue type
+# in place, so a retained volume holding the old classic queues refuses the
+# redeclare.
+# Fix: delete both queues (they are demo queues — drain first if you care):
+docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized
+docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
+# then restart the app. Or destroy the volume: make docker-down && make dev
+# Related: the management API reports a quorum queue's `messages` on the ~5s
+# stats emission tick — scripts/seal-event-demo.sh polls for DLQ growth instead
+# of reading the depth once for exactly this reason.
 ```
 
 ### Direct AMQP Publish APIs Removed (go-bricks v0.63.0)
