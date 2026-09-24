@@ -113,11 +113,14 @@ make generate-keys
 make run
 
 # 3. Seal a payload as the peer would and POST it to /tokens.
-echo '{"pan":"4111111111111111"}' | go run ./cmd/seal-payload | \
+#    DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
+#    `make seal-payload` runs the framework's seal-payload CLI at the go-bricks
+#    version in go.mod: it signs with tokens-peer and encrypts to tokens-our.
+printf '%s' '{"pan":"4111111111111111"}' | make seal-payload | \
   curl -s -X POST http://localhost:8080/api/v1/tokens \
        -H 'Content-Type: application/jose' --data-binary @-
-# Response is a compact JWE — decode it back to plaintext via seal-payload's
-# inverse logic, or hit the relay endpoint instead which unwraps for you.
+# The reply is a compact JWE sealed back to tokens-peer. The CLI only seals,
+# so use the relay endpoint (step 4) to see a plaintext token.
 
 # 4. Drive the outbound JOSETransport via the relay endpoint.
 curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
@@ -129,7 +132,24 @@ curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
 curl -s -X POST http://localhost:8080/api/v1/tokens/mle-relay \
      -H 'Content-Type: application/json' \
      -d '{"pan":"4111111111111111"}'
+
+# 6. Mint the MLE body yourself and POST it straight to the MLE peer simulator.
+#    `make seal-mle` runs the same CLI in bare mode (-mode bare -enc A128GCM
+#    -typ JOSE -iat-ms -envelope visa-mle) and encrypts to tokens-peer, the key
+#    the simulator opens with. Nothing is signed.
+printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
+  curl -s -X POST http://localhost:8080/api/v1/__sim/peer/mle \
+       -H 'Content-Type: application/json' --data-binary @-
+# {"encData":"eyJ..."}: sealed back to tokens-our. This is the envelope the
+# step 5 relay unwraps for you.
 ```
+
+The demo's own `cmd/seal-payload` is gone. Both targets run
+[scripts/seal-payload.sh](scripts/seal-payload.sh), which reads the CLI version
+from `go.mod`, so the tool always matches the framework the app links. See the
+framework's
+[jose.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli)
+for every flag.
 
 The keystore exercises both source styles for a single keypair: `tokens-our` is
 file-backed (production pattern for Kubernetes secret mounts), and
@@ -412,6 +432,8 @@ make check          # fmt + lint + test (pre-commit)
 make advisory-lock-demo    # Two replicas race for the report job's advisory lock: one runs per tick
 make show-sealed-message   # Publish a sealed payment, dump the raw broker body
 make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject
+make seal-payload          # JSON on stdin -> nested JWE-of-JWS body for POST /api/v1/tokens
+make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for the MLE simulator
 ```
 
 ### Adding a Module

@@ -16,8 +16,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// Kid names used throughout the module. Centralized so the module + cmd/seal-payload
-// stay in lockstep without stringly-typed drift.
+// Kid names used throughout the module. Centralized so the module stays free of
+// stringly-typed drift. scripts/seal-payload.sh (make seal-payload / seal-mle)
+// repeats them for the framework seal-payload CLI and must follow any rename.
 const (
 	OurKid  = "tokens-our"
 	PeerKid = "tokens-peer"

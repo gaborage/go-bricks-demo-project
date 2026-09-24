@@ -51,6 +51,10 @@ help:
 	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject"
 	@echo ""
+	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
+	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
+	@echo "  seal-mle          Seal a Visa MLE {\"encData\":...} body for POST /api/v1/__sim/peer/mle (bare JWE)"
+	@echo ""
 	@echo "Load Testing:"
 	@echo "  loadtest-install          Install k6 load testing tool"
 	@echo "  loadtest-crud             Run CRUD mix load test"
@@ -351,6 +355,24 @@ show-sealed-message:
 seal-event-demo:
 	@echo "🔐 Minting sealed events outside the app with the seal-event CLI..."
 	@./scripts/seal-event-demo.sh
+
+# --- JOSE request bodies (framework seal-payload CLI) -------------------------
+# Mint curl bodies for the tokens demo with the framework's seal-payload CLI
+# (go-bricks v0.65.0, #1615/#1620), which replaced the demo-owned cmd/seal-payload.
+# Both read a JSON payload on stdin and print ONLY the sealed body on stdout, so
+# they pipe straight into `curl --data-binary @-` (README, Tokens walkthrough):
+#   seal-payload  nested JWE-of-JWS for POST /api/v1/tokens: signs as tokens-peer,
+#                 encrypts to tokens-our
+#   seal-mle      Visa MLE {"encData":...} for POST /api/v1/__sim/peer/mle: bare
+#                 A128GCM JWE (typ JOSE, ms iat) to tokens-peer, nothing signed
+# scripts/seal-payload.sh reads the CLI version from go.mod, so there is no second
+# pin to drift. Needs keys (make generate-keys); minting does not need the app.
+.PHONY: seal-payload seal-mle
+seal-payload:
+	@./scripts/seal-payload.sh nested
+
+seal-mle:
+	@./scripts/seal-payload.sh mle
 
 # Update dependencies to latest versions
 update:

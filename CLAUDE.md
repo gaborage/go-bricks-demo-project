@@ -800,7 +800,18 @@ if err != nil {
 
 **Bare-JWE / Visa MLE (v0.64.0, ADR-107 + #1585):** the MLE relay endpoint exercises the second seal mode — `jose.Policy{Mode: jose.SealModeBareJWE}` is encrypt-only `JWE(payload)` (no inner JWS), paired with `httpclient.VisaMLEEnvelope()` on `JOSEConfig.Envelope`, which wraps the compact as `{"encData":"<compact>"}` `application/json` on the wire and unwraps inbound responses by shape. Bare mode admits `A128GCM` (via a direct `go-jose/v4` import — no go-bricks alias) and stamps `iat` in milliseconds when `IATMillis: true`. Two invariants shape the demo: bare mode does **not** authenticate the sender (no signature — production pairs it with mTLS / X-Pay-Token), and there is no `mode` key in the `jose:` struct-tag grammar, so a server route cannot select bare mode — the MLE peer simulator binds the envelope as plain JSON and opens/seals manually with `jose.Open`/`jose.Seal`. See [internal/modules/tokens/service/mle_relay_service.go](internal/modules/tokens/service/mle_relay_service.go).
 
-**Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
+**Helper CLI:** request bodies for `curl` come from the framework's `seal-payload` CLI (go-bricks v0.65.0, #1615/#1620). It replaced the demo's own `cmd/seal-payload`, which could only do nested mode. Both targets read JSON on stdin and print only the sealed body, so it pipes into `curl --data-binary @-`:
+
+- `make seal-payload` plays the peer for `POST /api/v1/tokens`. It is a nested JWE-of-JWS that signs with `certs/tokens_peer_private.der` (`-sign-kid tokens-peer`, the route's `verify=`) and encrypts to `certs/tokens_our_public.der` (`-encrypt-kid tokens-our`, its `decrypt=`).
+- `make seal-mle` mints a Visa MLE body for `POST /api/v1/__sim/peer/mle`: `-mode bare -enc A128GCM -typ JOSE -iat-ms -envelope visa-mle`, encrypted to `certs/tokens_peer_public.der` (`-encrypt-kid tokens-peer`), which is the key the MLE peer simulator opens with. Nothing is signed. This is the same header shape as `NewMLEOutboundPolicy`.
+
+[scripts/seal-payload.sh](scripts/seal-payload.sh) runs with `GOWORK=off` and resolves the CLI version with `go list -m` from `go.mod`, so there is no second pin to drift. The script repeats the module's kids, so a kid rename has to touch it too (the server reports drift as `JOSE_KID_UNKNOWN`). The CLI only seals and never opens a reply; the relay endpoints are what decrypt.
+
+```bash
+printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
+  curl -s -X POST http://localhost:8080/api/v1/__sim/peer/mle \
+       -H 'Content-Type: application/json' --data-binary @-
+```
 
 **Reference:** [go-bricks v0.67.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.67.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
@@ -1125,7 +1136,7 @@ Explore the code in this order:
    - `handlers/handlers.go` declares `jose:`-tagged request/response structs that drive the inbound + outbound middleware
    - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
    - In-process peer simulator with the inverse policy makes the demo self-contained
-   - [cmd/seal-payload/](cmd/seal-payload/) is the developer tool that produces compact JWE-of-JWS bodies for `curl`
+   - `make seal-payload` / `make seal-mle` ([scripts/seal-payload.sh](scripts/seal-payload.sh)) mint nested JWE-of-JWS and Visa MLE bodies for `curl` with the framework's `seal-payload` CLI, at the go-bricks version in `go.mod`
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
