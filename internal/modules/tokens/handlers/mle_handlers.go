@@ -28,6 +28,9 @@ type MLERelayRequest struct {
 	PAN string `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
+// RedactedForLog masks the PAN the same way TokenizeRequest does.
+func (r MLERelayRequest) RedactedForLog() any { return panLogView(r.PAN) }
+
 // MLERelayResponse mirrors the plaintext the partner sealed back to us.
 type MLERelayResponse struct {
 	Token *domain.Token `json:"token"`

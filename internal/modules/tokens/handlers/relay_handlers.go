@@ -20,6 +20,10 @@ type RelayRequest struct {
 	PAN string `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
+// RedactedForLog masks the PAN the same way TokenizeRequest does: this body is
+// plaintext on the wire, so it is the likeliest one to be logged whole.
+func (r RelayRequest) RedactedForLog() any { return panLogView(r.PAN) }
+
 // RelayResponse mirrors the unsealed token payload produced by the partner.
 type RelayResponse struct {
 	Token *domain.Token `json:"token"`

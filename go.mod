@@ -10,6 +10,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo/v5 v5.3.1
+	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 )
 
@@ -67,7 +68,6 @@ require (
 	github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3 // indirect
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
-	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/sijms/go-ora/v2 v2.9.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect

@@ -813,6 +813,8 @@ printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
        -H 'Content-Type: application/json' --data-binary @-
 ```
 
+**PAN-bearing requests in logs (go-bricks v0.65.0, ADR-110):** `TokenizeRequest`, `PeerSimRequest`, `RelayRequest` and `MLERelayRequest` implement `logger.Redactor` with a value receiver, so a filtered logger handed the whole struct — the decrypted JOSE request or a plaintext relay body — renders `{"last4":"…"}` and never the PAN. Same rules as the payments card (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)): it backs up `log.sensitivefields`, it is consulted only at `Interface`/`WithFields`, and it does not make logging request bodies acceptable. It cannot reach bytes that were already marshaled, so the relays' outbound `httpclient` body preview stays covered by the `pan` needle. [internal/modules/tokens/handlers/pan_redaction_test.go](internal/modules/tokens/handlers/pan_redaction_test.go) pins all four types.
+
 **Reference:** [go-bricks v0.67.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.67.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Sealed Messages (JWE-of-JWS on AMQP)
@@ -837,6 +839,8 @@ Ordering is the security decision: **encrypt the Subject first, then sign the wh
 **Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
 
 **Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. It then opens the same bytes with `open-event` and the consumer half of the keys (see below), asserting that the verified envelope and clear fields match the decoded wire view and that the card renders as `"<redacted>"`. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
+
+**Card data in logs (go-bricks v0.65.0, ADR-110):** `domain.CardDetails` implements `logger.Redactor` with a value receiver. `RedactedForLog()` returns `{last4}` only, the one card fragment `Last4` allows in a log line, so a whole `CardDetails`, `PaymentAuthorized` or `service.AuthorizeRequest` handed to a filtered logger's `Interface` or `WithFields` renders that shape, never the PAN, the expiry or the holder's name. The HTTP body's `handlers.CardRequest` renders the same view by delegating to it, which also covers a whole `AuthorizePaymentRequest`: the `pan` needle alone would mask the PAN there but leave the expiry and the holder in clear. This hardens the masking already in place and replaces none of it: the consumer still logs `cardLast4` explicitly, and `log.sensitivefields: [pan]` still masks any field named `pan`. The hook is not consulted at `Err`, through `Msgf` or by an unfiltered logger. Its result is filtered by the needle list again, so its keys must never contain `pan`. [internal/modules/payments/domain/card_redaction_test.go](internal/modules/payments/domain/card_redaction_test.go) and [internal/modules/payments/handlers/card_redaction_test.go](internal/modules/payments/handlers/card_redaction_test.go) log each struct through the app's filter and through the framework default (which has no `pan` needle), and assert that no digit run longer than four reaches the sink.
 
 **Minting sealed events outside the app:** `make seal-event-demo` runs
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh), which uses the
@@ -1177,12 +1181,14 @@ Explore the code in this order:
 
 8. **[internal/modules/tokens/](internal/modules/tokens/)** - Tokens module (JOSE middleware demo)
    - `handlers/handlers.go` declares `jose:`-tagged request/response structs that drive the inbound + outbound middleware
+   - Every PAN-bearing request struct implements `logger.Redactor` (value receiver), so a filtered logger handed one whole renders only `{"last4":"…"}`; `handlers/pan_redaction_test.go` pins all four
    - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
    - In-process peer simulator with the inverse policy makes the demo self-contained
    - `make seal-payload` / `make seal-mle` ([scripts/seal-payload.sh](scripts/seal-payload.sh)) mint nested JWE-of-JWS and Visa MLE bodies for `curl` with the framework's `seal-payload` CLI, at the go-bricks version in `go.mod`
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
+   - `domain.CardDetails` and the HTTP body's `handlers.CardRequest` implement `logger.Redactor`, so a card (or the event or request that holds it) handed to a filtered logger renders `{last4}` and never the PAN, expiry or holder
    - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the quorum DLQ pair (explicit `DeadLetterSpec.QueueType`; quorum is the v0.64.0 default, see Troubleshooting for the retained-volume trap) and the consumerless `payments.authorized.tap` queue
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
    - `make show-sealed-message` proves the PAN never reaches the broker, then opens the same bytes with `open-event` (consumer keys, card still `"<redacted>"`)

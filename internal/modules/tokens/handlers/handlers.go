@@ -33,6 +33,35 @@ type TokenizeRequest struct {
 	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
+// Every request in this package that carries a PAN masks itself when a
+// filtered logger is handed the whole struct.
+var (
+	_ logger.Redactor = TokenizeRequest{}
+	_ logger.Redactor = PeerSimRequest{}
+	_ logger.Redactor = RelayRequest{}
+	_ logger.Redactor = MLERelayRequest{}
+)
+
+// RedactedForLog implements logger.Redactor (go-bricks v0.65.0, ADR-110): a
+// filtered logger's Interface and WithFields render the last four digits in
+// place of the struct, so a handler that logs the decrypted request whole never
+// writes the PAN. It backs up log.sensitivefields, which masks the field only
+// while it is still NAMED pan. The hook is not consulted at Err, through Msgf
+// or by an unfiltered logger. VALUE receiver on purpose: a pointer-receiver
+// method would leave a bare request unrecognized and walked field by field.
+func (r TokenizeRequest) RedactedForLog() any { return panLogView(r.PAN) }
+
+// panLogView is the log-safe shape shared by the package's PAN-bearing
+// requests: the last four digits and nothing else. Its key must never contain
+// "pan", or the needle list would mask the result it filters again.
+func panLogView(pan string) map[string]any {
+	last4 := ""
+	if len(pan) >= 4 {
+		last4 = pan[len(pan)-4:]
+	}
+	return map[string]any{"last4": last4}
+}
+
 // TokenizeResponse is the JOSE-protected response. Outbound = sign with our private
 // key (tokens-our) + encrypt to the peer's public key (tokens-peer). The framework
 // seals before returning the bytes on the wire.
@@ -52,6 +81,9 @@ type PeerSimRequest struct {
 	_   struct{} `jose:"decrypt=tokens-peer,verify=tokens-our"`
 	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
+
+// RedactedForLog masks the PAN the same way TokenizeRequest does.
+func (r PeerSimRequest) RedactedForLog() any { return panLogView(r.PAN) }
 
 // PeerSimResponse is the simulator's outbound seal — peer signs, peer encrypts to us.
 type PeerSimResponse struct {

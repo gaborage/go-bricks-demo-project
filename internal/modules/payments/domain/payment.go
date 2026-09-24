@@ -8,6 +8,8 @@
 // clear so a broker operator can still route and inspect them.
 package domain
 
+import "github.com/gaborage/go-bricks/logger"
+
 // CardDetails is the sealed Subject of PaymentAuthorized: it is the only member
 // that leaves this process encrypted.
 //
@@ -28,15 +30,35 @@ type CardDetails struct {
 	Holder   string `json:"holder" validate:"required"`
 }
 
+// CardDetails is safe to hand to a filtered logger whole; see RedactedForLog.
+var _ logger.Redactor = CardDetails{}
+
 // Last4 returns the final four digits of the PAN, or "" when the PAN is too
 // short to have them. This is the ONLY card fragment any log line may carry —
-// PCI hygiene applies to demo data too, so no caller ever logs CardDetails
-// itself.
+// PCI hygiene applies to demo data too, so callers log it explicitly
+// (cardLast4) rather than CardDetails itself.
 func (c CardDetails) Last4() string {
 	if len(c.PAN) < 4 {
 		return ""
 	}
 	return c.PAN[len(c.PAN)-4:]
+}
+
+// RedactedForLog implements logger.Redactor (go-bricks v0.65.0, ADR-110). A
+// filtered logger's Interface and WithFields render this shape in place of the
+// struct, at any depth — so a whole PaymentAuthorized, or the service request
+// that carries CardDetails as its Card field, logged by mistake carries only
+// the last four digits (the one fragment Last4 allows), never the PAN, the
+// expiry or the holder's name.
+//
+// It is a backstop, not the rule: call sites still log cardLast4 explicitly,
+// and log.sensitivefields still masks any field NAMED pan. The hook is not
+// consulted at Err, through Msgf or by an unfiltered logger. Its result is
+// itself filtered by the needle list, which is why no key here contains "pan".
+// VALUE receiver on purpose: a pointer-receiver method would leave a bare
+// CardDetails unrecognized, and the filter would walk it field by field.
+func (c CardDetails) RedactedForLog() any {
+	return map[string]any{"last4": c.Last4()}
 }
 
 // PaymentAuthorized is the event published when an authorization succeeds.
