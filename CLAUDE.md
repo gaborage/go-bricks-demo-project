@@ -555,7 +555,9 @@ make loadtest-smoke
 
 **go-bricks version:** `go.mod` is pinned to go-bricks `v0.67.0`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
-like any other dependency.
+like any other dependency. The per-environment operator decisions for the
+v0.64.0 → v0.67.0 upgrade live in
+[wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
 
 **Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
 file. It stays untracked — `.gitignore` is a deny-all allowlist, so `go.work` is
@@ -652,6 +654,7 @@ Security is mandatory, not optional:
   // SECURITY: Manual SQL review completed - identifier quoting verified
   query := qb.WhereRaw("custom_condition")
   ```
+  The same annotation is required on every raw-SQL door the framework lists — `f.Raw`, `jf.Raw`, `database.Raw`, a string `Having(...)`, and (framework convention as of go-bricks v0.65.0, #1616) every `qb.Expr` / `qb.MustExpr` SQL body. The compiler does not enforce it; review does.
 - **Secrets management:** Only load secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault). See [internal/modules/shared/secrets/](internal/modules/shared/secrets/)
 - **No hardcoded credentials** - Never commit secrets. No secrets in logs or error messages
 - **Audit logging** - Log sensitive operations (access control changes, data modifications) with trace IDs for correlation
@@ -936,14 +939,18 @@ it to the declared expression hatch `qb.Expr()` / `qb.MustExpr()`:
 
 ```go
 qb.Select("COUNT(*)")                        // REJECTED
+// SECURITY: Manual SQL review completed - constant aggregate, no caller input
 qb.Select(qb.MustExpr("COUNT(*)"))           // SAFE
+// SECURITY: Manual SQL review completed - constant aggregate over a fixed column, no caller input
 qb.Select(qb.MustExpr("AVG(price)", "avg"))  // SAFE — expression + alias
 qb.OrderBy("created_date DESC")              // SAFE — bounded direction is in the grammar
 ```
 
 `Expr`/`MustExpr` carry SQL verbatim and are NOT escaped — never interpolate user
-input into them. `cols.As(alias)` is the one door that **panics** (at the `As` call,
-with `*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
+input into them, and annotate every call site with `// SECURITY: Manual SQL review
+completed - <what was verified>` (see [Security Requirements](#security-requirements)).
+`cols.As(alias)` is the one door that **panics** (at the `As` call, with
+`*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
 
 ### Migrations
 - Place SQL files in [migrations/](migrations/) directory
@@ -1206,7 +1213,8 @@ CORS_DEV_WILDCARD=true APP_ENV=development ./bin/go-bricks-demo-project
 # As of go-bricks v0.60.0 (ADR-082), every identifier door is validated against a
 # safe identifier grammar. This bit the products repository's pagination COUNT
 # query (internal/modules/products/repository/repository.go).
-# Fix: wrap the expression in the declared hatch.
+# Fix: wrap the expression in the declared hatch, and annotate the call site
+# with the `// SECURITY: Manual SQL review completed - ...` comment (#1616).
 #   qb.Select("COUNT(*)")              ->  qb.Select(qb.MustExpr("COUNT(*)"))
 # Note this is a RUNTIME rejection, not a compile error — `go build` stays green,
 # so exercise the affected endpoint (GET /api/v1/products?page=1&pageSize=2) after
@@ -1263,6 +1271,8 @@ APP_ENV=development make run   # app.debug: true is already in config.developmen
 docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized
 docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # then restart the app. Or destroy the volume: make docker-down && make dev
+# The same mismatch met at RECONNECT (not startup) is a WARN plus skip-until-restart
+# as of v0.65.0 — see "AMQP Topology Re-declared on Reconnect" below.
 # Related: the management API reports a quorum queue's `messages` on the ~5s
 # stats emission tick — scripts/seal-event-demo.sh polls for DLQ growth instead
 # of reading the depth once for exactly this reason.
@@ -1285,6 +1295,164 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # MessagingClientFactory product carries no byte door, so every publish fails
 # with messaging.ErrPublishDoorUnavailable — publish through a framework-built
 # client instead.
+```
+
+### Sealed Dedup Key Is Typed and Bound to Its Delivery (go-bricks v0.65.0 / v0.66.0)
+
+```bash
+# Symptom (compile): cannot use key (variable of struct type messaging.DedupKey)
+# as string value. As of go-bricks v0.65.0 (#1630) Metadata.DedupKey() returns,
+# and InboxProcessor.ProcessOnce takes, a messaging.DedupKey. Render it with
+# key.String(): the persisted gobricks_inbox spelling is unchanged (the wire id,
+# or "<sign family>:<jti>" for a sealed key), so no ledger migration.
+# messaging.IsSealedDedupKey is gone — use key.Sealed().
+# Symptom (runtime, v0.66.0 #1700): a sealed delivery is refused with an error
+# wrapping messaging.ErrInvalidEventID —
+#   sealed dedup key outside a sealed delivery     (ctx lost the delivery marker)
+#   sealed dedup key belongs to another delivery   (a key kept from another delivery)
+# — no ledger row is written, the handler's work does not run, and the message
+# takes the poison path to the DLQ. The inbox admits a sealed key only under the
+# ctx of the delivery that produced it. Rules (payments/module.go follows both):
+#   - take the key from THIS delivery's meta.DedupKey(); never cache it
+#   - call ProcessOnce with the handler's ctx (or one derived from it), never
+#     context.Background() or a detached goroutine
+# A replay of the same envelope composes an equal key, so seal-event-demo's
+# "same bytes twice" proof is still admitted and then deduplicated by the ledger.
+# The payments handler logs dedupKey at INFO on purpose (the framework never
+# renders a sealed key itself): it is an identifier, never the PAN or a secret.
+```
+
+### JOSE Relay Refuses a Plaintext 2xx (go-bricks v0.65.0)
+
+```bash
+# Symptom: POST /api/v1/tokens/relay or /api/v1/tokens/mle-relay fails with an
+# error wrapping
+#   httpclient: successful response was not JOSE-protected (peer: "...", status: 200)
+# and the transport logs one WARN (never the body).
+# As of go-bricks v0.65.0 (#1637, ADR-107 amendment) a JOSETransport with an
+# Inbound policy refuses a 2xx it did not unwrap: nested mode needs Content-Type
+# application/jose; envelope mode (VisaMLEEnvelope) needs a non-empty top-level
+# encData member. Non-2xx replies (plaintext error bodies), 204, 304 and HEAD
+# still pass through, and the refusal is not retried by WithRetries. Match it
+# with errors.Is(err, httpclient.ErrJOSEPlaintextResponse).
+# The in-process simulators seal every 2xx, so the demo's behavior is unchanged
+# — dropping WithRawResponse from the MLE simulator is what would trip it.
+# Decision: AllowPlaintextSuccess stays UNSET on both relays; setting it hands
+# the caller a body nothing authenticated. A real partner must protect every
+# 2xx it answers — fix the partner route, don't set the flag.
+```
+
+### AMQP Topology Re-declared on Reconnect (go-bricks v0.65.0)
+
+```bash
+# What changed (go-bricks v0.65.0, #1676/#1675, ADR-113): after an AMQP reconnect
+# the registry re-runs every exchange/queue/binding declaration once per new
+# channel before the consumer re-subscribes, so a broker that lost its topology
+# no longer leaves payments.authorized in a silent 404 loop. On success:
+#   INFO  Messaging topology redeclared on new channel
+# Symptom 1: at reconnect,
+#   WARN  Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart ...
+# A surviving entity whose arguments no longer match (the classic-vs-quorum DLQ
+# pair above, an old unbounded payments.authorized.tap) is skipped for the life
+# of the process. Fix the server-side definition and restart. At STARTUP the same
+# mismatch still aborts boot.
+# Symptom 2: during a broker outage,
+#   WARN  Consumer re-subscribe attempt failed, will retry
+# from the 5th consecutive failed attempt (attempts 1-4 stay at Debug), with
+# amqp_reply_code / amqp_reply_text when the broker refused it. The retry cadence
+# is unchanged; the Error Analysis dashboard's log-level panel will show them.
+# Not covered: the native streams lane. product-activity (port 5552) is declared
+# at startup only, so after a broker wipe the super stream does not come back
+# until the app restarts. Fix: once the broker is back, stop `make run` and start
+# it again.
+```
+
+### `/ready` Key `active_consumers` Renamed (go-bricks v0.65.0)
+
+```bash
+# Symptom: a Grafana panel saved in the UI, a New Relic NRQL query or an alert
+# reading messaging_stats.active_consumers from GET /api/v1/ready goes flat.
+# As of go-bricks v0.65.0 (#1684) that key is gone: it counted tenant consumer
+# REGISTRIES, and is now spelled consumer_registries. New beside it:
+# declared_consumers, subscribed_consumers, consumer_resubscribes and
+# consumer_max_fail_streak.
+curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats
+# Fix: repoint readers to consumer_registries (the old meaning) or to
+# declared_consumers / subscribed_consumers (what the old name suggested).
+# Nothing in this repo reads the key. messaging_stats appear only in the 200
+# body; a 503 carries the blocking kind's status and a fixed error.
+```
+
+### Topology Repair Driven by Publishers (go-bricks v0.67.0)
+
+```bash
+# What changed (go-bricks v0.67.0, #1776/#1779, ADR-113 amendment): every pooled
+# publisher's new channel now also drives the redeclare pass, not only the
+# consumer's. Two visible effects:
+# 1. "Messaging topology redeclared on new channel" (INFO) now also appears when
+#    the PUBLISHER's channel is replaced: a publish into a deleted exchange, or a
+#    dropped publisher connection. It does not appear at the first publish, and
+#    usually not at boot: the "" publisher is leased at startup pre-init, before
+#    the consumer registry exists, so a first channel that comes up that early
+#    finds no topology to replay. It CAN appear once at boot, with
+#    channel_generation 1, when that first channel comes up after consumer setup
+#    has begun (a slow broker connect); that line is benign. After startup, or
+#    with a higher generation, it means a publisher channel was replaced. A
+#    publisher the pool creates later (after messaging.publisher.idlettl evicts
+#    it) does run one idempotent pass on its first channel.
+# 2. An exchange deleted under a live app now heals itself. Before, every later
+#    publish to it failed with ErrPublishRetriesExhausted until a restart.
+# Caveat, money path: the repair is NOT atomic. The pass runs exchanges, then
+# queues, then bindings. A publish that lands after payment-events is back but
+# before payments.authorized / payments.authorized.tap are re-bound is
+# broker-acked yet unroutable: the typed publisher sets no Mandatory flag, so
+# the broker drops it silently. The caller still gets 202 Accepted and that
+# payment.authorized event is lost. Treat a deleted exchange as an incident and
+# reconcile the payments authorized during the repair window.
+```
+
+### Multi-Tenant Migrate CLI Exit Codes and Summary (go-bricks v0.67.0)
+
+```bash
+# Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
+# failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
+# (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.67.0)
+# Exit codes: 0 clean; 1 fleet split (something was attempted and something
+# failed or was never attempted); 2 nothing attempted, no schema touched (empty
+# or failed tenant listing, unreadable tenant store, credential provider that
+# could not be built, half-set migrator identity, or any misuse such as an
+# unknown flag or a stray argument).
+# Every run prints exactly one summary line, even one that stopped early:
+#   Migrate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
+# --json adds verdict / listed / attempted / failed / not_attempted to the
+# summary record. make stops on any non-zero exit, so the migrate-multitenant-*
+# targets cannot tell 1 from 2 — read the summary line.
+# Operator rule: NEVER export GOBRICKS_MIGRATE_MIGRATOR_USER or
+# GOBRICKS_MIGRATE_MIGRATOR_PASSWORD. One alone makes every run exit 2. Both
+# together make one role run every tenant's DDL, which collapses the per-role
+# search_path tenant isolation (wiki/MULTI_TENANT_MIGRATION_DEMO.md).
+```
+
+### PostgreSQL and Cache Config Refusals (go-bricks v0.65.0 / v0.66.0)
+
+```bash
+# None of these fire on this repo's configs (TCP localhost hosts, no
+# connectionstring, no cache). They bite when an environment changes that.
+# Symptom: startup (or go-bricks-migrate) refuses a database section for:
+# - a PostgreSQL connectionstring that carries service= (even an empty one), or
+#   names none while PGSERVICE is set (v0.66.0, #1715). A libpq service file
+#   would supply host and TLS out of the config's sight; inline its keys instead.
+# - TLS claimed on a unix-socket (absolute-path) host: a database.tls block
+#   (v0.65.0, #1613), sslmode/ssl* keys in the connectionstring (#1642), or PGSSL*
+#   environment variables beside one (v0.66.0, #1699). pgx skips TLS on a socket,
+#   so the claim would be dropped silently. Use a TCP host or drop the claim.
+# - a connectionstring or host list that names no host, including an empty
+#   comma-separated entry (pgx would fall back to an implicit unix socket).
+# Cache (v0.66.0, #1740): with cache.enabled and NO cache.redis.keyprefix, every
+# key is namespaced under app.name, so the cache re-keys once on upgrade and
+# app.name must be a valid key namespace. Decide keyprefix before enabling a
+# cache; an explicit "" opts out of the prefix.
 ```
 
 ### Port Conflicts

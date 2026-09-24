@@ -86,7 +86,8 @@ func (h *MLEHandler) PeerSimulate(req MLEEnvelope, ctx server.HandlerContext) (*
 // bare {"encData":...} object Visa specifies. Wrapping it in the standard
 // APIResponse envelope would bury encData under "data", and the client-side
 // VisaMLEEnvelope recognizes replies by shape — it would find no top-level
-// encData and hand the caller ciphertext.
+// encData, and the relay client would refuse the 200 as
+// httpclient.ErrJOSEPlaintextResponse (go-bricks v0.65.0, #1637).
 func (h *MLEHandler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.POST(hr, r, "/tokens/mle-relay", h.Relay)
 	server.POST(hr, r, "/__sim/peer/mle", h.PeerSimulate,

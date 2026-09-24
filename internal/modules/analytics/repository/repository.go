@@ -143,6 +143,7 @@ func buildTopViewedQuery(limit int) (query string, args []any, err error) {
 	}
 
 	qb := database.NewQueryBuilder(database.PostgreSQL)
+	// SECURITY: Manual SQL review completed - constant COUNT(*) aggregate under a fixed alias, no caller input
 	return qb.Select("product_id", qb.MustExpr("COUNT(*)", totalViewsAlias)).
 		From(productViewsTable).
 		GroupBy("product_id").

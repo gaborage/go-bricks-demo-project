@@ -160,8 +160,30 @@ Expected progress (text mode — add `--json` for NDJSON):
   globex (postgresql) ... ok (1.17s)
   initech (postgresql) ... ok (1.16s)
 
-Migrate summary: 3 tenants total, 0 failed
+Migrate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
+
+As of go-bricks v0.67.0 (ADR-115, #1770/#1771) every `migrate`/`info`/`validate`
+run prints exactly one summary record — even a run that stopped before the
+first tenant — and the process exit code carries the same verdict:
+
+| Exit | `verdict=` | Meaning |
+|------|------------|---------|
+| `0` | `clean` | Every listed tenant was attempted and none failed. |
+| `1` | `fleet_split` | At least one tenant was attempted and at least one failed or was never attempted — the fleet is split across versions. |
+| `2` | `nothing_attempted` | No tenant was attempted, so no schema changed and a re-run is safe: an empty or failed tenant listing, an unreadable tenant store, a credential provider that could not be built, a half-set migrator identity (below), or a misuse (unknown flag, stray argument, unresolvable flag combination). |
+
+The verdict names the **fleet** and the exit code names the **run**, so a
+parallel run cancelled after its last tenant finished can report
+`verdict=clean` and still exit 1. `make` stops on any non-zero exit, so the
+`migrate-multitenant-*` targets cannot tell 1 from 2 — read the summary line.
+
+> **Never export `GOBRICKS_MIGRATE_MIGRATOR_USER` or
+> `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` in a shell or CI job that runs these
+> targets.** One without the other makes every run exit 2 before any tenant
+> is attempted. Both together overlay one credential onto every tenant, so a
+> single role runs every tenant's DDL — which collapses the per-role
+> `search_path` isolation this demo depends on.
 
 Inspect the result:
 
@@ -193,7 +215,7 @@ failures).
 
 ```bash
 make migrate-multitenant-info
-# Info summary: 3 tenants total, 0 failed
+# Info summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
 
 `validate` checks that on-disk migrations match what's been applied — no
@@ -201,7 +223,7 @@ SQL is executed:
 
 ```bash
 make migrate-multitenant-validate
-# Validate summary: 3 tenants total, 0 failed
+# Validate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
 
 ### 5. Reset between runs
@@ -268,7 +290,11 @@ re-running `migrate-multitenant-init`.
   concurrently (framework caps internally at 32). Watch for Postgres
   connection-storm risk on real fleets.
 * **`--json`**: NDJSON progress events for CI/CD pipelines. Useful for
-  driving the next step (`go-bricks#376` parser) once it lands.
+  driving the next step (`go-bricks#376` parser) once it lands. The final
+  `"event":"summary"` record carries `verdict` (`clean` | `fleet_split` |
+  `nothing_attempted`), `listed`, `attempted`, `failed` and `not_attempted`
+  (v0.67.0); `total` is kept for older readers and still means the attempted
+  count — prefer `attempted` or `listed` in new code.
 * **AWS Secrets Manager**: swap `--credentials-from=config-file` for
   `--credentials-from=aws-secrets-manager` and supply `--secrets-prefix`.
   Per-tenant secrets are looked up at `<prefix><tenant_id>`. The CLI also

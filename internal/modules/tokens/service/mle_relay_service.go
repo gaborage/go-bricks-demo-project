@@ -111,8 +111,12 @@ func NewMLERelayService(cfg *MLERelayConfig) (*MLERelayService, error) {
 			Resolver: jose.NewKeyStoreResolver(cfg.KeyStore),
 			// VisaMLEEnvelope wraps the outbound compact as
 			// {"encData":"<compact>"} application/json, and recognizes the reply by
-			// SHAPE rather than Content-Type — anything without a non-empty string
-			// encData member (a plaintext error envelope, say) passes through.
+			// SHAPE rather than Content-Type. A reply without a non-empty string
+			// encData member passes through only on a failure status (a plaintext
+			// error envelope, say); on a 2xx the transport refuses it with
+			// httpclient.ErrJOSEPlaintextResponse (go-bricks v0.65.0, #1637).
+			// AllowPlaintextSuccess stays unset: a real partner must protect every
+			// 2xx it answers.
 			Envelope: httpclient.VisaMLEEnvelope(),
 		}).
 		Build()

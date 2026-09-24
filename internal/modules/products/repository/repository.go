@@ -125,6 +125,7 @@ func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*dom
 	qb := database.NewQueryBuilder(database.PostgreSQL)
 
 	// First, get total count
+	// SECURITY: Manual SQL review completed - constant COUNT(*) aggregate, no caller input
 	countQuery, countArgs, err := qb.Select(qb.MustExpr("COUNT(*)")).
 		From("products").
 		ToSQL()
