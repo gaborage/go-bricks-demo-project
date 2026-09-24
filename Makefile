@@ -35,6 +35,7 @@ help:
 	@echo "  migrate-multitenant-up        Boot postgres + apply migrations to every tenant"
 	@echo "  migrate-multitenant-info      Show migration status for every tenant"
 	@echo "  migrate-multitenant-validate  Validate (no apply) for every tenant"
+	@echo "  migrate-multitenant-verdict   Show run verdicts + exit codes 0/2/1 (validate only)"
 	@echo "  migrate-multitenant-reset     Drop and recreate every tenant's schema"
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
@@ -288,6 +289,26 @@ migrate-multitenant-info: migrate-multitenant-check
 migrate-multitenant-validate: migrate-multitenant-check
 	@echo "🔍 Validating multi-tenant migrations..."
 	$(GO_BRICKS_MIGRATE) validate $(MULTITENANT_FLAGS)
+
+# ----------------------------------------------------------------------------
+# Run verdicts and exit codes (go-bricks v0.67.0, ADR-115, #1770/#1771)
+# ----------------------------------------------------------------------------
+# make stops on ANY non-zero exit, so the targets above cannot tell exit 1
+# (fleet split) from exit 2 (nothing attempted). This runs the CLI three ways
+# with --json and prints each exit code and summary record: the real fleet
+# (0, clean), an empty fleet (2, nothing_attempted) and the fleet plus one
+# unreachable tenant (1, fleet_split). validate only: nothing is migrated.
+# VERDICT_ACTION=info needs only migrate-multitenant-init. PG_PORT is honoured
+# for a host Flyway only (MULTITENANT_FLYWAY_PATH=flyway); see the script header.
+.PHONY: migrate-multitenant-verdict
+migrate-multitenant-verdict: migrate-multitenant-check
+	@echo "⚖️  Showing go-bricks-migrate run verdicts and exit codes..."
+	@GO_BRICKS_MIGRATE=$(GO_BRICKS_MIGRATE) \
+	MULTITENANT_CONFIG=$(MULTITENANT_CONFIG) \
+	MULTITENANT_FLYWAY_CONF=$(MULTITENANT_FLYWAY_CONF) \
+	MULTITENANT_MIGRATIONS_DIR=$(MULTITENANT_MIGRATIONS_DIR) \
+	MULTITENANT_FLYWAY_PATH=$(MULTITENANT_FLYWAY_PATH) \
+	./scripts/migrate-verdict-demo.sh
 
 # Drop and recreate every tenant's schema. Useful between demo runs or when
 # experimenting with broken migrations.

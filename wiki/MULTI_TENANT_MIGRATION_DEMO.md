@@ -80,6 +80,7 @@ migrations-multitenant/
 scripts/
     flyway-docker.sh                          Wrapper: flyway-in-Docker as --flyway-path
     capture-flyway-samples.sh                 Captures samples/ JSON fixtures
+    migrate-verdict-demo.sh                   Runs the CLI three ways: exit codes 0/2/1
     multitenant-reset.sh                      Drops + recreates every tenant schema
 etc/docker/postgres/multitenant-init.sql      Roles + schemas bootstrap
 samples/flyway-output/                        JSON fixtures for go-bricks#376
@@ -93,6 +94,7 @@ make migrate-multitenant-init      # Bootstrap roles + schemas (idempotent)
 make migrate-multitenant-up        # Apply migrations to every tenant
 make migrate-multitenant-info      # Show status for every tenant
 make migrate-multitenant-validate  # Validate (no apply) for every tenant
+make migrate-multitenant-verdict   # Exit codes 0/2/1 + summary records (validate only)
 make migrate-multitenant-reset     # Drop + recreate every tenant schema
 make migrate-multitenant-samples   # Capture JSON fixtures (feeds go-bricks#376)
 ```
@@ -177,6 +179,7 @@ The verdict names the **fleet** and the exit code names the **run**, so a
 parallel run cancelled after its last tenant finished can report
 `verdict=clean` and still exit 1. `make` stops on any non-zero exit, so the
 `migrate-multitenant-*` targets cannot tell 1 from 2 — read the summary line.
+[Run verdicts, three ways](#run-verdicts-three-ways) produces all three.
 
 > **Never export `GOBRICKS_MIGRATE_MIGRATOR_USER` or
 > `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` in a shell or CI job that runs these
@@ -235,6 +238,59 @@ make migrate-multitenant-reset
 Drops and recreates every tenant's schema. The role + search_path stay
 intact, so the next `make migrate-multitenant-up` will succeed without
 re-running `migrate-multitenant-init`.
+
+## Run verdicts, three ways
+
+`make` stops on any non-zero exit, so the `migrate-multitenant-*` targets
+cannot show you exit 1 and exit 2 side by side. `make migrate-multitenant-verdict`
+runs [`scripts/migrate-verdict-demo.sh`](../scripts/migrate-verdict-demo.sh),
+which calls `go-bricks-migrate validate --json` three times with the same flags
+as the targets above, and prints each run's exit code and summary record:
+
+| Case | Fleet config | Exit | `verdict` |
+|------|--------------|------|-----------|
+| 1 | `config.multitenant.yaml`, as-is | `0` | `clean` |
+| 2 | a throwaway fleet with `tenants: {}` | `2` | `nothing_attempted` |
+| 3 | the real fleet plus a tenant `unreachable` whose role and database do not exist | `1` | `fleet_split` |
+
+```bash
+make migrate-multitenant-up        # validate needs an applied fleet
+make migrate-multitenant-verdict
+```
+
+The third case, abridged:
+
+```text
+── 3/3 a split fleet: the real 3 plus 'unreachable' (no such role or database) ──
+  acme: ok
+  globex: ok
+  initech: ok
+  unreachable: fail (flyway command failed: exit status 1)
+  summary:   {"action":"validate","attempted":4,"event":"summary","failed":1,"listed":4,"not_attempted":0,"total":4,"verdict":"fleet_split"}
+  stderr:    Error: migration: fleet split
+  exit code: 1  ✅ expected 1 (fleet_split, 1 failed)
+```
+
+* **Read-only.** The action is `validate`, or `info` with
+  `VERDICT_ACTION=info`, which needs only `make migrate-multitenant-init`
+  because Flyway `validate` fails on a pending migration. The script refuses
+  `migrate`. The throwaway configs live in a private temp directory removed on
+  exit, and `config.multitenant.yaml` is never edited.
+* **No credential, real or fake.** The `unreachable` tenant has no password. It
+  uses the same host and port as the real tenants, so it takes the same Flyway
+  path and fails only at the Postgres login. For a failed tenant the script also
+  prints Flyway's own `ERROR`/`FATAL` lines, which the framework has already
+  password-redacted.
+* **Asserted, not just printed.** The script exits 1 unless all three runs
+  match the table, including exactly one failed tenant in case 3. It stops
+  early when the installed CLI prints no `verdict` (older than v0.67.0: run
+  `make migrate-multitenant-install`), and when either
+  `GOBRICKS_MIGRATE_MIGRATOR_*` variable is set.
+* **Postgres on another host port.** `scripts/flyway-docker.sh` dials the
+  container port inside the compose network, so a remapped host port needs no
+  override. With a host Flyway (`make migrate-multitenant-verdict
+  MULTITENANT_FLYWAY_PATH=flyway`) the script honours `PG_PORT` and rewrites
+  each tenant's `port:` in its temp copy.
 
 ## Adding a tenant
 

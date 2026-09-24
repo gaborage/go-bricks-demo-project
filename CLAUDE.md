@@ -1265,6 +1265,9 @@ Explore the code in this order:
     - `messaging.streams` — stream URI (port 5552), `addressresolver` for Docker port mapping, and the lowered `offsetstore.countbeforestorage`
     - See `make generate-keys` for key generation
 
+12. **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Multi-tenant migration tooling (schema-per-tenant via `go-bricks-migrate`)
+    - `make migrate-multitenant-verdict` ([scripts/migrate-verdict-demo.sh](scripts/migrate-verdict-demo.sh)) runs `go-bricks-migrate validate --json` three ways and prints exit codes 0 / 2 / 1 beside the `clean` / `nothing_attempted` / `fleet_split` summary records (ADR-115); read-only, nothing is migrated
+
 ### Runtime Tour (15-20 minutes)
 
 Experience the application running:
@@ -1585,6 +1588,7 @@ make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.67.0)
 # --json adds verdict / listed / attempted / failed / not_attempted to the
 # summary record. make stops on any non-zero exit, so the migrate-multitenant-*
 # targets cannot tell 1 from 2 — read the summary line.
+make migrate-multitenant-verdict   # all three exit codes side by side, validate only
 # Operator rule: NEVER export GOBRICKS_MIGRATE_MIGRATOR_USER or
 # GOBRICKS_MIGRATE_MIGRATOR_PASSWORD. One alone makes every run exit 2. Both
 # together make one role run every tenant's DDL, which collapses the per-role
