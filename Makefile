@@ -63,6 +63,7 @@ help:
 	@echo "  loadtest-ramp             Run ramp-up test (find limits)"
 	@echo "  loadtest-spike            Run spike test (traffic bursts)"
 	@echo "  loadtest-sustained        Run sustained load test (15min)"
+	@echo "  loadtest-topology-repair  Delete both AMQP exchanges under load; report repair + lost 202s (~2.5min)"
 	@echo "  loadtest-tokens           Run tokens relay (JOSE) load test (~12min)"
 	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
 	@echo "  loadtest-tokens-mle       Run tokens MLE relay (bare JWE + encData) load test (~12min)"
@@ -73,6 +74,9 @@ help:
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
 	@echo "  loadtest-analyze FILE=... Analyze metrics file"
+	@echo ""
+	@echo "Messaging resilience:"
+	@echo "  redeclare-demo            Delete payment-events/product-events under the live app; watch them self-repair"
 
 # Check if required dependencies are installed
 check-deps:
@@ -528,6 +532,41 @@ loadtest-spike: check-k6
 	@k6 run loadtests/spike-test.ts
 	@echo ""
 	@echo "✅ Spike load test completed"
+
+# ----------------------------------------------------------------------------
+# Topology self-repair (go-bricks v0.67.0, #1776/#1779, ADR-113 amendment)
+# ----------------------------------------------------------------------------
+# An exchange deleted under the live app now heals on the next publish: the
+# publisher's replacement channel drives a redeclare pass of every exchange,
+# queue and binding. Both targets delete exchanges through the RabbitMQ
+# management API, so point them at a demo broker only, and both require the app
+# running (make run) and infra up (make docker-up). Payment bodies carry
+# documented test PANs and are never echoed or logged.
+# Env: APP_URL (K6_BASE_URL for k6), RABBIT_MGMT, RABBIT_USER, RABBIT_PASS;
+# see each script's header for the rest.
+#
+# redeclare-demo: delete payment-events, publish into the hole, show the
+# exchange and both bindings back and a post-repair payment on
+# payments.authorized.tap; then product-events, repaired by the outbox relay.
+#
+# loadtest-topology-repair: constant-arrival POST /products + POST
+# /payments/authorize, both exchanges deleted at t=60s. Reports the repair
+# times and the 202s that never reached the tap ("Lost in repair window", the
+# documented ack-and-drop window: reported, never a failed threshold).
+# Thresholds cover HTTP error rate and latency only. Destructive, so it is not
+# part of loadtest-all.
+.PHONY: redeclare-demo loadtest-topology-repair
+redeclare-demo:
+	@echo "🔧 Deleting exchanges under the live app and watching them self-repair..."
+	@./scripts/topology-repair-demo.sh
+
+loadtest-topology-repair: check-k6
+	@echo "🧪 Running topology repair load test (exchange loss under load)..."
+	@echo "⚠️  Duration: ~2.5 minutes; deletes product-events and payment-events midway"
+	@echo ""
+	@K6_BASE_URL="$${K6_BASE_URL:-$${APP_URL:-http://localhost:8080}}" k6 run loadtests/topology-repair.ts
+	@echo ""
+	@echo "✅ Topology repair load test completed"
 
 # Run sustained load test to detect leaks
 loadtest-sustained: check-k6

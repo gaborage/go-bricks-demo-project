@@ -493,12 +493,29 @@ make loadtest-smoke      # Quick validation (30s)
 make loadtest-crud       # Realistic mix (~15 min)
 make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience (~6 min)
+make loadtest-topology-repair  # Delete both AMQP exchanges under load (~2.5 min, destructive)
 ```
 
 See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the
 scenarios that need more than their script header. Each products scenario above
 is described in its script's header under `loadtests/`; CLAUDE.md's Load Testing
 section lists the pool, rate-limit and slow-query tuning keys.
+
+### Exchange Loss Self-Repair
+As of go-bricks v0.67.0 an AMQP exchange deleted under the running app comes back
+on the next publish, with no restart: the publisher's replacement channel drives
+a full redeclare of every exchange, queue and binding.
+
+```bash
+make redeclare-demo              # Delete payment-events, publish into the hole, watch it heal
+make loadtest-topology-repair    # The same under load; reports "Lost in repair window"
+```
+
+`make redeclare-demo` also lets the outbox relay repair `product-events`. The
+repair is not atomic: a payment published after `payment-events` is back but
+before its bindings are can get `202 Accepted` and still be dropped as
+unroutable, which is the number the load test reports. The streams lane
+(`product-activity`) does not self-repair; restart the app.
 
 ## Configuration
 

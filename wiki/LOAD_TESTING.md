@@ -101,3 +101,96 @@ make loadtest-tokens-vts-smoke   # 1 VU, 30s
 PERF_RATE=50 PERF_DURATION=60s PERF_SUMMARY_FILE=perf-results/vts.json \
   k6 run loadtests/tokens-vts-issuer-relay.ts
 ```
+
+## Topology repair (exchange loss under load)
+
+`loadtests/topology-repair.ts` (`make loadtest-topology-repair`, about 2.5
+minutes) deletes both AMQP exchanges while traffic is flowing and measures
+what go-bricks v0.67.0 does about it (#1776/#1779, ADR-113 amendment). Every
+pooled publisher now drives the topology redeclare pass. The first publish into
+a deleted exchange takes the broker's 404, the client opens a replacement
+channel, and that channel wakes the registry, which re-declares every exchange,
+queue and binding over its own connection. The publish retries on the new
+channel. Before v0.67.0 nothing triggered that pass, and every later publish
+failed with `ErrPublishRetriesExhausted` until the app restarted.
+
+The test is **destructive**: it deletes `product-events` and `payment-events`
+on the broker it points at, so it is not part of `make loadtest-all`. For the
+one-shot version with commentary, run `make redeclare-demo` first.
+
+| Scenario | Executor | What it does |
+| --- | --- | --- |
+| `products` | constant arrival, `TOPO_PRODUCT_RATE`/s | `POST /products`. The outbox relay publishes each `product.created` to `product-events`. |
+| `payments` | constant arrival, `TOPO_PAYMENT_RATE`/s | `POST /payments/authorize`. Each 202 is a sealed publish to `payment-events`, routed to `payments.authorized` (consumer) and `payments.authorized.tap` (no consumer). |
+| `delete_exchanges` | one iteration at `TOPO_DELETE_AT` | `DELETE` both exchanges through the management API, then poll until both exist again and `payment-events` is bound to both queues. |
+| `tap_drain` | 1 VU for the run plus `TOPO_DRAIN_TAIL` | Drains the tap through the management API and counts the distinct orders of this run. |
+
+**Knobs.** `TOPO_PRODUCT_RATE` (5), `TOPO_PAYMENT_RATE` (5), `TOPO_DURATION`
+(120s), `TOPO_DELETE_AT` (60s), `TOPO_DISRUPTION` (15s, the "disruption" phase
+in the per-phase success rates), `TOPO_REPAIR_TIMEOUT` (30s),
+`TOPO_DRAIN_TAIL` (20s), and `PERF_SUMMARY_FILE` for the full summary JSON. The
+management API is `RABBIT_MGMT` (default `http://localhost:15672`) with
+`RABBIT_USER` / `RABBIT_PASS` (default: the broker's default dev user) and
+`RABBIT_VHOST`. As in `scripts/lib/rabbitmq-mgmt.sh`, plaintext `http://` is
+refused for a non-loopback host. The make target maps `APP_URL` onto
+`K6_BASE_URL`:
+
+```bash
+APP_URL=http://localhost:8080 RABBIT_MGMT=http://localhost:15672 \
+  make loadtest-topology-repair
+```
+
+**What passes.** Thresholds cover HTTP error rate and latency only: under 1%
+failed product requests and under 2% failed payment requests (the publish that
+takes the 404 retries, so a short burst is tolerated but a lasting outage is
+not), products p95 < 500ms and p99 < 1s, payments p95 < 800ms and p99 < 2s.
+Whether the topology came back is a check plus the `topology_final_ok` gauge,
+and the loss below is a reported number. Neither fails the run.
+
+**Reading the summary.**
+
+- *HTTP* shows each endpoint's success rate, plus the payments success rate for
+  the baseline, disruption and recovered phases, so a burst of failures shows up
+  confined to the repair.
+- *Topology repair* shows how long after the `DELETE` each exchange, and then
+  the `payment-events` bindings, came back. That time includes the wait for the
+  next publish: nothing repairs until a publish trips the 404.
+- *End-to-end delivery* compares the 202s with the distinct orders that reached
+  the tap. The difference is **Lost in repair window**. It is exact when every
+  request got a 202. Otherwise it is a range, because a request that failed may
+  still have been published. The same numbers land under `topology_repair` in
+  the `PERF_SUMMARY_FILE` JSON.
+
+**Why a loss is not a failure.** The pass is not atomic: exchanges first, then
+queues, then bindings. The typed payments publisher sets no `Mandatory` flag,
+and the framework has no returned-message handler. So a publish that lands after
+`payment-events` is back but before `payments.authorized` and the tap are
+re-bound is acked by the broker and dropped as unroutable, while the caller
+already got 202. That is the documented ack-and-drop window. The test measures it
+instead of hiding it; operationally, treat a deleted exchange as an incident and
+reconcile the payments authorized while it was repaired.
+
+**Why count the tap by draining it.** The tap is capped at `x-max-length` 100
+(drop-head), so its depth stops counting at 100. The management API also reports
+queue depth and `message_stats` on the ~5s statistics tick (quorum queues
+included), while `POST /api/queues/.../get` reads the queue itself. The tap
+stands in for `payments.authorized`, whose consumer removes every delivery at
+once, and the pass re-binds both queues one declare apart. As a cross-check,
+teardown reads the broker's `message_stats.publish` for both queues after the
+drain tail, which is longer than two statistics ticks. Those deltas count
+duplicates too (a publish retried after its first confirm died with the old
+channel arrives twice under one order id), so they should equal distinct plus
+duplicates. The report warns if the tap ever reached its cap.
+
+**What it does not cover.** `product-events` has no bound queue in this demo,
+so outbox product events are unroutable by design. Its repair proves the relay's
+publishes are confirmed again, not delivered. Any source's new channel replays
+the whole topology, so whichever publish trips the 404 first repairs both
+exchanges. The native streams lane (`product-activity` on port 5552) is declared
+at startup only and does not self-repair: a deleted stream needs an app restart.
+
+**What gets logged.** Payment bodies carry the published network test PANs the
+tokens load tests use (`TEST_PANS`) and are never printed. App responses are
+discarded (`responseType: 'none'`); a failed payment logs its status and phase
+once per VU. Broker credentials travel only in the management API
+`Authorization` header. Never add `--http-debug`, which would print both.

@@ -127,6 +127,7 @@ make loadtest-read       # Read-only baseline test (~12 min)
 make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience under traffic spikes (~6 min)
 make loadtest-sustained  # Detect memory/connection leaks (~17 min)
+make loadtest-topology-repair  # Delete both AMQP exchanges under load; repair time + lost 202s (~2.5 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
 make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
 make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
@@ -499,6 +500,7 @@ make loadtest-crud
 - **Ramp-Up** - Find breaking points by gradually increasing load
 - **Spike** - Validate resilience under sudden traffic spikes
 - **Sustained** - Detect memory/connection leaks over 15 minutes
+- **Topology Repair** - Deletes `product-events` and `payment-events` mid-run (destructive, so not in `loadtest-all`); reports the self-repair time and the payments lost in the repair window
 
 **TypeScript Support:**
 All load tests are written in TypeScript for better type safety and IDE support. k6 v1.3.0+ has native TypeScript support, so tests run directly without any build step:
@@ -927,6 +929,16 @@ open-event \
 
 **Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" and "Inspecting sealed events" sections cover the two CLIs) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
+### Topology Self-Repair (exchange loss, go-bricks v0.67.0)
+
+As of go-bricks v0.67.0 (#1776/#1779, ADR-113 amendment) an AMQP exchange deleted under a live app **heals itself**. Every pooled publisher drives the topology redeclare pass, not only the consumer: the first publish into the hole takes the broker's 404 on the publisher's channel, the client opens a replacement channel, and that channel wakes the registry, which re-declares every exchange, queue and binding over its own connection (INFO `Messaging topology redeclared on new channel`). The publish retries on the new channel. Before v0.67.0 nothing triggered that pass, and every later publish failed with `ErrPublishRetriesExhausted` until a restart. Both publishing paths here share the single-tenant pooled publisher, so a payment or an outbox drain of a product write repairs `payment-events` and `product-events` alike.
+
+- **The streams lane does not self-repair.** `product-activity` (port 5552) is declared at startup only; a deleted stream, or a broker wipe, needs an app restart.
+- **The repair has an ack-and-drop window.** The pass declares exchanges, then queues, then bindings, and the typed payments publisher sets no `Mandatory` flag (the framework has no returned-message handler). A publish landing after `payment-events` is back but before `payments.authorized` / `payments.authorized.tap` are re-bound is broker-acked and dropped as unroutable, while the caller already got **202**. Treat a deleted exchange as an incident and reconcile the payments authorized during the repair.
+- **`product-events` has no bound queue** in this demo, so its repair proves the relay's publishes are confirmed again, not delivered.
+
+**See it:** `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) publishes a payment, deletes `payment-events` through the management API, publishes into the hole, and shows the exchange and both bindings back and a post-repair payment on the tap; then it deletes `product-events` and lets the outbox relay repair it. The payment body carries a documented test PAN and is never echoed. **Measure it:** `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts), see [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)) deletes both exchanges under constant-arrival traffic and reports "Lost in repair window" (202s that never reached the tap) as a number, never a failed threshold. Both honour `APP_URL` and `RABBIT_MGMT` / `RABBIT_USER` / `RABBIT_PASS`.
+
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 
 The activity module ([internal/modules/activity/](internal/modules/activity/)) demonstrates the **native stream lane** — RabbitMQ's stream protocol on port 5552 (`rabbitmq_stream` plugin), not the AMQP lane on 5672. Streams are append-only replicated logs: reads are non-destructive, positions are offsets, and the broker itself remembers where a named consumer got to, so a restart resumes instead of replaying from scratch.
@@ -1237,6 +1249,7 @@ Explore the code in this order:
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
    - `make show-sealed-message` proves the PAN never reaches the broker, then opens the same bytes with `open-event` (consumer keys, card still `"<redacted>"`)
    - `make demo-consumer-readiness` ([scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh)) stalls this module's `payments.authorized` consumer until `/ready` fails closed (see [Consumer-Aware Readiness](#consumer-aware-readiness-messagingconsumerscritical))
+   - `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) deletes `payment-events` under the live app and watches the next publish repair it; `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts)) measures the same under load (see [Topology Self-Repair](#topology-self-repair-exchange-loss-go-bricks-v0670))
 
 10. **[internal/modules/activity/](internal/modules/activity/)** - Activity module (RabbitMQ super-stream demo)
     - `module.go` carries the `messaging/streams` import that opts the lane in (ADR-091) and holds the `DeclareStreams` topology: super stream, publisher handle, typed consumer
@@ -1550,6 +1563,9 @@ curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats
 # the broker drops it silently. The caller still gets 202 Accepted and that
 # payment.authorized event is lost. Treat a deleted exchange as an incident and
 # reconcile the payments authorized during the repair window.
+# See it: make redeclare-demo. Measure the window under load:
+# make loadtest-topology-repair ("Lost in repair window" is reported, not a
+# threshold). See "Topology Self-Repair" under Important Patterns.
 ```
 
 ### Multi-Tenant Migrate CLI Exit Codes and Summary (go-bricks v0.67.0)
