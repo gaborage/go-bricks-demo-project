@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests pin the go-bricks v0.65.0 fail-closed rule (#1637) on both relay
-// clients: a partner that answers 2xx with a body the Inbound policy never opened
+// These tests pin the go-bricks v0.65.0 fail-closed rule (#1637) on every relay
+// client: a partner that answers 2xx with a body the Inbound policy never opened
 // is refused, never handed to the caller. A ciphertext stripped in transit is
 // otherwise indistinguishable from a legitimate plaintext reply. They also pin
 // WithPeerName (#1648): the refusal names the partner it came from.
@@ -92,4 +92,17 @@ func TestMLERelayRefusesPlaintextSuccess(t *testing.T) {
 			assert.Nil(t, tok)
 		})
 	}
+}
+
+// TestVTSIssuerRelayRefusesPlaintextSuccess covers the JWS-of-JWE relay. Like the
+// nested relay it sets no Envelope, so a 2xx that is not application/jose is
+// refused before the verify-then-decrypt path ever runs. The peer is dialed over
+// HTTP here (no Transport), as a production partner would be.
+func TestVTSIssuerRelayRefusesPlaintextSuccess(t *testing.T) {
+	peer := plaintextPeer(t, plaintextTokenBody)
+
+	tok, err := newVTSRelay(t, newVTSFixture(t), peer.URL, nil).Relay(context.Background(), testPAN)
+	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.ErrorContains(t, err, `peer: "`+vtsPeerName+`"`)
+	assert.Nil(t, tok)
 }

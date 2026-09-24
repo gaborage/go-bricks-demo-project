@@ -96,12 +96,27 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
 - `POST /api/v1/__sim/peer/mle` — the MLE counterparty. It opens and seals by
   hand (`jose.Open`/`jose.Seal`): the `jose:` tag grammar has no `mode` key, so
   an inbound server route cannot select bare mode. Demo-only.
+- `POST /api/v1/tokens/vts-issuer-relay` — plaintext entry for the Visa **Token
+  Service Issuer** shape, `jose.SealModeJWSofJWE`: encrypt first (inner JWE,
+  `A256GCM`, `typ: JOSE`, millisecond `iat`), then sign the compact JWE (outer
+  JWS, `PS256`, `cty: JWE`), sent as `application/jose` both ways. The peer
+  verifies before it decrypts. Its counterparty has no `/__sim/` route: it is
+  plugged in as the relay client's base transport (`WithTransport`), the slot a
+  production integration fills with its mTLS transport.
 
 > **Bare-JWE authenticates nothing about the sender.** A successful open proves
 > only that the payload was encrypted to your public key — which any holder of
 > that public key can do. Visa closes that gap out of band with mTLS and
 > `X-Pay-Token`; a production wiring pairs this policy pair with
 > `WithTransport(mTLS)`. See go-bricks ADR-107.
+
+> **JWS-of-JWE: set `SigAlg: PS256` explicitly.** Visa requires PS256 and the
+> package default is RS256; `httpclient.Builder.Build` fills an unset `SigAlg`
+> with RS256, so the mistake only shows when the partner rejects the signature.
+> The inbound policy pins the outer `alg` to exactly what it declares. The demo
+> reuses `tokens-our`/`tokens-peer` across all three modes; production gives each
+> mode its own kids, because the inner JWE lifted out of a signed body would
+> decrypt on a bare-JWE route that shares its decrypt kid. See go-bricks ADR-111.
 
 #### Walkthrough
 
@@ -142,6 +157,12 @@ printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
        -H 'Content-Type: application/json' --data-binary @-
 # {"encData":"eyJ..."}: sealed back to tokens-our. This is the envelope the
 # step 5 relay unwraps for you.
+
+# 7. Drive the VTS Issuer (JWS-of-JWE) path.
+curl -s -X POST http://localhost:8080/api/v1/tokens/vts-issuer-relay \
+     -H 'Content-Type: application/json' \
+     -d '{"pan":"4111111111111111"}'
+# {"data":{"token":{"token":"tok_...","masked_pan":"************1111", ...}}}
 ```
 
 The demo's own `cmd/seal-payload` is gone. Both targets run

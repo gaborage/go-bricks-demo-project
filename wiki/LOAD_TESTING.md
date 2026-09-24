@@ -21,7 +21,8 @@ listed under "Performance tuning" in CLAUDE.md's Load Testing section.
 
 Each tokens relay takes a **plaintext** `{"pan": ...}` body, seals it with the
 framework's outbound `JOSETransport`, calls an in-process peer simulator over
-loopback HTTP, opens the sealed reply, and answers the standard
+loopback HTTP (the VTS Issuer relay excepted, see below), opens the sealed
+reply, and answers the standard
 `{"data": {"token": ...}}` envelope. k6 performs no crypto itself, so one call
 is the whole JOSE round trip: two seals and two opens across two HTTP hops.
 The tokens module does no database I/O (tokenization is an HMAC), so latency is
@@ -32,6 +33,7 @@ Application Overview dashboard for allocator pressure.
 | --- | --- | --- | --- |
 | `tokens-relay.ts` | `POST /tokens/relay` | Nested JWE-of-JWS (sign, then encrypt), `application/jose` | `loadtest-tokens`, `loadtest-tokens-smoke` |
 | `tokens-mle-relay.ts` | `POST /tokens/mle-relay` | Visa MLE: bare JWE (`A128GCM`, no signature) inside `{"encData": ...}`, `application/json` | `loadtest-tokens-mle`, `loadtest-tokens-mle-smoke` |
+| `tokens-vts-issuer-relay.ts` | `POST /tokens/vts-issuer-relay` | VTS Issuer: JWS-of-JWE (encrypt `A256GCM`, then sign `PS256`), `application/jose`, peer in the client's transport | `loadtest-tokens-vts`, `loadtest-tokens-vts-smoke` |
 
 **Fixtures.** Every tokens script draws its PAN from `TEST_PANS` in
 [`loadtests/tokens-common.ts`](../loadtests/tokens-common.ts): published,
@@ -72,3 +74,30 @@ PERF_RATE=50 PERF_DURATION=60s PERF_SUMMARY_FILE=perf-results/mle.json \
 **Comparing shapes.** Run the nested and MLE scripts at the same offered rate.
 MLE carries no signature, so the gap between the two is roughly what two RSA
 signatures and two verifications cost on your hardware.
+
+### VTS Issuer relay (JWS-of-JWE)
+
+`tokens-vts-issuer-relay.ts` drives `POST /tokens/vts-issuer-relay`, the Visa
+Token Service Issuer shape (go-bricks v0.65.0, ADR-111): the relay encrypts
+first (inner JWE, `A256GCM`, `typ: JOSE`, millisecond `iat`) and then signs the
+compact JWE (outer JWS, `PS256`, `cty: JWE`). The peer verifies before it
+decrypts and answers the same way. It is built on `relayScenario`, so the
+fixtures, shape check, thresholds, logging rule and `PERF_*` knobs above all
+apply, and its client carries the peer label `visa-vts-issuer-peer-sim`.
+
+One difference matters when you compare numbers: this relay's peer is not a
+`/__sim/` route. The Issuer body is a bare compact on `application/jose` in
+both directions, and a go-bricks route that can carry the `simulator` tag
+answers JSON only, so the simulator is plugged in as the relay client's base
+transport (`httpclient.Builder.WithTransport`), under the framework's
+`JOSETransport`. A call therefore makes one HTTP hop (k6 to the relay), not
+two. It performs the same RSA operation count as `tokens-relay.ts` (two
+signatures, two verifications, two RSA-OAEP wraps and unwraps), so at the same
+offered rate the gap between the two is roughly the loopback hop plus the
+nesting order, not extra crypto.
+
+```bash
+make loadtest-tokens-vts-smoke   # 1 VU, 30s
+PERF_RATE=50 PERF_DURATION=60s PERF_SUMMARY_FILE=perf-results/vts.json \
+  k6 run loadtests/tokens-vts-issuer-relay.ts
+```

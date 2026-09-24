@@ -130,6 +130,7 @@ make loadtest-sustained  # Detect memory/connection leaks (~17 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
 make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
 make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
+make loadtest-tokens-vts-smoke  # Tokens VTS Issuer relay: JWS-of-JWE, PS256 (30s); loadtest-tokens-vts for the full run
 ```
 
 See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the scenarios that need more than their script header; the products scenarios are described in the header of their script under `loadtests/`.
@@ -620,6 +621,7 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/__sim/peer/tokens` - In-process peer simulator (inverse JOSE policy; demo-only)
 - `POST /api/v1/tokens/mle-relay` - Plaintext entry that drives the outbound bare-JWE + Visa MLE envelope transport against the MLE peer simulator
 - `POST /api/v1/__sim/peer/mle` - In-process MLE peer simulator (bare-JWE, manual `jose.Open`; demo-only)
+- `POST /api/v1/tokens/vts-issuer-relay` - Plaintext entry that drives the outbound JWS-of-JWE (VTS Issuer) transport; its peer simulator is the relay client's in-process base transport, so it has no `/__sim/` route
 
 **Payments module** (sealed AMQP messages demo):
 - `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
@@ -801,6 +803,13 @@ if err != nil {
 **Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokens-peer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
 
 **Bare-JWE / Visa MLE (v0.64.0, ADR-107 + #1585):** the MLE relay endpoint exercises the second seal mode — `jose.Policy{Mode: jose.SealModeBareJWE}` is encrypt-only `JWE(payload)` (no inner JWS), paired with `httpclient.VisaMLEEnvelope()` on `JOSEConfig.Envelope`, which wraps the compact as `{"encData":"<compact>"}` `application/json` on the wire and unwraps inbound responses by shape. Bare mode admits `A128GCM` (via a direct `go-jose/v4` import — no go-bricks alias) and stamps `iat` in milliseconds when `IATMillis: true`. Two invariants shape the demo: bare mode does **not** authenticate the sender (no signature — production pairs it with mTLS / X-Pay-Token), and there is no `mode` key in the `jose:` struct-tag grammar, so a server route cannot select bare mode — the MLE peer simulator binds the envelope as plain JSON and opens/seals manually with `jose.Open`/`jose.Seal`. See [internal/modules/tokens/service/mle_relay_service.go](internal/modules/tokens/service/mle_relay_service.go).
+
+**JWS-of-JWE / VTS Issuer (v0.65.0, ADR-111 + #1610/#1623):** `POST /api/v1/tokens/vts-issuer-relay` exercises the third seal mode — `jose.Policy{Mode: jose.SealModeJWSofJWE}` encrypts first and signs the compact JWE: an outer JWS (`PS256`, `typ: JOSE`, `cty: JWE`, `iat` in seconds, fixed by the mode) over the inner JWE bare mode builds (`A256GCM`, `Policy.Typ`, millisecond `iat` under `IATMillis`, no `cty` even though `WithJOSE` fills `Policy.Cty`). No `Envelope`: the compact is the body, `application/jose`, both ways. Three rules shape the code:
+- **`SigAlg: josev4.PS256` is explicit on both policies.** Visa requires PS256; `httpclient.Builder.Build` fills an unset `SigAlg` with `jose.DefaultSigAlg` (RS256), so omitting it builds and seals and is rejected only by the partner. Inbound, `SigAlg` is a pin, not an allowlist: `Open` refuses any other outer `alg` (`JOSE_ALGORITHM_DISALLOWED`) before touching a key.
+- **Verify before decrypt.** `Open` refuses a non-3-segment body (`JOSE_OUTER_NOT_JWS` — the nested and bare shapes are poison here, never a fallback), a bad signature, or an outer header without `cty: JWE` before the private key is used.
+- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokens-our`/`tokens-peer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids.
+
+**Why the VTS Issuer simulator is a transport, not a `/__sim/` route:** a typed go-bricks route (the only kind that takes `server.WithTags("simulator")`) always JSON-encodes its result, and the raw door `RouteRegistrar.Add` could answer `application/jose` but takes no route options, so its descriptor carries no tags; no `jose:` tag selects this mode either. Rather than wrap the compact in a JSON envelope Visa does not send, `service.VTSIssuerPeerSimulator` implements `http.RoundTripper` and is passed to `WithTransport` — the base slot below `JOSETransport` that production fills with its mTLS transport. Seal, retry loop, peer-labelled metrics, verify-then-decrypt and the plaintext-2xx refusal all run unchanged; only the dial is replaced. The relay addresses `http://vts-issuer-peer-sim.invalid/tokens` (RFC 6761: never resolves), so a client that lost that transport fails at DNS rather than reaching a real host. See [internal/modules/tokens/service/vts_issuer_relay_service.go](internal/modules/tokens/service/vts_issuer_relay_service.go).
 
 **Helper CLI:** request bodies for `curl` come from the framework's `seal-payload` CLI (go-bricks v0.65.0, #1615/#1620). It replaced the demo's own `cmd/seal-payload`, which could only do nested mode. Both targets read JSON on stdin and print only the sealed body, so it pipes into `curl --data-binary @-`:
 
@@ -1186,6 +1195,7 @@ Explore the code in this order:
    - Every PAN-bearing request struct implements `logger.Redactor` (value receiver), so a filtered logger handed one whole renders only `{"last4":"…"}`; `handlers/pan_redaction_test.go` pins all four
    - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
    - In-process peer simulator with the inverse policy makes the demo self-contained
+   - `service/mle_relay_service.go` and `service/vts_issuer_relay_service.go` are the other two seal modes (bare JWE behind `VisaMLEEnvelope`; JWS-of-JWE with an explicit `PS256`); `service/vts_issuer_peer_simulator.go` is the one simulator wired as an `http.RoundTripper` via `WithTransport` instead of a `/__sim/` route
    - `make seal-payload` / `make seal-mle` ([scripts/seal-payload.sh](scripts/seal-payload.sh)) mint nested JWE-of-JWS and Visa MLE bodies for `curl` with the framework's `seal-payload` CLI, at the go-bricks version in `go.mod`
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
@@ -1430,11 +1440,12 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # encData member. Non-2xx replies (plaintext error bodies), 204, 304 and HEAD
 # still pass through, and the refusal is not retried by WithRetries. Match it
 # with errors.Is(err, httpclient.ErrJOSEPlaintextResponse).
-# The relays set WithPeerName (#1648), so peer reads "tokens-peer-sim" or
-# "visa-mle-peer-sim" — the same label their outbound httpclient metrics carry.
+# The relays set WithPeerName (#1648), so peer reads "tokens-peer-sim",
+# "visa-mle-peer-sim" or (for /tokens/vts-issuer-relay, same rule as nested
+# mode) "visa-vts-issuer-peer-sim" — the label their outbound metrics carry.
 # The in-process simulators seal every 2xx, so the demo's behavior is unchanged
 # — dropping WithRawResponse from the MLE simulator is what would trip it.
-# Decision: AllowPlaintextSuccess stays UNSET on both relays; setting it hands
+# Decision: AllowPlaintextSuccess stays UNSET on every relay; setting it hands
 # the caller a body nothing authenticated. A real partner must protect every
 # 2xx it answers — fix the partner route, don't set the flag.
 ```

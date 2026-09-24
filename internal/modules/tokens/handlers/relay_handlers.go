@@ -29,28 +29,47 @@ type RelayResponse struct {
 	Token *domain.Token `json:"token"`
 }
 
-// RelayHandler bridges plaintext HTTP into the JOSE-wrapped outbound path.
+// RelayHandler bridges plaintext HTTP into the JOSE-wrapped outbound path. One
+// type serves every relay whose entry point is a bare RelayRequest: the wire
+// shape lives in how the RelayService's client was wired, never here.
 type RelayHandler struct {
 	svc    RelayService
 	logger logger.Logger
+	// path is the route the relay is served on.
+	path string
+	// failure is both the log message and the generic 500 message; the relay's
+	// error itself stays in the server log.
+	failure string
 }
 
-// NewRelayHandler wires a RelayService into the HTTP layer.
+// NewRelayHandler wires the nested JWE-of-JWS RelayService into the HTTP layer.
 func NewRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
-	return &RelayHandler{svc: svc, logger: l}
+	return &RelayHandler{svc: svc, logger: l, path: "/tokens/relay", failure: "relay failed"}
 }
 
-// Relay handles POST /api/v1/tokens/relay.
+// NewVTSIssuerRelayHandler wires the JWS-of-JWE (Visa Token Service Issuer)
+// RelayService into the HTTP layer. Same request and response contract as the
+// nested relay.
+//
+// Unlike the other two relays it has no simulator route beside it: the VTS
+// Issuer counterparty is the relay client's base transport (see
+// service.VTSIssuerPeerSimulator for why a /__sim/ route cannot carry this wire
+// shape).
+func NewVTSIssuerRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
+	return &RelayHandler{svc: svc, logger: l, path: "/tokens/vts-issuer-relay", failure: "VTS issuer relay failed"}
+}
+
+// Relay handles POST /api/v1/tokens/relay (or the path the constructor chose).
 func (h *RelayHandler) Relay(req RelayRequest, ctx server.HandlerContext) (*RelayResponse, server.IAPIError) {
 	tok, err := h.svc.Relay(ctx.RequestContext(), req.PAN)
 	if err != nil {
-		h.logger.Error().Err(err).Msg("relay failed")
-		return nil, server.NewInternalServerError("relay failed")
+		h.logger.Error().Err(err).Msg(h.failure)
+		return nil, server.NewInternalServerError(h.failure)
 	}
 	return &RelayResponse{Token: tok}, nil
 }
 
 // RegisterRoute attaches the relay endpoint under the partner path namespace.
 func (h *RelayHandler) RegisterRoute(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.POST(hr, r, "/tokens/relay", h.Relay)
+	server.POST(hr, r, h.path, h.Relay)
 }

@@ -66,6 +66,8 @@ help:
 	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
 	@echo "  loadtest-tokens-mle       Run tokens MLE relay (bare JWE + encData) load test (~12min)"
 	@echo "  loadtest-tokens-mle-smoke Run tokens MLE relay smoke test (30s)"
+	@echo "  loadtest-tokens-vts       Run tokens VTS Issuer relay (JWS-of-JWE) load test (~12min)"
+	@echo "  loadtest-tokens-vts-smoke Run tokens VTS Issuer relay smoke test (30s)"
 	@echo "  loadtest-all              Run all load tests in sequence"
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
@@ -584,6 +586,27 @@ loadtest-tokens-mle-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/tokens-mle-relay.ts
 	@echo ""
 	@echo "✅ Tokens MLE relay smoke test completed"
+
+# --- Tokens VTS Issuer relay (Visa Token Service Issuer, JWS-of-JWE) ----------
+# POST /api/v1/tokens/vts-issuer-relay: encrypt (inner JWE, A256GCM), then sign
+# (outer JWS, PS256), as application/jose both ways. The peer is the relay
+# client's in-process base transport, so there is no /__sim/ route and no
+# loopback hop. K6_BASE_URL overrides the target (default http://localhost:8080).
+.PHONY: loadtest-tokens-vts loadtest-tokens-vts-smoke
+
+loadtest-tokens-vts: check-k6
+	@echo "🧪 Running tokens VTS Issuer relay load test (JWS-of-JWE)..."
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-vts-issuer-relay.ts
+	@echo ""
+	@echo "✅ Tokens VTS Issuer relay load test completed"
+
+loadtest-tokens-vts-smoke: check-k6
+	@echo "🧪 Running tokens VTS Issuer relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-vts-issuer-relay.ts
+	@echo ""
+	@echo "✅ Tokens VTS Issuer relay smoke test completed"
 
 # Type check load test TypeScript files
 loadtest-type-check:
