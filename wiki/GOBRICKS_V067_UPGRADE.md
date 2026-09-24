@@ -96,3 +96,4 @@ decision, and any operator action.
 
 | Feature | Decision | Before deploy |
 |---------|----------|---------------|
+| `product-events` declared with `DeclareTopicExchange` (v0.66.0, #1712) | The hand-built `RegisterExchange` literal in the products module becomes the typed helper. The stored declaration is field-for-field identical (durable topic, not auto-delete, not internal, empty args); `internal/modules/products/module_test.go` pins it against the old literal. | None. A broker that already holds `product-events` sees an equivalent redeclare, so a retained volume needs no reset. |

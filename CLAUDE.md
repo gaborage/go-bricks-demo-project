@@ -704,7 +704,7 @@ tx.Commit(ctx)
 - `outbox.NewModule()` — provides `deps.Outbox` (OutboxPublisher)
 
 **Event types:** `product.created`, `product.updated`, `product.deleted`
-**Exchange:** `product-events` (topic, durable) declared in products module's `DeclareMessaging()`
+**Exchange:** `product-events` (topic, durable) declared with `decls.DeclareTopicExchange` in products module's `DeclareMessaging()`
 
 ### KeyStore RSA Signing
 

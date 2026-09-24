@@ -15,6 +15,10 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// productEventsExchange is the topic exchange the outbox relay publishes
+// product lifecycle events to (outbox.defaultexchange in config.development.yaml).
+const productEventsExchange = "product-events"
+
 // Module demonstrates multi-tenant database operations with tenant-specific isolation
 type Module struct {
 	deps         *app.ModuleDeps
@@ -86,12 +90,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 
 // DeclareMessaging declares messaging infrastructure for this module
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-	// Declare the exchange used by outbox events for product lifecycle events
-	decls.RegisterExchange(&messaging.ExchangeDeclaration{
-		Name:    "product-events",
-		Type:    "topic",
-		Durable: true,
-	})
+	// Declare the exchange used by outbox events for product lifecycle events.
+	// The typed helper stores the same shape the old hand-built literal did —
+	// durable topic, not auto-delete, not internal, no args — so a broker that
+	// already holds product-events sees an equivalent redeclare.
+	decls.DeclareTopicExchange(productEventsExchange)
 }
 
 func (m *Module) RegisterJobs(scheduler app.JobRegistrar) error {
