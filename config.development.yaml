@@ -150,6 +150,51 @@ messaging:
   #   active:
   #     payments-sign: "v2"
 
+  # Startup wait for an EXTERNAL exchange (go-bricks v0.67.0, #1774, ADR-119).
+  # Only matters once a module references an exchange another service owns —
+  # here the opt-in partnerfeed module (custom.partnerfeed.enabled below), whose
+  # partner-events is verified with a passive declare and never created.
+  #
+  # 0 (the default, so absent here) aborts startup at once on the broker's 404.
+  # A positive duration re-runs the whole startup declare pass on a 404, with
+  # backoff (first gap min(1s, externalwait/4), doubling to 5s), until the owner
+  # creates the exchange or the budget runs out; then startup aborts with the
+  # broker's own 404. It engages only for a service that declared consumers,
+  # only on a 404, and only on the control-plane startup pass (single-tenant, or
+  # messaging.tenancy: shared). Env: MESSAGING_DECLARE_EXTERNALWAIT.
+  #
+  # Two costs before setting it anywhere real:
+  #   * a MISTYPED external name never converges either, so it spends the whole
+  #     budget before failing — a fast, legible crash becomes a slow one;
+  #   * the HTTP listener starts only after this pass, so size the startupProbe
+  #     (initial delay + failure threshold) for: first declare attempt +
+  #     externalwait + one final attempt that runs to its own
+  #     infrastructure-setup timeout — not for externalwait alone.
+  # make external-exchange-demo sets it for its own run only.
+  # declare:
+  #   externalwait: 60s
+
+# --- Custom module switches -------------------------------------------------
+# Read by the modules themselves through deps.Config, so the framework's loader
+# applies the usual env mapping (lower-case, "_" -> "."): CUSTOM_PARTNERFEED_ENABLED,
+# CUSTOM_PRODUCTS_REPORT_HOLD. YAML allows ONE top-level custom: key (a second
+# one is a duplicate key and fails config load), so every custom.* example sits
+# under the single commented root below: uncomment the root and only the
+# children you need.
+#
+# partnerfeed (internal/modules/partnerfeed): consumes partner.stock.updated from
+# partner-events, an exchange ANOTHER service owns. Off by default, because no
+# partner service runs locally: switched on with the exchange absent, startup
+# fails on the broker's 404 (or waits, with messaging.declare.externalwait above).
+# make external-exchange-demo turns it on for its own run and plays the partner.
+# products.report.hold: see "Products report job: advisory-lock hold" below.
+# custom:
+#   partnerfeed:
+#     enabled: true
+#   products:
+#     report:
+#       hold: 8s
+
 # --- Application ------------------------------------------------------------
 # Rate limiting: framework defaults are app.rate.limit=100 / burst=200 per IP.
 # The bundled k6 load tests (50+ VUs) blow through that limit and surface as
@@ -326,11 +371,9 @@ scheduler:
 # held for a Go duration after the report, standing in for a slow render and
 # upload. Unset means no hold, which is what `make run` uses. Only
 # scripts/advisory-lock-demo.sh sets it, through CUSTOM_PRODUCTS_REPORT_HOLD on
-# the replicas it starts. A malformed or negative value fails startup.
-# custom:
-#   products:
-#     report:
-#       hold: 8s
+# the replicas it starts. A malformed or negative value fails startup. Its
+# commented example sits under the single custom: root in "Custom module
+# switches" above.
 
 # --- KeyStore ----------------------------------------------------------------
 # Named RSA key pairs for signing/verification.

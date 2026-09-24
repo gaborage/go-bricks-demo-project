@@ -53,6 +53,7 @@ help:
 	@echo "  show-sealed-message Publish a sealed payment, dump the raw broker body, open it (open-event, card redacted)"
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
 	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
+	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -446,6 +447,22 @@ seal-mle:
 demo-consumer-readiness:
 	@echo "🩺 Demonstrating readiness that fails closed on a stalled consumer..."
 	@./scripts/consumer-readiness-demo.sh
+
+# --- External exchange demo (go-bricks v0.67.0, #1773/#1774, ADR-119) --------
+# The partnerfeed module consumes partner-events, an exchange ANOTHER service
+# owns: DeclareExternalExchange verifies it with a passive declare and never
+# creates it. The script starts its OWN app instance, twice, with the module
+# on (CUSTOM_PARTNERFEED_ENABLED=true) and plays the owning partner through the
+# RabbitMQ management API: the exchange absent with externalwait 0 aborts startup
+# on the broker's 404; with MESSAGING_DECLARE_EXTERNALWAIT=60s the app waits, the
+# script creates the exchange, and startup completes; a published event is then
+# consumed. Cleanup deletes what the run created. Requires infra up
+# (make docker-up), migrations and keys — and NOT `make run`: it refuses when the
+# app port is already taken. Honors APP_URL and RABBIT_MGMT overrides.
+.PHONY: external-exchange-demo
+external-exchange-demo: build
+	@echo "🔌 Consuming from an exchange another service owns..."
+	@./scripts/external-exchange-demo.sh
 
 # Update dependencies to latest versions
 update:

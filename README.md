@@ -12,6 +12,7 @@ Production-ready demonstration of the [go-bricks framework](https://github.com/g
 - **KeyStore** - Named RSA key pair management for signing/verification
 - **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls
 - **RabbitMQ Streams** - Partitioned super stream on the native stream protocol, projected by a typed consumer
+- **External Exchanges** - Opt-in consumer of an exchange another service owns: verified passively, never created, with a bounded startup wait
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
@@ -413,6 +414,54 @@ offsets, or a consumer re-promotion re-attaching a partition at its last stored
 offset. `countbeforestorage` is lowered to 10 in
 [config.development.yaml](config.development.yaml) so the count-driven commit is
 reachable at demo volume; the 5s flush interval would commit either way.
+
+### Partner Feed (External Exchange Example)
+Every other exchange in this demo is declared by the module that uses it.
+`partner-events` belongs to a partner service outside this repository, so the
+partnerfeed module only **references** it with `DeclareExternalExchange` (go-bricks
+v0.67.0, ADR-119). Each declare pass checks the exchange with a passive
+`exchange.declare` and never creates it. The module owns the queue
+(`partnerfeed.stock.updated`), its quorum DLQ pair, the binding (exact key
+`partner.stock.updated`) and a typed consumer that validates the partner's
+`StockUpdated` contract before its handler runs. The module has no HTTP routes.
+
+**Off by default.** No partner service runs locally, and a consumer-declaring
+service aborts startup when the broker answers 404 for a missing exchange. Plain
+`make run` therefore leaves the module switched off. Turn it on with
+`CUSTOM_PARTNERFEED_ENABLED=true`, but only where something owns `partner-events`.
+`messaging.declare.externalwait` (env `MESSAGING_DECLARE_EXTERNALWAIT`, default
+`0`) turns that abort into a bounded wait for the owner to deploy. The HTTP
+listener stays down during the wait, so a `startupProbe` must cover the first
+attempt, plus `externalwait`, plus one final attempt.
+
+#### Walkthrough
+
+```bash
+# Infra, migrations and keys as for `make run`, but NOT the app itself: the
+# script starts its own instance (twice) and refuses to run if the port is taken.
+make docker-up
+make migrate
+make generate-keys   # first time only
+make external-exchange-demo
+```
+
+The script plays the partner through the RabbitMQ management API and runs three
+steps:
+
+1. **Fails fast.** The exchange is absent and `externalwait` is 0, so startup
+   aborts with the broker's own
+   `NOT_FOUND - no exchange 'partner-events' in vhost '/'`.
+2. **Waits.** With `externalwait` at 60s, the app logs one WARN
+   (`Broker answered 404, re-running the startup declare pass …`) and `/health`
+   stays down. The script then creates the exchange, the app logs
+   `External exchange verified`, and startup completes without a restart.
+3. **Consumes.** A `partner.stock.updated` event published to `partner-events`
+   is logged as `Partner stock update consumed`.
+
+On exit, the script deletes the exchange, plus the queue, DLQ and DLX when this
+run created them. It honors `APP_URL` and `RABBIT_MGMT`. See
+[scripts/external-exchange-demo.sh](scripts/external-exchange-demo.sh) and the
+framework's [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md#external-exchanges).
 
 ### System
 - `GET /api/v1/health` - Liveness probe

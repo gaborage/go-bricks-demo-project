@@ -34,6 +34,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Transactional Outbox for reliable event publishing (dual-write pattern)
 - KeyStore for named RSA key pair management (signing/verification)
 - RabbitMQ native streams: a partitioned super stream (`product-activity`, 3 partitions) consumed by a typed, replayable projection
+- External exchange reference: an opt-in module consumes `partner-events`, an exchange another service owns (passive verification + bounded startup wait)
 - Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - Comprehensive load testing with k6
 
@@ -633,6 +634,9 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on), and `publisherReady` — the v0.64.0 `streams.Publisher.Ready()` snapshot for the module's publisher handle
 - `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
 
+**Partner feed module** (external exchange demo, off by default):
+- No HTTP routes. Its only surface is a typed consumer on `partnerfeed.stock.updated`, bound to `partner-events` — an exchange another service owns. See [External Exchanges](#external-exchanges-consuming-from-an-exchange-another-service-owns).
+
 ## Configuration Files
 
 - `config.yaml` - Base configuration (not present in this project, uses framework defaults)
@@ -1035,6 +1039,50 @@ A trap restores the permissions on every exit, including Ctrl-C. The exact resto
 
 **Reference:** framework [ADR-114](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_114_critical_consumer_readiness.md) and [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md).
 
+### External Exchanges (consuming from an exchange another service owns)
+
+The partnerfeed module ([internal/modules/partnerfeed/](internal/modules/partnerfeed/)) demonstrates the **single-declarer pattern** (go-bricks v0.67.0, #1773/#1774, ADR-119): one service owns an exchange and declares its shape, and every other service only binds to it or publishes through it. `partner-events` belongs to a partner service outside this repository, so the module *references* it instead of declaring it. Every other exchange in the demo is declared by the module that uses it.
+
+```go
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    if !m.enabled { // custom.partnerfeed.enabled — off by default
+        return
+    }
+    // Name only: verified with a passive exchange.declare, never created.
+    partner := decls.DeclareExternalExchange("partner-events")
+    // The queue, its DLQ pair and the binding are this service's own.
+    queue := decls.DeclareQueueWithDLQ("partnerfeed.stock.updated",
+        &messaging.DeadLetterSpec{QueueType: messaging.QueueTypeQuorum})
+    decls.DeclareBinding(queue.Name, partner.Name, "partner.stock.updated") // exact key, not a pattern
+    messaging.DeclareTypedConsumer(decls, &messaging.ConsumerOptions{
+        Queue: queue.Name, Consumer: "partnerfeed-stock-updated",
+        EventType: "partner.stock.updated", Workers: 1,
+    }, m.onStockUpdated) // func(ctx, domain.StockUpdated) error — decoded + validated first
+}
+```
+
+**Semantics that shape the module:**
+- **Verified on every declare pass, never created.** The startup pass and each ADR-113 redeclare pass on a new channel issue `exchange.declare` with `passive=true`: the broker answers declare-ok or 404. The owner's later declare of its real shape still succeeds, because this service never sends one. The startup log line is `External exchange verified` (INFO, `exchange=partner-events`).
+- **Existence only.** A passive declare cannot see the owner's type or durability, so nothing checks them. That is why the binding uses an exact routing key, which routes the same through a direct or a topic exchange; a wildcard would silently match nothing on a direct one.
+- **Name only.** `DeclareExternalExchange` takes no type, flags or `Args`, and `Validate()` refuses an external declaration that carries any of them.
+- **No `configure` permission needed.** A passive declare creates nothing, so in production the broker user can be scoped to the entities the service really owns. The demo keeps the default dev user and does not show this.
+- **One owner per declaration set.** All modules share one set, so a name that one module declares and another marks external fails startup with `declared locally and marked external in the same declaration set`. That is why the demo uses a new name rather than `product-events` or `payment-events`.
+- **A missing exchange aborts startup.** The module declares a consumer, so the passive declare's 404 is fatal: `failed to declare exchange partner-events: Exception (404) Reason: "NOT_FOUND - no exchange 'partner-events' in vhost '/'"`. A publisher-only service would warn and continue instead.
+- **`messaging.declare.externalwait` makes the abort wait** (#1774, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`). On a 404 the startup declare pass re-runs with backoff (first gap `min(1s, externalwait/4)`, doubling to 5s) until the owner creates the exchange or the budget runs out. It logs one WARN, `Broker answered 404, re-running the startup declare pass until it succeeds or externalwait elapses`. It engages only for a service that declared consumers, only on a 404, and only on the control-plane startup pass. Two costs: a **mistyped** external name also spends the whole budget before failing, and the HTTP listener starts only after this pass, so a `startupProbe` must allow the first attempt, plus `externalwait`, plus one final attempt. The demo config carries it commented out.
+- **At-least-once, one worker.** The handler only logs, so a redelivery is harmless; a handler that writes state would dedup first (for example `inbox.ProcessOnce` on the partner's `eventId`, through `DeclareTypedConsumerWithMeta`). `Workers: 1` keeps one SKU's stock updates in broker order, because a stock level is last-write-wins.
+- **The partner's contract is validated at the boundary.** `domain.StockUpdated` carries `validate` tags. A body that fails decode or validation is nacked without requeue and parks on `partnerfeed.stock.updated.dlq`. `Quantity` is a `*int`, so a missing field is refused rather than read as zero stock.
+
+**Why it is off by default:** no partner service runs locally. Switched on with the exchange absent, plain `make run` would abort on the 404. Switch it on with `CUSTOM_PARTNERFEED_ENABLED=true` (or `custom.partnerfeed.enabled: true`) only where something owns `partner-events`. The module is always registered in [cmd/api/main.go](cmd/api/main.go) and reads the switch in `Init`, because `main` never sees the loaded config (`app.App` exposes no accessor).
+
+**Proof:** `make external-exchange-demo` runs [scripts/external-exchange-demo.sh](scripts/external-exchange-demo.sh). It starts its own app instance with the module on and plays the partner through the RabbitMQ management API, in three steps:
+1. With the exchange absent and `externalwait` at 0, startup fails fast on the broker's 404.
+2. With `externalwait` at 60s, the app logs the WARN and keeps its listener down. The script creates the exchange, and startup completes with `External exchange verified`, without a restart.
+3. A `partner.stock.updated` event published to the exchange reaches the consumer.
+
+Cleanup deletes the exchange, plus the queue, DLQ and DLX when the run created them. The script refuses to run while anything listens on the `APP_URL` port, so stop `make run` first. It honors `APP_URL` and `RABBIT_MGMT`.
+
+**Reference:** framework [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md#external-exchanges) ("External exchanges" and "Startup wait"), [ADR-119](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_119_external_exchange_passive_verification.md), and [wiki/startup_defaults.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/startup_defaults.md) for the probe sizing.
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -1268,6 +1316,13 @@ Explore the code in this order:
 12. **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Multi-tenant migration tooling (schema-per-tenant via `go-bricks-migrate`)
     - `make migrate-multitenant-verdict` ([scripts/migrate-verdict-demo.sh](scripts/migrate-verdict-demo.sh)) runs `go-bricks-migrate validate --json` three ways and prints exit codes 0 / 2 / 1 beside the `clean` / `nothing_attempted` / `fleet_split` summary records (ADR-115); read-only, nothing is migrated
     - `make migrate-multitenant-check-roles` builds [cmd/check-tenant-roles](cmd/check-tenant-roles/main.go), which logs in as each tenant's own role (read-only) and calls `migration.CheckPGRoleFloor`: exit 0 when every role sits at the floor, 1 when one holds an attribute above it or cannot be checked, 2 when nothing was checked. It dials `PG_HOST`/`PG_PORT`, so point those at the demo Postgres first
+
+13. **[internal/modules/partnerfeed/](internal/modules/partnerfeed/)** - Partner feed module (external exchange demo, off by default)
+    - `module.go` reads `custom.partnerfeed.enabled` in `Init` and, when on, calls `DeclareExternalExchange("partner-events")`: a name-only reference that every declare pass verifies passively and never creates (ADR-119). The queue, its quorum DLQ pair and the binding are declared normally.
+    - `domain/stock.go` declares `StockUpdated`, the partner's `validate`-tagged contract, and the topology names. Its trap comment explains why no module in this process may also declare `partner-events`.
+    - The typed consumer runs one worker, which keeps a SKU's updates in order, and only logs, so a redelivery is harmless.
+    - [config.development.yaml](config.development.yaml) carries the switch and `messaging.declare.externalwait` commented out, with the startupProbe sizing caveat.
+    - `make external-exchange-demo` shows the broker 404 abort, the `messaging.declare.externalwait` wait, and consumption.
 
 ### Runtime Tour (15-20 minutes)
 
