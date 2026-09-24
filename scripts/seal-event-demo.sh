@@ -65,7 +65,7 @@ RABBIT_VHOST="${RABBIT_VHOST:-%2F}"   # default vhost "/" percent-encoded
 
 # Pin the CLI to the tag this demo pins the framework to, so the sealer that
 # mints these bodies is the same code the app links.
-SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-v0.63.0}"
+SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-v0.67.0}"
 SEAL_EVENT_PKG="github.com/gaborage/go-bricks/cmd/seal-event@${SEAL_EVENT_VERSION}"
 
 # Topology — must match internal/modules/payments/module.go.

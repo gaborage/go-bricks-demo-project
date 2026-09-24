@@ -179,7 +179,7 @@ shell from the demo's own DER keys, and it is published straight to the exchange
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -208,7 +208,7 @@ flipped byte lands on (rule 5 `SEAL_SIGNATURE_INVALID` for a payload or signatur
 byte, an earlier header rule otherwise). `SEAL_MANIFEST_MISMATCH` is deliberately
 not on that list — no flag mints it. See
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh) and the
-framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md).
+framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md).
 
 ### Activity (RabbitMQ Super-Stream Example)
 The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the

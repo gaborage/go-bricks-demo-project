@@ -553,7 +553,7 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` is pinned to go-bricks `v0.63.0`. There is no
+**go-bricks version:** `go.mod` is pinned to go-bricks `v0.67.0`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
 like any other dependency.
 
@@ -767,7 +767,7 @@ if err != nil {
 
 **Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
 
-**Reference:** [go-bricks v0.63.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.63.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.67.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.67.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Sealed Messages (JWE-of-JWS on AMQP)
 
@@ -810,7 +810,7 @@ records only the `x-death` rejection — the `SEAL_*` code lives in the app log,
 a `*messaging.PayloadError` at stage `open`.
 
 ```bash
-printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
   -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -820,7 +820,7 @@ printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0
 `-tenant-id` is omitted on purpose: `multitenant.enabled` is false here, so the
 signed `tid` carries no rule and is only surfaced on the envelope.
 
-**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md) (its "Minting test events" section covers the CLI) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
+**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" section covers the CLI) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 
