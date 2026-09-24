@@ -461,6 +461,15 @@ go test -run TestProductService_Create ./...     # Run specific test
 make test                                        # Run all tests (uses race detector)
 ```
 
+### Cross-Module Messaging Validation
+
+[cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
+
+- **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `payments-sign-v1` and `payments-encrypt-v1`, and restores the previous runtime in `t.Cleanup`.
+- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.67.0, and their `Init` needs a validated config, a database or DER files.
+- **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
+- **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
+
 ### API Testing
 ```bash
 make test-products-api     # Uses scripts/test-products-api.sh
