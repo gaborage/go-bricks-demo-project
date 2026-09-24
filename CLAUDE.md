@@ -82,7 +82,7 @@ make run
 
 # 4. Test the API
 curl http://localhost:8080/api/v1/health
-curl http://localhost:8080/api/v1/products
+curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
 
 ## Essential Commands
@@ -485,7 +485,7 @@ make run
 
 # Test endpoints
 curl http://localhost:8080/api/v1/health
-curl http://localhost:8080/api/v1/products
+curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
 
 ### Load Testing
@@ -614,14 +614,14 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once
 
 **Products module:**
-- `GET /api/v1/products` - List all products
+- `GET /api/v1/products?page=1&pageSize=10` - List products (paginated; `page` and `pageSize` are required, a bare call answers 400)
 - `GET /api/v1/products/:id` - Get product by ID
 - `POST /api/v1/products` - Create product
 - `PUT /api/v1/products/:id` - Update product
 - `DELETE /api/v1/products/:id` - Delete product
 
 **Legacy module** (raw response, no APIResponse envelope):
-- `GET /api/v1/legacy/products` - List products (raw JSON)
+- `GET /api/v1/legacy/products?page=1&pageSize=10` - List products (raw JSON; same required pagination)
 - `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
 
 **Webhooks module** (KeyStore signing demo):
@@ -642,6 +642,11 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 **Activity module** (RabbitMQ super-stream demo):
 - `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on), and `publisherReady` — the v0.64.0 `streams.Publisher.Ready()` snapshot for the module's publisher handle
 - `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
+
+**Analytics module** (named-database demo — stores views in the `analytics` database via `deps.DBByName`):
+- `POST /api/v1/analytics/views` - Record a product view (`{"productId": ...}` plus optional user agent, IP, session and referrer)
+- `GET /api/v1/analytics/views/:productId` - View stats for one product (total, today, this week, last viewed)
+- `GET /api/v1/analytics/views` - Most-viewed products (`?limit=`)
 
 **Partner feed module** (external exchange demo, off by default):
 - No HTTP routes. Its only surface is a typed consumer on `partnerfeed.stock.updated`, bound to `partner-events` — an exchange another service owns. See [External Exchanges](#external-exchanges-consuming-from-an-exchange-another-service-owns).
@@ -1010,7 +1015,7 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 **Semantics that shape the handler:**
 - **At-least-once, with batched offset commits → handlers must be idempotent.** An offset is committed only *after* its handler returned successfully, and then only in batches: every `offsetstore.countbeforestorage` successes (framework default 500; this demo lowers it to 10 so the count-driven commit is reachable at demo volume — the 5s flush would commit either way), every `offsetstore.flushinterval` (5s), and once more as a final flush at shutdown. That flush narrows the replay window without closing it, so a crash re-delivers everything after the last stored offset.
 - **A super-stream handler is called concurrently across partitions → it must be goroutine-safe.** Each partition is its own connection with its own delivery loop: sequential and ordered *within* a partition, concurrent *between* them. There is no worker pool and no handler timeout — bound your own slow work with `context.WithTimeout`.
-- **Poison is skipped, never parked (ADR-092).** A body that fails to decode, or decodes but fails `validate`, is deterministic poison: it fails the same way on every attempt and every replica. The lane returns it `Permanent` (no in-place retry whatever `Retry` says), never parks it in the hold ledger, and skips its offset. It survives only in the failure log line and the consume metric — match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` / `streams.ErrPayloadInvalid`. This is what `POST /api/v1/__sim/streams/poison` proves: the consumer logs and moves on rather than stalling the partition.
+- **Poison is skipped, never parked (ADR-092).** A body that fails to decode, or decodes but fails `validate`, is deterministic poison: it fails the same way on every attempt and every replica. The lane returns it `Permanent` (no in-place retry whatever `Retry` says), never parks it in the hold ledger, and skips its offset. It survives only in the failure log line and the consume metric — match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` / `streams.ErrPayloadInvalid`. This is what `POST /api/v1/__sim/streams/poison` proves: the consumer logs and moves on rather than stalling the partition. "Skips" means the handler is never retried, not that the offset is committed: the poison offset is never stored, so a poison message that is the last one on its partition is delivered again, and logged again at ERROR, at every restart until a later good message on that partition commits past it. The simulator's default key `poison-demo` always lands on the same partition, so an ERROR at boot after the poison demo is this replay, not an unclean restart.
 - **A stored offset always wins over `Start`.** At startup — and at each SAC promotion — the framework asks the broker for the consumer name's stored offset and resumes at `stored + 1`. `OffsetFirst()` therefore replays the whole log only on the *first* run under that consumer name; after that it is ignored. A failed offset query never silently falls back to `Start`.
 - **Routing is murmur3, and that is a compatibility guarantee.** The client hashes `RoutingKey` with murmur3 under RabbitMQ's shared seed, modulo the partition list — the cross-client default, so the Java, .NET and Python clients place the same key on the same partition. `msg.Stream` reports the partition a message actually reached.
 
@@ -1347,6 +1352,11 @@ Explore the code in this order:
     - [config.development.yaml](config.development.yaml) carries the switch and `messaging.declare.externalwait` commented out, with the startupProbe sizing caveat.
     - `make external-exchange-demo` shows the broker 404 abort, the `messaging.declare.externalwait` wait, and consumption.
 
+14. **[internal/modules/analytics/](internal/modules/analytics/)** - Analytics module (named databases demo)
+    - `module.go` resolves the `analytics` database with `deps.DBByName(ctx, "analytics")` instead of `deps.DB(ctx)`; it is the second PostgreSQL instance (port 5433 in the base compose file) that the `databases.analytics` section of [config.development.yaml](config.development.yaml) describes, with its own session timezone (`Asia/Tokyo`)
+    - `handlers/` serves `POST /api/v1/analytics/views`, `GET /api/v1/analytics/views/:productId` and `GET /api/v1/analytics/views`
+    - `make migrate-analytics` applies its schema (Flyway, `--profile migrations`)
+
 ### Runtime Tour (15-20 minutes)
 
 Experience the application running:
@@ -1368,7 +1378,7 @@ Experience the application running:
    curl http://localhost:8080/api/v1/ready
 
    # Products CRUD
-   curl http://localhost:8080/api/v1/products
+   curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
    curl http://localhost:8080/api/v1/products/1
 
    # Or use the test script
