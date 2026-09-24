@@ -443,7 +443,10 @@ make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience (~6 min)
 ```
 
-See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for detailed guide and performance tuning.
+See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the
+scenarios that need more than their script header. Each products scenario above
+is described in its script's header under `loadtests/`; CLAUDE.md's Load Testing
+section lists the pool, rate-limit and slow-query tuning keys.
 
 ## Configuration
 
@@ -590,7 +593,7 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 - **[CLAUDE.md](CLAUDE.md)** - Complete developer guide
 - **[FLYWAY_MIGRATIONS.md](FLYWAY_MIGRATIONS.md)** - Single-tenant Flyway walkthrough (Postgres + Oracle)
 - **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Schema-per-tenant migrations via `go-bricks-migrate`
-- **[wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)** - Load testing guide
+- **[wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)** - Running the k6 scripts, plus per-scenario notes
 - **[wiki/PROMETHEUS_GRAFANA_SETUP.md](wiki/PROMETHEUS_GRAFANA_SETUP.md)** - Observability setup
 - **[etc/docker/README.md](etc/docker/README.md)** - Docker infrastructure
 

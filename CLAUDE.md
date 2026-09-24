@@ -128,9 +128,11 @@ make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience under traffic spikes (~6 min)
 make loadtest-sustained  # Detect memory/connection leaks (~17 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
+make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
+make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
 ```
 
-See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for detailed load testing guide.
+See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the scenarios that need more than their script header; the products scenarios are described in the header of their script under `loadtests/`.
 
 ## Architecture
 
@@ -476,7 +478,7 @@ curl http://localhost:8080/api/v1/products
 
 ### Load Testing
 
-The project includes comprehensive k6 load testing scripts. See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for details.
+The project includes k6 load testing scripts. Each products scenario is described in its script's header under `loadtests/`; [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) covers running them and the scenarios that need more than a header.
 
 **Quick start:**
 ```bash
@@ -1428,6 +1430,8 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # encData member. Non-2xx replies (plaintext error bodies), 204, 304 and HEAD
 # still pass through, and the refusal is not retried by WithRetries. Match it
 # with errors.Is(err, httpclient.ErrJOSEPlaintextResponse).
+# The relays set WithPeerName (#1648), so peer reads "tokens-peer-sim" or
+# "visa-mle-peer-sim" — the same label their outbound httpclient metrics carry.
 # The in-process simulators seal every 2xx, so the demo's behavior is unchanged
 # — dropping WithRawResponse from the MLE simulator is what would trip it.
 # Decision: AllowPlaintextSuccess stays UNSET on both relays; setting it hands

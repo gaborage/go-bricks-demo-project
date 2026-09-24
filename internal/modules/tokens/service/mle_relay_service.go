@@ -44,6 +44,9 @@ type MLERelayConfig struct {
 	// DecryptKid is our private-key kid — the only key identity the inbound bare
 	// policy may declare.
 	DecryptKid string
+	// PeerName is the low-cardinality logical name of the partner; see
+	// RelayConfig.PeerName.
+	PeerName string
 	// Logger receives request/response telemetry.
 	Logger logger.Logger
 }
@@ -105,6 +108,7 @@ func NewMLERelayService(cfg *MLERelayConfig) (*MLERelayService, error) {
 	// Bare mode authenticates nobody — production pairs this client with mTLS
 	// (WithTransport) or X-Pay-Token; see the policy note above.
 	client, err := httpclient.NewBuilder(cfg.Logger).
+		WithPeerName(cfg.PeerName).
 		WithJOSE(httpclient.JOSEConfig{
 			Outbound: NewMLEOutboundPolicy(cfg.EncryptKid),
 			Inbound:  NewMLEInboundPolicy(cfg.DecryptKid),

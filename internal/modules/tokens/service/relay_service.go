@@ -43,6 +43,11 @@ type RelayConfig struct {
 	VerifyKid string
 	// DecryptKid is our private-key kid (used to decrypt response JWE).
 	DecryptKid string
+	// PeerName is the low-cardinality logical name of the partner. It labels the
+	// client's outbound metrics and names the partner in a refused plaintext 2xx
+	// (httpclient.ErrJOSEPlaintextResponse and its WARN, go-bricks v0.65.0, #1648),
+	// so an operator running several JOSE integrations can tell which one regressed.
+	PeerName string
 	// Logger receives request/response telemetry.
 	Logger logger.Logger
 }
@@ -83,7 +88,12 @@ func NewRelayService(cfg *RelayConfig) (*RelayService, error) {
 	// As of go-bricks v0.57.0 Build validates both JOSE policies itself (and
 	// rejects unsafe transport composition), so the client either comes back
 	// fully wired or not at all — no separate policy pre-check needed here.
+	//
+	// Inbound is set, so a 2xx the partner answers in plaintext is refused as
+	// httpclient.ErrJOSEPlaintextResponse rather than handed back unauthenticated
+	// (go-bricks v0.65.0, #1637). AllowPlaintextSuccess stays unset on purpose.
 	client, err := httpclient.NewBuilder(cfg.Logger).
+		WithPeerName(cfg.PeerName).
 		WithJOSE(httpclient.JOSEConfig{
 			Outbound: outbound,
 			Inbound:  inbound,

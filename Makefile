@@ -64,6 +64,8 @@ help:
 	@echo "  loadtest-sustained        Run sustained load test (15min)"
 	@echo "  loadtest-tokens           Run tokens relay (JOSE) load test (~12min)"
 	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
+	@echo "  loadtest-tokens-mle       Run tokens MLE relay (bare JWE + encData) load test (~12min)"
+	@echo "  loadtest-tokens-mle-smoke Run tokens MLE relay smoke test (30s)"
 	@echo "  loadtest-all              Run all load tests in sequence"
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
@@ -537,7 +539,7 @@ loadtest-all: check-k6
 	@k6 run loadtests/sustained-load.ts
 	@echo ""
 	@echo "✅ All load tests completed!"
-	@echo "📊 Review results and see wiki/LOAD_TESTING.md for analysis guidance"
+	@echo "📊 Review results; each script's header under loadtests/ says what its scenario measures"
 
 # Run a quick smoke test
 loadtest-smoke: check-k6
@@ -562,6 +564,26 @@ loadtest-tokens-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/tokens-relay.ts
 	@echo ""
 	@echo "✅ Tokens relay smoke test completed"
+
+# --- Tokens MLE relay (Visa Message Level Encryption) -------------------------
+# POST /api/v1/tokens/mle-relay: bare JWE (A128GCM, no signature) inside the
+# {"encData": ...} envelope, against the in-process /__sim/peer/mle simulator.
+# K6_BASE_URL overrides the target (default http://localhost:8080).
+.PHONY: loadtest-tokens-mle loadtest-tokens-mle-smoke
+
+loadtest-tokens-mle: check-k6
+	@echo "🧪 Running tokens MLE relay load test (bare JWE + encData envelope)..."
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-mle-relay.ts
+	@echo ""
+	@echo "✅ Tokens MLE relay load test completed"
+
+loadtest-tokens-mle-smoke: check-k6
+	@echo "🧪 Running tokens MLE relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-mle-relay.ts
+	@echo ""
+	@echo "✅ Tokens MLE relay smoke test completed"
 
 # Type check load test TypeScript files
 loadtest-type-check:

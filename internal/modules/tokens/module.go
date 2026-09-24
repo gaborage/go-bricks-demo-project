@@ -63,6 +63,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		EncryptKid: PeerKid,
 		VerifyKid:  PeerKid,
 		DecryptKid: OurKid,
+		PeerName:   peerSimulatorName,
 		Logger:     m.logger,
 	})
 	if err != nil {
@@ -90,6 +91,7 @@ func (m *Module) initMLE(deps *app.ModuleDeps) error {
 		KeyStore:   deps.KeyStore,
 		EncryptKid: PeerKid, // bare outbound declares an encrypt kid and nothing else
 		DecryptKid: OurKid,  // bare inbound declares a decrypt kid and nothing else
+		PeerName:   mlePeerSimulatorName,
 		Logger:     m.logger,
 	})
 	if err != nil {
@@ -142,3 +144,12 @@ const peerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/tokens"
 // process, different wire shape ({"encData":"<compact JWE>"} rather than a bare
 // compact). Demo-only.
 const mlePeerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/mle"
+
+// Peer names for the relay clients (httpclient.Builder.WithPeerName, go-bricks
+// v0.65.0 #1648). Each one labels its client's outbound metrics with a
+// low-cardinality partner name, and names the partner when the transport refuses
+// a plaintext 2xx. They pair with the URLs above: one name per counterparty.
+const (
+	peerSimulatorName    = "tokens-peer-sim"
+	mlePeerSimulatorName = "visa-mle-peer-sim"
+)
