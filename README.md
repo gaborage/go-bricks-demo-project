@@ -184,7 +184,9 @@ curl -s -X POST http://localhost:8080/api/v1/payments/authorize \
 
 # 3. Read the published message off the broker and see what an operator with
 #    full queue access actually gets: a compact JWS whose `card` member is a
-#    JWE, with the PAN nowhere on the wire.
+#    JWE, with the PAN nowhere on the wire. Then open the same bytes with the
+#    consumer's keys (open-event CLI): signature verified, card decrypted and
+#    still printed as "<redacted>".
 make show-sealed-message
 ```
 
@@ -220,8 +222,10 @@ Three things the in-app `POST /payments/authorize` flow cannot show:
 | 2 | **The same bytes twice trip inbox dedup.** | The `jti` is minted once per **seal**, so republishing one `body.txt` gives two deliveries with the same `payments-sign:<jti>` dedup key and the second is skipped. Every HTTP call seals afresh, so two `POST`s never collide — and re-running the CLI is a new seal, not a replay. |
 | 3 | **A wrong `-event-type` lands on the DLQ.** | Re-seal the same document with `-event-type payment.captured`: signature, kids and manifest all still valid, only the signed `etyp` disagrees. Open-rule 7 refuses it with `SEAL_EVENT_TYPE_MISMATCH` and the delivery is nacked without requeue onto `payments.authorized.dlq`. This is the cross-type reroute class the ledger cannot close. |
 
-The broker records only `x-death` on the parked message — the `SEAL_*` code is in
-the **app log**, as a `*messaging.PayloadError` at stage `open`. The script prints
+The broker records only `x-death` on the parked message. The `SEAL_*` code is in
+the **app log**, as a `*messaging.PayloadError` at stage `open` — and the script
+then reads the same code back off the parked bytes with `open-event` (below),
+asserting exit `3` and `SEAL_EVENT_TYPE_MISMATCH`. The script prints
 the neighboring codes the CLI can actually reach: one `-sign-kid` change each for
 `SEAL_KID_UNKNOWN_GENERATION` and `SEAL_KID_FAMILY_MISMATCH`, plus the rule class a
 flipped byte lands on (rule 5 `SEAL_SIGNATURE_INVALID` for a payload or signature
@@ -229,6 +233,47 @@ byte, an earlier header rule otherwise). `SEAL_MANIFEST_MISMATCH` is deliberatel
 not on that list — no flag mints it. See
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh) and the
 framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md).
+
+#### Opening events outside the app (`open-event` CLI)
+
+`open-event` (go-bricks v0.65.0) is the mirror of `seal-event`. It verifies and
+decrypts one sealed body through the framework's `sealed.OpenDocument`, running
+the consume door's open rules in the same order with the same `SEAL_*` codes. It
+holds the **consumer** half of both families: sign PUBLIC to verify, encrypt
+PRIVATE to decrypt. Both demo scripts use it:
+
+- `make show-sealed-message` opens the tapped body and prints the verified
+  envelope and document, asserting that they match the raw-wire view.
+- `make seal-event-demo` reads the DLQ-parked body back and gets
+  `SEAL_EVENT_TYPE_MISMATCH` without the app log.
+
+```bash
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.67.0
+
+# The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
+open-event \
+  -sign-key-file certs/payments_sign_v1_public.der \
+  -encrypt-key-file certs/payments_encrypt_v1_private.der \
+  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -subject card -event-type payment.authorized -tenancy disabled -json < body.txt | jq -c .
+# {"envelope":{"jti":"…","eventType":"payment.authorized",…},
+#  "document":{"orderId":"ext-1","amount":4599,"currency":"USD","card":"<redacted>"}}
+```
+
+- **The card is never printed.** The subject member keeps its place, but its
+  value is the fixed literal `"<redacted>"`, with no plaintext and no length
+  hint. `-print-subject` would print the decrypted card, PAN included. It is a
+  fixture-only escape hatch, and the scripts' shared runner
+  ([scripts/lib/open-event.sh](scripts/lib/open-event.sh)) refuses it.
+- **Exit codes:** `0` opened, `1` tool error, `2` usage, `3` refused. A refusal
+  is `{"code":…,"details":{…}}` on stdout. Its details carry only presence and
+  length facts.
+- **The scripts install the CLI, never `go run` it.** They use
+  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.67.0`, because `go run`
+  reports any non-zero exit as its own `1` and would hide the refusal's `3`.
+- **Both kids are required flags.** The CLI never reads them from the
+  unauthenticated header, so after a rotation you pass the new generation
+  (`OPEN_SIGN_KID=payments-sign-v2 make show-sealed-message`).
 
 ### Activity (RabbitMQ Super-Stream Example)
 The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the
@@ -430,8 +475,8 @@ make run            # Build + run
 make check          # fmt + lint + test (pre-commit)
 
 make advisory-lock-demo    # Two replicas race for the report job's advisory lock: one runs per tick
-make show-sealed-message   # Publish a sealed payment, dump the raw broker body
-make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject
+make show-sealed-message   # Publish a sealed payment, dump the raw broker body, open it (card redacted)
+make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject + open-event verdict
 make seal-payload          # JSON on stdin -> nested JWE-of-JWS body for POST /api/v1/tokens
 make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for the MLE simulator
 ```

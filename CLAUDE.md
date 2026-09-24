@@ -836,7 +836,7 @@ Ordering is the security decision: **encrypt the Subject first, then sign the wh
 
 **Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
 
-**Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
+**Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. It then opens the same bytes with `open-event` and the consumer half of the keys (see below), asserting that the verified envelope and clear fields match the decoded wire view and that the card renders as `"<redacted>"`. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
 
 **Minting sealed events outside the app:** `make seal-event-demo` runs
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh), which uses the
@@ -852,8 +852,11 @@ dedup on the stable `<sign family>:<jti>` key (every HTTP call mints a fresh
 `jti`, so two calls never collide — only a replayed body does); and a body sealed
 with a wrong `-event-type` is refused at open-rule 7 with
 `SEAL_EVENT_TYPE_MISMATCH` and parks on `payments.authorized.dlq`. The broker
-records only the `x-death` rejection — the `SEAL_*` code lives in the app log, as
-a `*messaging.PayloadError` at stage `open`.
+records only the `x-death` rejection. The `SEAL_*` code lives in the app log, as
+a `*messaging.PayloadError` at stage `open`. The script's step 5 also reads it
+back off the parked bytes with `open-event` (below): exit `3` plus
+`SEAL_EVENT_TYPE_MISMATCH` under the consumer's declared type. A control run
+under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 
 ```bash
 printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
@@ -866,7 +869,47 @@ printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0
 `-tenant-id` is omitted on purpose: `multitenant.enabled` is false here, so the
 signed `tid` carries no rule and is only surfaced on the envelope.
 
-**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" section covers the CLI) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
+**Opening sealed events outside the app (v0.65.0, #1640 + #1633):** the
+framework's `open-event` CLI mirrors `seal-event`. It verifies and decrypts one
+body through `sealed.OpenDocument`, the type-free door that runs the typed
+consume door's open rules in the same order with the same `SEAL_*` codes. It
+takes the **consumer** half: `certs/payments_sign_v1_public.der` (sign PUBLIC) and
+`certs/payments_encrypt_v1_private.der` (encrypt PRIVATE). Both scripts drive it
+through [scripts/lib/open-event.sh](scripts/lib/open-event.sh):
+
+- **Install, never `go run`.** `install_open_event` runs
+  `GOBIN=<scratch> go install …/cmd/open-event@${SEAL_EVENT_VERSION}`. `go run`
+  collapses every non-zero exit of its child into its own `1`, and the scripts
+  assert the real codes: `0` opened, `1` tool error, `2` usage, `3` refused.
+- **Never `-print-subject`.** It prints the decrypted card, PAN included, and is
+  a fixture-only hatch. `open_event` refuses the flag in every spelling. The
+  default renders the subject member as the fixed literal `"<redacted>"`, with no
+  length hint. Under `-json` it travels HTML-escaped as `"\u003credacted\u003e"`,
+  which `jq` decodes to `<redacted>`, so compare the decoded value, never the raw
+  bytes. `assert_redacted` greps the
+  captured stdout and stderr for the PAN before either is printed.
+- **Kids are declared, not peeked.** `-sign-kid` and `-encrypt-kid` are required
+  flags, never read from the unauthenticated header. After a rotation,
+  show-sealed-message takes `OPEN_SIGN_KID` / `OPEN_ENCRYPT_KID` and derives the
+  key file from the keystore's DER naming.
+- **`-tenancy disabled`** is passed explicitly: `multitenant.enabled` is false.
+- **The seal-event demo matches the parked message by bytes.** The DLQ is durable
+  and accumulates across runs, so the script peeks up to `DLQ_PEEK_MAX` messages
+  (`ack_requeue_true`) and opens the one that is byte-identical to the body it
+  minted, not the head.
+- **Rule 9 can be reached from the consumer side.** open-event with
+  `-subject amount` refuses a valid body with `SEAL_MANIFEST_MISMATCH`, which is
+  consumer declaration drift. seal-event cannot mint that case.
+
+```bash
+open-event \
+  -sign-key-file certs/payments_sign_v1_public.der \
+  -encrypt-key-file certs/payments_encrypt_v1_private.der \
+  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -subject card -event-type payment.authorized -tenancy disabled -json < body.txt
+```
+
+**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" and "Inspecting sealed events" sections cover the two CLIs) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 
@@ -1142,7 +1185,7 @@ Explore the code in this order:
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
    - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the quorum DLQ pair (explicit `DeadLetterSpec.QueueType`; quorum is the v0.64.0 default, see Troubleshooting for the retained-volume trap) and the consumerless `payments.authorized.tap` queue
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
-   - `make show-sealed-message` proves the PAN never reaches the broker
+   - `make show-sealed-message` proves the PAN never reaches the broker, then opens the same bytes with `open-event` (consumer keys, card still `"<redacted>"`)
 
 10. **[internal/modules/activity/](internal/modules/activity/)** - Activity module (RabbitMQ super-stream demo)
     - `module.go` carries the `messaging/streams` import that opts the lane in (ADR-091) and holds the `DeclareStreams` topology: super stream, publisher handle, typed consumer

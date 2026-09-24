@@ -26,12 +26,17 @@
 #               parks on the DLQ. Signature, kids and manifest are all valid; only
 #               the event type is wrong, which is the cross-type reroute class the
 #               inbox ledger cannot close (a captured event of another type has a
-#               jti the ledger has never seen).
+#               jti the ledger has never seen). The broker records only that the
+#               message was rejected, so step 5 reads the verdict back off the
+#               PARKED bytes with the framework's `open-event` CLI (go-bricks
+#               v0.65.0, #1640): same open rules, same SEAL_* code, no app log.
 #
 # The keys: this demo is producer AND consumer in one process, so its keystore
-# holds both halves of both families. The CLI takes the PRODUCER half — the sign
-# PRIVATE key and the encrypt PUBLIC key — exactly as a separate producing
-# service would. It never sees the consumer's sign-public / encrypt-private.
+# holds both halves of both families. seal-event takes the PRODUCER half — the
+# sign PRIVATE key and the encrypt PUBLIC key — exactly as a separate producing
+# service would, and never sees the consumer's half. open-event takes the
+# CONSUMER half — the sign PUBLIC key and the encrypt PRIVATE key — exactly as
+# the payments consumer resolves them from its keystore.
 #
 # DEMO DATA ONLY. 4111111111111111 is the universally published Visa test PAN.
 # Never put a real cardholder number through this script.
@@ -46,7 +51,7 @@
 #
 # Overrides (env): RABBIT_MGMT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST,
 #                  SEAL_EVENT_VERSION, PG_HOST, PG_PORT, PG_USER, PG_DB,
-#                  PGPASSWORD, SETTLE_SECONDS
+#                  PGPASSWORD, SETTLE_SECONDS, DLQ_PEEK_MAX
 
 set -euo pipefail
 
@@ -58,15 +63,20 @@ cd "$SCRIPT_DIR/.."
 # shellcheck source-path=SCRIPTDIR source=lib/rabbitmq-mgmt.sh
 source "$SCRIPT_DIR/lib/rabbitmq-mgmt.sh"
 
+# open-event installer + runner (refuses -print-subject), shared the same way.
+# shellcheck source-path=SCRIPTDIR source=lib/open-event.sh
+source "$SCRIPT_DIR/lib/open-event.sh"
+
 RABBIT_MGMT="${RABBIT_MGMT:-http://127.0.0.1:15672}"
 RABBIT_USER="${RABBIT_USER:-guest}"
 RABBIT_PASS="${RABBIT_PASS:-guest}"
 RABBIT_VHOST="${RABBIT_VHOST:-%2F}"   # default vhost "/" percent-encoded
 
-# Pin the CLI to the tag this demo pins the framework to, so the sealer that
-# mints these bodies is the same code the app links.
-SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-v0.67.0}"
-SEAL_EVENT_PKG="github.com/gaborage/go-bricks/cmd/seal-event@${SEAL_EVENT_VERSION}"
+# Pin the CLIs to the tag this demo pins the framework to, so the sealer that
+# mints these bodies and the opener that judges them are the same code the app
+# links. One variable for both: they ship in the same module at the same tag.
+# Empty means "the version in go.mod", resolved once go is known to exist.
+SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-}"
 
 # Topology — must match internal/modules/payments/module.go.
 EXCHANGE="payment-events"
@@ -82,6 +92,8 @@ ENCRYPT_KID="payments-encrypt-v1"
 SIGN_FAMILY="payments-sign"
 SIGN_KEY_FILE="certs/payments_sign_v1_private.der"    # producer half: PRIVATE
 ENCRYPT_KEY_FILE="certs/payments_encrypt_v1_public.der" # producer half: PUBLIC
+OPEN_SIGN_KEY_FILE="certs/payments_sign_v1_public.der"       # consumer half: PUBLIC
+OPEN_ENCRYPT_KEY_FILE="certs/payments_encrypt_v1_private.der" # consumer half: PRIVATE
 
 # The one member carrying seal:"subject" in domain.PaymentAuthorized.
 SUBJECT="card"
@@ -97,6 +109,9 @@ PG_DB="${PG_DB:-postgres}"
 export PGPASSWORD="${PGPASSWORD:-postgres}"
 
 SETTLE_SECONDS="${SETTLE_SECONDS:-2}"
+
+# How many DLQ messages step 4 peeks while looking for the body it just parked.
+DLQ_PEEK_MAX="${DLQ_PEEK_MAX:-100}"
 
 # --- helpers --------------------------------------------------------------
 
@@ -114,6 +129,18 @@ fail() {
 for tool in curl jq go; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required but not installed"
 done
+
+# SEAL_EVENT_VERSION defaults to the go-bricks version go.mod pins, read the way
+# scripts/seal-payload.sh reads it, so no second pin can drift from go.mod. The
+# workspace is off for the lookup: an untracked go.work would make go list report
+# the workspace module, which has no version.
+if [[ -z "$SEAL_EVENT_VERSION" ]]; then
+    SEAL_EVENT_VERSION="$(GOWORK=off go list -m -f '{{.Version}}' github.com/gaborage/go-bricks)" \
+        || fail "could not read the github.com/gaborage/go-bricks version from go.mod"
+fi
+[[ -n "$SEAL_EVENT_VERSION" ]] || fail "go.mod reports no version for github.com/gaborage/go-bricks"
+SEAL_EVENT_PKG="github.com/gaborage/go-bricks/cmd/seal-event@${SEAL_EVENT_VERSION}"
+OPEN_EVENT_PKG="github.com/gaborage/go-bricks/cmd/open-event@${SEAL_EVENT_VERSION}"
 
 # GNU coreutils spells it --decode, older BSD/macOS base64 only knows -D.
 if printf '' | base64 --decode >/dev/null 2>&1; then
@@ -162,11 +189,15 @@ guard_mgmt_endpoint "$RABBIT_MGMT"
 
 # --- credentials ----------------------------------------------------------
 
-# All three scratch files are created here so one trap owns the cleanup.
+# All scratch files (and the directory open-event is installed into) are
+# created here so one trap owns the cleanup.
 CURL_CFG="$(mktemp)"
 BODY_VALID="$(mktemp)"
 BODY_WRONG_TYPE="$(mktemp)"
-trap 'rm -f "$CURL_CFG" "$BODY_VALID" "$BODY_WRONG_TYPE"' EXIT INT TERM HUP
+OPEN_OUT="$(mktemp)"
+OPEN_ERR="$(mktemp)"
+TOOL_DIR="$(mktemp -d)"
+trap 'rm -f "$CURL_CFG" "$BODY_VALID" "$BODY_WRONG_TYPE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT INT TERM HUP
 
 write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 
@@ -271,11 +302,12 @@ ledger_count() {
 
 # --- preflight ------------------------------------------------------------
 
-section "0/4  Preflight"
+section "0/5  Preflight"
 
-for f in "$SIGN_KEY_FILE" "$ENCRYPT_KEY_FILE"; do
+for f in "$SIGN_KEY_FILE" "$ENCRYPT_KEY_FILE" "$OPEN_SIGN_KEY_FILE" "$OPEN_ENCRYPT_KEY_FILE"; do
     [[ -r "$f" ]] || fail "missing key '$f' — run 'make generate-keys'"
 done
+[[ "$DLQ_PEEK_MAX" =~ ^[1-9][0-9]*$ ]] || fail "DLQ_PEEK_MAX='$DLQ_PEEK_MAX' must be a positive integer"
 
 curl -fsS -o /dev/null -K "$CURL_CFG" "$RABBIT_MGMT/api/overview" 2>/dev/null \
     || fail "RabbitMQ management API not reachable at $RABBIT_MGMT — run 'make docker-up'"
@@ -285,7 +317,14 @@ for q in "$QUEUE" "$DLQ"; do
         || fail "queue '$q' does not exist — start the app with 'make run'; it declares the exchange, the queue and its DLQ at boot"
 done
 
+# Installed up front so a missing toolchain or proxy fails before anything is
+# published, not halfway through step 5.
+install_open_event "$SEAL_EVENT_VERSION" "$TOOL_DIR"
+
 echo "keys      : $SIGN_KEY_FILE (sign PRIVATE) + $ENCRYPT_KEY_FILE (encrypt PUBLIC)"
+echo "            for seal-event, the producer half"
+echo "            $OPEN_SIGN_KEY_FILE (sign PUBLIC) + $OPEN_ENCRYPT_KEY_FILE (encrypt PRIVATE)"
+echo "            for open-event, the consumer half"
 echo "broker    : $RABBIT_MGMT — exchange '$EXCHANGE', queue '$QUEUE', DLQ '$DLQ'"
 if [[ -n "$PSQL_MODE" ]]; then
     echo "ledger    : gobricks_inbox via psql ($PSQL_MODE)"
@@ -293,10 +332,12 @@ else
     echo "ledger    : psql not reachable — dedup will be reported, not asserted"
 fi
 echo "seal CLI  : go run $SEAL_EVENT_PKG"
+echo "open CLI  : $OPEN_EVENT_PKG, installed to a scratch GOBIN"
+echo "            (go run would turn its refusal exit 3 into a generic 1)"
 
 # --- 1. mint outside the app ----------------------------------------------
 
-section "1/4  Mint a sealed body with the seal-event CLI"
+section "1/5  Mint a sealed body with the seal-event CLI"
 
 # The document is plain business JSON. The CLI replaces the -subject member in
 # place with a compact JWE and signs the whole result — the same
@@ -357,7 +398,7 @@ echo "  actually show up ✅"
 
 # --- 2. the consumer opens a body this app never produced -----------------
 
-section "2/4  Publish it — the consumer opens an externally-minted event"
+section "2/5  Publish it — the consumer opens an externally-minted event"
 
 DLQ_BEFORE="$(queue_depth "$DLQ")"
 echo "DLQ depth before: $DLQ_BEFORE"
@@ -392,7 +433,7 @@ echo "process identity."
 
 # --- 3. the same bytes twice: inbox dedup ---------------------------------
 
-section "3/4  Publish the SAME bytes again — inbox dedup"
+section "3/5  Publish the SAME bytes again — inbox dedup"
 
 echo "Re-running the CLI would mint a fresh jti and prove nothing; the dedup test"
 echo "is republishing the identical body, which is exactly what a redelivery, a DLQ"
@@ -430,7 +471,7 @@ echo "replay the ledger exists to absorb. inbox.retentionperiod IS that window."
 
 # --- 4. wrong event type: SEAL_EVENT_TYPE_MISMATCH -> DLQ -----------------
 
-section "4/4  Wrong -event-type — open-rule 7 refuses, message parks on the DLQ"
+section "4/5  Wrong -event-type — open-rule 7 refuses, message parks on the DLQ"
 
 echo "Same keys, same subject, same document: only the signed etyp changes to"
 echo "'$WRONG_EVENT_TYPE'. Signature, kids and manifest are all valid — this is the"
@@ -473,30 +514,129 @@ else
     fail "DLQ did not grow ($DLQ_BEFORE -> $DLQ_AFTER_WRONG) — expected the wrong etyp to be refused; is the app running?"
 fi
 
-# Peek at the parked message without consuming it: requeue_true puts it back so
-# a second run of this script still sees a populated DLQ.
-PARKED="$(curl -sS -K "$CURL_CFG" -H 'content-type: application/json' \
-    -X POST "$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$DLQ/get" \
-    --data-binary '{"count":1,"ackmode":"ack_requeue_true","encoding":"auto"}' || true)"
+# Find THIS run's parked message. The DLQ is durable and keeps whatever earlier
+# runs parked, so its head is not necessarily ours: peek up to DLQ_PEEK_MAX
+# messages and keep the one whose payload is byte-identical to the body minted
+# above (each seal mints a fresh jti, so no other body can match). ackmode
+# ack_requeue_true puts every peeked message back — marked redelivered — so a
+# second run of this script still sees a populated DLQ. Retried briefly in case
+# the growth counted above was some other message and ours is still in flight.
+MINTED_WRONG="$(cat "$BODY_WRONG_TYPE")"
+PEEK_REQUEST="$(jq -nc --argjson n "$DLQ_PEEK_MAX" \
+    '{count: $n, ackmode: "ack_requeue_true", encoding: "auto"}')"
+PARKED_ENTRY=""
+for ((attempt = 1; attempt <= 5; attempt++)); do
+    PARKED="$(curl -sS -K "$CURL_CFG" -H 'content-type: application/json' \
+        -X POST "$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$DLQ/get" \
+        --data-binary "$PEEK_REQUEST" || true)"
+    PARKED_ENTRY="$(jq -c --arg body "$MINTED_WRONG" \
+        'if type == "array"
+         then (map(select(.payload_encoding == "string" and .payload == $body)) | first // empty)
+         else empty end' <<<"$PARKED" 2>/dev/null || true)"
+    [[ -n "$PARKED_ENTRY" ]] && break
+    sleep 1
+done
+[[ -n "$PARKED_ENTRY" ]] \
+    || fail "this run's body is not among the first $DLQ_PEEK_MAX messages on '$DLQ' — purge it (command at the end of this script) or raise DLQ_PEEK_MAX"
 
-if [[ "$(jq -r 'if type == "array" then length else 0 end' <<<"$PARKED" 2>/dev/null || echo 0)" -gt 0 ]]; then
-    # The AMQP properties and headers are the third surface an operator reads, and
-    # the broker echoes back whatever the publisher set. Assert the PAN is not
-    # hiding there either, as show-sealed-message.sh does for its tap message.
-    grep -qF -- "$PAN" <<<"$(jq -c '.[0].properties' <<<"$PARKED")" \
-        && fail "PAN FOUND IN THE AMQP PROPERTIES/HEADERS of the parked message"
-    echo
-    echo "x-death on the parked message (broker-written on nack-without-requeue):"
-    jq '.[0].properties.headers["x-death"] // "<absent>"' <<<"$PARKED"
+# The AMQP properties and headers are the third surface an operator reads, and
+# the broker echoes back whatever the publisher set. Assert the PAN is not
+# hiding there either, as show-sealed-message.sh does for its tap message.
+grep -qF -- "$PAN" <<<"$(jq -c '.properties' <<<"$PARKED_ENTRY")" \
+    && fail "PAN FOUND IN THE AMQP PROPERTIES/HEADERS of the parked message"
+PARKED_BODY="$(jq -r '.payload' <<<"$PARKED_ENTRY")"
+
+echo
+echo "found this run's body on '$DLQ' (byte-identical to the one minted above)."
+echo "x-death on it (broker-written on nack-without-requeue):"
+jq '.properties.headers["x-death"] // "<absent>"' <<<"$PARKED_ENTRY"
+
+# --- 5. the consumer's verdict, read back off the parked bytes -------------
+
+section "5/5  open-event on the parked body — the consumer's verdict, no app log"
+
+echo "The broker records only THAT the message was rejected (x-death above), never"
+echo "WHY. open-event runs the consume door's open rules — same order, same SEAL_*"
+echo "codes — over the parked bytes, holding the consumer half of the keys and"
+echo "declaring exactly what the payments consumer declares:"
+echo
+echo "open-event \\"
+echo "  -sign-key-file $OPEN_SIGN_KEY_FILE \\"
+echo "  -encrypt-key-file $OPEN_ENCRYPT_KEY_FILE \\"
+echo "  -sign-kid $SIGN_KID -encrypt-kid $ENCRYPT_KID \\"
+echo "  -subject $SUBJECT -event-type $EVENT_TYPE -tenancy disabled -json"
+echo
+
+# -tenancy disabled: multitenant.enabled is false here, so the signed tid carries
+# no rule — the same reason publish_body sends no x-tenant-id header. -json puts
+# a refusal on stdout as {code, details}; details are presence/length facts only.
+# NEVER add -print-subject: it prints the decrypted card, PAN included, and
+# open_event refuses it. Both outputs are checked for the PAN before either is
+# printed.
+OPEN_RC=0
+open_event \
+    -sign-key-file "$OPEN_SIGN_KEY_FILE" \
+    -encrypt-key-file "$OPEN_ENCRYPT_KEY_FILE" \
+    -sign-kid "$SIGN_KID" \
+    -encrypt-kid "$ENCRYPT_KID" \
+    -subject "$SUBJECT" \
+    -event-type "$EVENT_TYPE" \
+    -tenancy disabled \
+    -json <<<"$PARKED_BODY" >"$OPEN_OUT" 2>"$OPEN_ERR" || OPEN_RC=$?
+assert_redacted "$PAN" "open-event output" "$OPEN_OUT" "$OPEN_ERR"
+
+OPEN_CODE="$(jq -r '.code // empty' "$OPEN_OUT" 2>/dev/null || true)"
+if [[ "$OPEN_RC" -ne 3 || "$OPEN_CODE" != "SEAL_EVENT_TYPE_MISMATCH" ]]; then
+    cat "$OPEN_ERR" >&2
+    fail "expected open-event to refuse with exit 3 and SEAL_EVENT_TYPE_MISMATCH, got exit $OPEN_RC and '${OPEN_CODE:-<no code>}'"
 fi
+echo "exit $OPEN_RC (0 opened, 1 tool error, 2 usage, 3 refused), stdout:"
+jq . "$OPEN_OUT"
+echo
+echo "✅ refused with SEAL_EVENT_TYPE_MISMATCH — the code the consumer logged for"
+echo "   this delivery (a *messaging.PayloadError at stage 'open' wrapping"
+echo "   *sealed.OpenError), reproduced from the parked bytes alone. 'len' is the"
+echo "   signed etyp's length: a refusal carries presence/length facts, never a"
+echo "   subject byte."
 
 echo
-echo "Where the CODE is: the broker records only that the message was rejected."
-echo "The rule that refused it is in the APP log for this delivery — a"
-echo "*messaging.PayloadError at stage 'open' wrapping *sealed.OpenError with"
-echo "Code=SEAL_EVENT_TYPE_MISMATCH. Grep the app terminal for SEAL_ to see it."
+echo "Control: the SAME parked bytes, declaring the type they were sealed with"
+echo "('$WRONG_EVENT_TYPE'), open cleanly — so signature, kids and manifest all"
+echo "verify, and rule 7 alone refused the delivery:"
 echo
-echo "Other codes the same trick reaches, one flag at a time:"
+
+OPEN_RC=0
+open_event \
+    -sign-key-file "$OPEN_SIGN_KEY_FILE" \
+    -encrypt-key-file "$OPEN_ENCRYPT_KEY_FILE" \
+    -sign-kid "$SIGN_KID" \
+    -encrypt-kid "$ENCRYPT_KID" \
+    -subject "$SUBJECT" \
+    -event-type "$WRONG_EVENT_TYPE" \
+    -tenancy disabled \
+    -json <<<"$PARKED_BODY" >"$OPEN_OUT" 2>"$OPEN_ERR" || OPEN_RC=$?
+assert_redacted "$PAN" "open-event output" "$OPEN_OUT" "$OPEN_ERR"
+
+if [[ "$OPEN_RC" -ne 0 ]]; then
+    cat "$OPEN_OUT" "$OPEN_ERR" >&2
+    fail "expected the parked body to open under -event-type $WRONG_EVENT_TYPE, got exit $OPEN_RC"
+fi
+# -json keeps Go's HTML escaping, so the placeholder travels as
+# "\u003credacted\u003e", which jq decodes to <redacted>: compare the DECODED
+# value, never the raw bytes.
+jq -e --arg et "$WRONG_EVENT_TYPE" --arg id "$ORDER_ID" \
+    '.envelope.eventType == $et and .document.orderId == $id and .document.card == "<redacted>"' \
+    "$OPEN_OUT" >/dev/null \
+    || fail "open-event opened the parked body, but not as the event minted above (etyp, orderId or redacted card differ)"
+jq . "$OPEN_OUT"
+echo
+echo "✅ exit 0: this run's orderId, signed etyp '$WRONG_EVENT_TYPE', and the card"
+echo "   decrypted but rendered as \"<redacted>\" — open-event's default, with no"
+echo "   length hint. -print-subject would print it; it is fixture-only and never"
+echo "   used here."
+echo
+echo "Other codes the same trick reaches, one seal-event flag at a time — and"
+echo "open-event names each one from the parked bytes the same way:"
 echo "  -sign-kid payments-sign-v9      -> SEAL_KID_UNKNOWN_GENERATION (recoverable:"
 echo "                                     right family, generation not provisioned —"
 echo "                                     this is the rotation-lag signature)"
@@ -509,11 +649,14 @@ echo "                                     (NOT_SEALED / SEAL_ALG_NOT_ALLOWED /"
 echo "                                     SEAL_CTY_INVALID / SEAL_KID_*)"
 echo
 echo "SEAL_MANIFEST_MISMATCH (rule 9, signed sp vs the declared sealed set) is NOT"
-echo "reachable by changing a flag here. -subject only accepts a member the document"
-echo "actually has — '-subject holder' is nested inside card, so it fails at SEAL"
-echo "time with SEAL_DOCUMENT_INVALID and never reaches a consumer — and pinning any"
-echo "other top-level member would ship the card UNSEALED. Minting a real manifest"
-echo "mismatch needs custom tooling, not this CLI."
+echo "reachable by changing a seal-event flag. -subject only accepts a member the"
+echo "document actually has — '-subject holder' is nested inside card, so it fails"
+echo "at SEAL time with SEAL_DOCUMENT_INVALID and never reaches a consumer — and"
+echo "pinning any other top-level member would ship the card UNSEALED. Minting a"
+echo "real manifest mismatch needs custom tooling, not seal-event. open-event reaches"
+echo "rule 9 from the CONSUMER side instead: declare a sealed set the body was not"
+echo "signed with ('-subject amount') and it refuses with SEAL_MANIFEST_MISMATCH —"
+echo "declaration drift on the consumer, not a forged message."
 echo
 echo "Clean up the parked message when you are done:"
 echo "  curl -u $RABBIT_USER:<pass> -X DELETE '$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$DLQ/contents'"

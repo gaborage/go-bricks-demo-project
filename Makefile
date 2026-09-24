@@ -48,8 +48,8 @@ help:
 	@echo "API Testing:"
 	@echo "  test-products-api Test products API endpoints"
 	@echo "  advisory-lock-demo Race two app replicas for the report job's advisory lock (one runs per tick)"
-	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
-	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject"
+	@echo "  show-sealed-message Publish a sealed payment, dump the raw broker body, open it (open-event, card redacted)"
+	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -337,8 +337,11 @@ advisory-lock-demo: build
 
 # Broker-visibility proof for the sealed-messages demo: publish one
 # PaymentAuthorized event, then read it off the consumerless tap queue via the
-# RabbitMQ management API and assert the PAN never reaches the wire.
-# Requires the app running (make run) and infra up (make docker-up).
+# RabbitMQ management API and assert the PAN never reaches the wire. Then open
+# the same bytes with the framework's open-event CLI (go-bricks v0.65.0, #1640)
+# and the consumer half of the keys — the card stays "<redacted>".
+# Requires the app running (make run), infra up (make docker-up) and keys
+# present (make generate-keys).
 show-sealed-message:
 	@echo "🔐 Inspecting a sealed message on the broker..."
 	@./scripts/show-sealed-message.sh
@@ -349,7 +352,8 @@ show-sealed-message:
 # Shows three things the in-app POST flow cannot: an externally-minted event is
 # opened, the SAME bytes published twice trip inbox dedup (the jti is stable per
 # seal, while every HTTP call mints a fresh one), and a wrong -event-type is
-# refused at open-rule 7 (SEAL_EVENT_TYPE_MISMATCH) and parks on the DLQ.
+# refused at open-rule 7 (SEAL_EVENT_TYPE_MISMATCH) and parks on the DLQ, where
+# open-event reads the same code back off the parked bytes.
 # Requires the app running (make run), infra up (make docker-up), the inbox
 # ledger migrated (make migrate) and keys present (make generate-keys).
 seal-event-demo:
