@@ -294,6 +294,20 @@ inbox:
 scheduler:
   timezone: UTC
 
+# --- Products report job: advisory-lock hold (demo only) --------------------
+# The products report job ("test-job", every 30s) runs under a PostgreSQL
+# advisory lock taken on a pinned database Session (go-bricks v0.65.0,
+# ADR-112), so with several replicas only one generates the report at a time
+# (internal/modules/products/job). custom.products.report.hold keeps that lock
+# held for a Go duration after the report, standing in for a slow render and
+# upload. Unset means no hold, which is what `make run` uses. Only
+# scripts/advisory-lock-demo.sh sets it, through CUSTOM_PRODUCTS_REPORT_HOLD on
+# the replicas it starts. A malformed or negative value fails startup.
+# custom:
+#   products:
+#     report:
+#       hold: 8s
+
 # --- KeyStore ----------------------------------------------------------------
 # Named RSA key pairs for signing/verification.
 # Each key supports public/private sources independently. Two source styles:

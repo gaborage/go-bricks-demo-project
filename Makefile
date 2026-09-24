@@ -47,6 +47,7 @@ help:
 	@echo ""
 	@echo "API Testing:"
 	@echo "  test-products-api Test products API endpoints"
+	@echo "  advisory-lock-demo Race two app replicas for the report job's advisory lock (one runs per tick)"
 	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject"
 	@echo ""
@@ -316,6 +317,19 @@ check: fmt lint test
 test-products-api:
 	@echo "🧪 Testing products API..."
 	@./scripts/test-products-api.sh
+
+# --- Advisory-lock demo (products report job) --------------------------------
+# Two-replica proof for the report job's PostgreSQL advisory lock, taken on a
+# pinned database Session (go-bricks v0.65.0, ADR-112). Starts two extra app
+# replicas on REPLICA_PORTS (default 8081 8082) with a lock hold, triggers the
+# job on both at once, then waits for their own scheduled tick — exactly one
+# replica runs the report each time. Requires infra up (make docker-up),
+# migrations (make migrate) and keys (make generate-keys); the app on :8080 does
+# not need to be running.
+.PHONY: advisory-lock-demo
+advisory-lock-demo: build
+	@echo "🔒 Racing two replicas for the report job's advisory lock..."
+	@./scripts/advisory-lock-demo.sh
 
 # Broker-visibility proof for the sealed-messages demo: publish one
 # PaymentAuthorized event, then read it off the consumerless tap queue via the

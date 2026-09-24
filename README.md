@@ -409,6 +409,7 @@ make build          # Build binary
 make run            # Build + run
 make check          # fmt + lint + test (pre-commit)
 
+make advisory-lock-demo    # Two replicas race for the report job's advisory lock: one runs per tick
 make show-sealed-message   # Publish a sealed payment, dump the raw broker body
 make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject
 ```

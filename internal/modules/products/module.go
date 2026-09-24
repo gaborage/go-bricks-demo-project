@@ -2,6 +2,7 @@ package products
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/handlers"
@@ -9,6 +10,7 @@ import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/repository"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/service"
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -19,6 +21,10 @@ import (
 // product lifecycle events to (outbox.defaultexchange in config.development.yaml).
 const productEventsExchange = "product-events"
 
+// reportHoldKey sets job.ReportJob.Hold (env CUSTOM_PRODUCTS_REPORT_HOLD). Unset
+// means no hold; scripts/advisory-lock-demo.sh sets it on the replicas it starts.
+const reportHoldKey = "custom.products.report.hold"
+
 // Module demonstrates multi-tenant database operations with tenant-specific isolation
 type Module struct {
 	deps         *app.ModuleDeps
@@ -28,6 +34,7 @@ type Module struct {
 	logger       logger.Logger
 	getDB        func(context.Context) (database.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	reportHold   time.Duration
 }
 
 // Compile-time guard: the framework finds the declarer by type assertion, and
@@ -56,6 +63,13 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.getMessaging = deps.Messaging
 
 	m.logger.Info().Msg("Initializing products module")
+
+	// Parsed here, not in the job, so a bad value fails startup instead of every tick.
+	hold, err := reportHold(deps.Config)
+	if err != nil {
+		return err
+	}
+	m.reportHold = hold
 
 	m.logger.Info().Msg("Using existing database schema for products")
 
@@ -98,8 +112,32 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 
 func (m *Module) RegisterJobs(scheduler app.JobRegistrar) error {
-	// Register scheduled jobs
-	return scheduler.FixedRate("test-job", &job.ReportJob{}, 30*time.Second)
+	// Register scheduled jobs. Every replica ticks; the job's advisory lock picks
+	// the one that runs (see job.ReportJob).
+	return scheduler.FixedRate("test-job", &job.ReportJob{Hold: m.reportHold}, 30*time.Second)
+}
+
+// reportHold reads custom.products.report.hold as a Go duration ("6s"). Absent
+// or empty means zero; a malformed or negative value is a startup error.
+func reportHold(cfg *config.Config) (time.Duration, error) {
+	if cfg == nil {
+		return 0, nil
+	}
+	return parseReportHold(cfg.String(reportHoldKey))
+}
+
+func parseReportHold(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	hold, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("products: %s: %w", reportHoldKey, err)
+	}
+	if hold < 0 {
+		return 0, fmt.Errorf("products: %s must not be negative", reportHoldKey)
+	}
+	return hold, nil
 }
 
 // Shutdown performs cleanup when the module is stopped

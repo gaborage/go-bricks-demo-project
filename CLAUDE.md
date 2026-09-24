@@ -593,6 +593,10 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
 
+**Scheduler system endpoints** (framework; loopback-only while `scheduler.security.cidrallowlist` is empty):
+- `GET /api/v1/_sys/job` - List the registered jobs (the products report job is `test-job`)
+- `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once
+
 **Products module:**
 - `GET /api/v1/products` - List all products
 - `GET /api/v1/products/:id` - Get product by ID
@@ -705,6 +709,34 @@ tx.Commit(ctx)
 
 **Event types:** `product.created`, `product.updated`, `product.deleted`
 **Exchange:** `product-events` (topic, durable) declared with `decls.DeclareTopicExchange` in products module's `DeclareMessaging()`
+
+### Scheduled Job Under an Advisory Lock (Database Session)
+
+The products report job ([internal/modules/products/job/report_job.go](internal/modules/products/job/report_job.go)) demonstrates the **database Session door** (go-bricks v0.65.0, ADR-112): `db.Session(ctx)` returns a handle pinned to ONE physical connection, for session-scoped state a pool would silently lose. Here that state is a PostgreSQL advisory lock that elects one runner across replicas. The scheduler only stops the SAME job overlapping inside one process, and every replica ticks on its own.
+
+```go
+sess, err := db.Session(ctx) // db is ctx.DB(), the job's context-aware handle
+defer sess.Close()           // deferred first, so it runs LAST
+var acquired bool
+err = sess.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ReportLockKey).Scan(&acquired)
+if !acquired {
+    log.Info().Msg("Report job skipped: another replica holds the lock")
+    return nil // a skip is not a failure
+}
+defer releaseReportLock(ctx, sess) // pg_advisory_unlock, runs BEFORE Close
+log.Info().Msg("Report job lock acquired")
+return j.generate(ctx)
+```
+
+- **Lock, work and unlock share one Session.** Through the pool, the unlock can run on another backend and release nothing, while both statements still succeed.
+- **Unlock before Close, on a detached context.** `Close` returns the connection to the pool without ending the backend. A lock left held would ride along on that pooled connection, and every replica would skip the report until the connection died. The unlock is registered as soon as the lock is held and runs on `context.WithoutCancel(ctx)` bounded to 5s, so a shutdown mid-report still releases it.
+- **Non-blocking on purpose.** `pg_try_advisory_lock`, not `pg_advisory_lock`: the replica that loses skips this tick instead of queueing a second report.
+- **A Session holds one pool connection for the whole run** (25 per pool by default), so acquire it late and release it early. A lock that only has to span one transaction should use `pg_advisory_xact_lock` on an ordinary transaction, with no Session.
+- **The key is database-wide.** `ReportLockKey` (`0x52505254`, ASCII "RPRT") shares one bigint namespace with every client of the database.
+
+**Testing:** `dbtest.TestDB.ExpectSession()` queues a strict `TestSession` with its own query expectations, and `dbtest.AssertSessionClosed` checks the release. `job/report_job_test.go` also asserts that the pool saw no statement and that the unlock ran on a live context after cancellation.
+
+**Proof:** `make advisory-lock-demo` runs [scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh). It starts two extra replicas on `REPLICA_PORTS` (default `8081 8082`) with `custom.products.report.hold` set (env `CUSTOM_PRODUCTS_REPORT_HOLD`, script `HOLD`, default `8s`), so the winner keeps the lock long enough for the loser to find it held. It then fires `POST /api/v1/_sys/job/test-job` at both replicas at once and waits for their first scheduled tick. Each time, exactly one replica logs `Report job lock acquired` and the other logs `Report job skipped: another replica holds the lock`, while `pg_locks` shows one holder — and none once the winner logs `Report job lock released`, checked while both replicas are still up. `GET /api/v1/_sys/job` (list) and `POST /api/v1/_sys/job/:jobId` (manual trigger) are the scheduler's system endpoints, loopback-only while `scheduler.security.cidrallowlist` is empty. The hold is a demo knob and `make run` leaves it unset.
 
 ### KeyStore RSA Signing
 
@@ -1062,6 +1094,7 @@ Explore the code in this order:
    - Dependency injection via `Init(deps *app.ModuleDeps)`
    - Module wiring: repository → service → handler chain
    - Route registration in `RegisterRoutes()`
+   - `job/report_job.go` — the scheduled report under a PostgreSQL advisory lock on a pinned `db.Session` (see [Scheduled Job Under an Advisory Lock](#scheduled-job-under-an-advisory-lock-database-session)); `make advisory-lock-demo` ([scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh)) races two replicas for it
 
 3. **[internal/modules/products/http/](internal/modules/products/http/)** - HTTP handlers
    - Request validation

@@ -2,7 +2,9 @@ package products
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gaborage/go-bricks/messaging"
 )
@@ -42,5 +44,43 @@ func TestDeclareMessagingProductEventsShapeUnchanged(t *testing.T) {
 	}
 	if len(got.Args) != 0 {
 		t.Fatalf("stored Args = %v, want none", got.Args)
+	}
+}
+
+func TestParseReportHold(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{raw: "", want: 0},
+		{raw: "0s", want: 0},
+		{raw: "6s", want: 6 * time.Second},
+		{raw: "1m30s", want: 90 * time.Second},
+		{raw: "6", wantErr: true}, // a bare number has no unit
+		{raw: "soon", wantErr: true},
+		{raw: "-1s", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, err := parseReportHold(tt.raw)
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), reportHoldKey) {
+					t.Fatalf("parseReportHold(%q) error = %v, want one naming %s", tt.raw, err, reportHoldKey)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("parseReportHold(%q) = %v, %v; want %v, nil", tt.raw, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestReportHoldWithoutConfigIsZero(t *testing.T) {
+	got, err := reportHold(nil)
+	if err != nil || got != 0 {
+		t.Fatalf("reportHold(nil) = %v, %v; want 0, nil", got, err)
 	}
 }
