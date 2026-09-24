@@ -50,6 +50,7 @@ help:
 	@echo "  advisory-lock-demo Race two app replicas for the report job's advisory lock (one runs per tick)"
 	@echo "  show-sealed-message Publish a sealed payment, dump the raw broker body, open it (open-event, card redacted)"
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
+	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -381,6 +382,24 @@ seal-payload:
 
 seal-mle:
 	@./scripts/seal-payload.sh mle
+
+# --- Consumer-aware readiness (go-bricks v0.65.0, #1686/#1684, ADR-114) -------
+# /ready fails closed once the payments.authorized consumer gives up
+# re-subscribing. The script builds and boots its OWN app with
+# MESSAGING_CONSUMERS_CRITICAL=true (config.development.yaml keeps the key off),
+# so stop any `make run` first — it refuses a busy port. It revokes the app
+# user's broker READ on payments.authorized only, closes the consumer's
+# connection, and polls /ready while consumer_max_fail_streak climbs to 5 and
+# the verdict turns 503. The recorded permissions are restored on every exit,
+# then recovery is shown. The broker is never stopped: that would flip /ready
+# through the publisher arm and hide the consumer arm.
+# Requires infra up (make docker-up), migrations (make migrate) and keys
+# (make generate-keys). Honors RABBIT_MGMT, RABBIT_CONTAINER, APP_URL and the
+# app's own env overrides (DATABASE_PORT, MESSAGING_BROKER_URL, ...).
+.PHONY: demo-consumer-readiness
+demo-consumer-readiness:
+	@echo "🩺 Demonstrating readiness that fails closed on a stalled consumer..."
+	@./scripts/consumer-readiness-demo.sh
 
 # Update dependencies to latest versions
 update:

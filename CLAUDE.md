@@ -595,6 +595,7 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 **Health checks:**
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
+- `GET /_sys/health-debug` - Per-component readiness detail, including the consumer arm (framework debug endpoint at the URL root, off by default and loopback-only; `make demo-consumer-readiness` enables it for the app it boots)
 
 **Scheduler system endpoints** (framework; loopback-only while `scheduler.security.cidrallowlist` is empty):
 - `GET /api/v1/_sys/job` - List the registered jobs (the products report job is `test-job`)
@@ -991,6 +992,37 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 
 **Reference:** framework [wiki/streams.md](https://github.com/gaborage/go-bricks/blob/main/wiki/streams.md) for the full lane, plus [ADR-059](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_059_streams_consumption.md) (consumption and skip-on-failure), [ADR-063](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_063_streams_native_publishing.md) (native publishing), [ADR-091](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_091_streams_opt_in_registration.md) (opt-in at the build graph) and [ADR-092](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_092_typed_stream_consumers_skip_poison.md) (typed consumers skip poison).
 
+### Consumer-Aware Readiness (`messaging.consumers.critical`)
+
+Before go-bricks v0.65.0, `/ready` judged the messaging kind by its **publisher** alone, so a service whose AMQP consumer had silently detached stayed in rotation while its queue filled up. v0.65.0 tracks every declared consumer's subscription (#1684), and the opt-in key `messaging.consumers.critical` (#1686, ADR-114) lets that state fail readiness:
+
+- **Consumer arm:** once a declared AMQP consumer (here only `payments.authorized`) is unsubscribed **and** its supervisor has failed **5** re-subscribes in a row, `/ready` answers 503. Five is the framework constant at which the `Consumer re-subscribe attempt failed` log turns WARN, and it is not configurable. A reconnect that recovers inside the streak never reaches the verdict.
+- **Publisher arm:** the existing "is the leased publisher ready?" check becomes critical too, so a broker outage answers 503 **at once**, with no streak. That is why the key is absent in [config.development.yaml](config.development.yaml), with only a commented example: turning it on is a per-environment decision (env `MESSAGING_CONSUMERS_CRITICAL=true`).
+- **Not covered:** stream consumers (the activity projection). The streams kind is never critical.
+
+Where to watch it:
+
+| View | What it shows |
+|------|---------------|
+| `GET /api/v1/ready` → 200 | `messaging_stats.declared_consumers`, `subscribed_consumers`, `consumer_max_fail_streak` (worst current streak, `0` when healthy), `consumer_resubscribes` (cumulative successes) and `consumer_registries`. Bare numbers only: never which consumer. |
+| `GET /api/v1/ready` → 503 | The fixed body `{"status":"not ready","messaging":"unhealthy","error":"messaging unavailable"}`. It carries no stats and no queue name (ADR-048), so the streak is not visible here once the verdict flips. |
+| `GET /_sys/health-debug` | This view is off by default. It is served at the URL root, not under `/api/v1`, and is access-controlled (`debug.allowedips` defaults to loopback). `data.components.messaging` shows `critical`, the same counters under `details`, and the arm that failed: `error` is `consumer re-subscribe exhausted` or `publisher not ready`. |
+
+**Proof:** `make demo-consumer-readiness` runs [scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh). The script:
+
+1. Builds and boots its **own** app with `MESSAGING_CONSUMERS_CRITICAL=true`, plus `/_sys/health-debug` on loopback only. Stop `make run` first: the script refuses a busy port.
+2. Records the app user's vhost permissions with `rabbitmqctl list_user_permissions`.
+3. Revokes **read on `payments.authorized` only**, with the read regex `^(?!payments\.authorized$).*`. Configure and write are unchanged, and every other queue and stream stays readable.
+4. Closes the consumer's own AMQP connection through the management API. The broker checks permissions at subscribe time, not per delivery.
+5. Polls `/ready` while `consumer_max_fail_streak` climbs. Once it hits 5, `/ready` answers 503 and the debug view names the consumer arm.
+6. Restores the **exact** recorded permissions and shows the recovery: `subscribed_consumers` back to `declared_consumers`, `consumer_resubscribes` +1, `/ready` 200.
+
+A trap restores the permissions on every exit, including Ctrl-C. The exact restore command is printed before anything changes, in case of a SIGKILL. The demo never stops the broker: the publisher arm would flip `/ready` at once and hide the consumer arm, and every product write would stall on its streams publish for up to 2s.
+
+**Operating it:** gate **liveness** on `/health` (static), never on `/ready`, or a broker incident becomes a restart loop. Read ADR-114's threat note before enabling the key. Anyone who can make a consumer's re-subscribe fail five times running can take every replica out of the load balancer at once, for example by revoking consume, deleting the queue, or causing a `PRECONDITION_FAILED` that is skipped until restart.
+
+**Reference:** framework [ADR-114](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_114_critical_consumer_readiness.md) and [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md).
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -1204,6 +1236,7 @@ Explore the code in this order:
    - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the quorum DLQ pair (explicit `DeadLetterSpec.QueueType`; quorum is the v0.64.0 default, see Troubleshooting for the retained-volume trap) and the consumerless `payments.authorized.tap` queue
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
    - `make show-sealed-message` proves the PAN never reaches the broker, then opens the same bytes with `open-event` (consumer keys, card still `"<redacted>"`)
+   - `make demo-consumer-readiness` ([scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh)) stalls this module's `payments.authorized` consumer until `/ready` fails closed (see [Consumer-Aware Readiness](#consumer-aware-readiness-messagingconsumerscritical))
 
 10. **[internal/modules/activity/](internal/modules/activity/)** - Activity module (RabbitMQ super-stream demo)
     - `module.go` carries the `messaging/streams` import that opts the lane in (ADR-091) and holds the `DeclareStreams` topology: super stream, publisher handle, typed consumer

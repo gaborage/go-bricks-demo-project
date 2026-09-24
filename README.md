@@ -417,7 +417,38 @@ reachable at demo volume; the 5s flush interval would commit either way.
 ### System
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
-- `GET /debug/*` - Debug endpoints (goroutines, gc, info)
+- `GET /_sys/*` - Debug endpoints (goroutines, gc, info, health-debug). They are off by default (`debug.enabled`), served at the URL root rather than under `/api/v1`, and access-controlled.
+
+#### Readiness that fails closed on a stalled consumer
+
+Since go-bricks v0.65.0 the `/ready` 200 body counts the AMQP consumers (#1684):
+
+```bash
+curl -s http://localhost:8080/api/v1/ready | jq -c '.messaging_stats
+  | {declared_consumers, subscribed_consumers, consumer_max_fail_streak, consumer_resubscribes}'
+# {"declared_consumers":1,"subscribed_consumers":1,"consumer_max_fail_streak":0,"consumer_resubscribes":0}
+```
+
+The opt-in key `messaging.consumers.critical: true` (#1686, ADR-114) makes `/ready`
+answer **503** once a declared consumer (here `payments.authorized`) is unsubscribed
+and has failed 5 re-subscribes in a row. With the key on, the publisher check is
+critical too, so a broker outage also answers 503, and immediately. That is why
+[config.development.yaml](config.development.yaml) only carries a commented example.
+
+```bash
+# Stop any `make run` first: the script boots its own app with
+# MESSAGING_CONSUMERS_CRITICAL=true and refuses a busy port.
+make demo-consumer-readiness
+```
+
+[scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh) runs these steps:
+
+1. It revokes the app user's broker **read** permission on `payments.authorized`, and nothing else.
+2. It closes the consumer's connection, so the consumer has to re-subscribe and the broker refuses it with `403 ACCESS_REFUSED`.
+3. It polls `/ready` while `consumer_max_fail_streak` climbs toward the threshold and the verdict turns 503. `/_sys/health-debug`, enabled on loopback for that run, names the failing arm.
+4. It restores the exact recorded permissions and shows the recovery: `consumer_resubscribes` +1 and `/ready` 200.
+
+The permissions are restored on every exit. The broker is never stopped, because that would flip `/ready` through the publisher check and hide the consumer check.
 
 ## Observability
 
@@ -501,6 +532,7 @@ make check          # fmt + lint + test (pre-commit)
 make advisory-lock-demo    # Two replicas race for the report job's advisory lock: one runs per tick
 make show-sealed-message   # Publish a sealed payment, dump the raw broker body, open it (card redacted)
 make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject + open-event verdict
+make demo-consumer-readiness  # /ready fails closed on a stalled consumer (boots its own app)
 make seal-payload          # JSON on stdin -> nested JWE-of-JWS body for POST /api/v1/tokens
 make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for the MLE simulator
 ```

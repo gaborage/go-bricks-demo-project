@@ -38,6 +38,30 @@ messaging:
   broker:
     url: "amqp://localhost:5672/"
 
+  # --- Consumer-aware readiness (go-bricks v0.65.0, #1686, ADR-114) — OFF here -
+  # Absent (the default), /ready judges the messaging kind by its publisher alone
+  # and never critically. `consumers.critical: true` makes the kind critical, and
+  # BOTH of its arms with it:
+  #   - consumer arm: GET /api/v1/ready answers 503 with the fixed body
+  #     {"status":"not ready","messaging":"unhealthy","error":"messaging unavailable"}
+  #     once a declared AMQP consumer (here: payments.authorized) is unsubscribed
+  #     AND has failed 5 re-subscribes in a row — the streak at which the
+  #     "Consumer re-subscribe attempt failed" log turns WARN. A reconnect that
+  #     recovers inside the streak never reaches the verdict. Watch it climb on
+  #     the 200 body: messaging_stats.subscribed_consumers vs declared_consumers,
+  #     consumer_max_fail_streak, consumer_resubscribes.
+  #   - publisher arm: the existing "is the leased publisher ready?" check is now
+  #     judged critically too, so a broker outage (any publisher not-ready moment)
+  #     answers 503 at once, with no streak.
+  # That second arm is why the key stays off in this file: turning it on is a
+  # per-environment decision. `make demo-consumer-readiness` enables it for the
+  # one app process it boots (env MESSAGING_CONSUMERS_CRITICAL=true). Stream
+  # consumers (the activity projection) are not covered — the streams kind is
+  # never critical. With the key on, gate liveness on /health, never /ready,
+  # or a broker incident becomes a restart loop.
+  # consumers:
+  #   critical: true
+
   # --- Native stream protocol — activity module (ADR-059 / ADR-063 / ADR-091) -
   # A SECOND, independent lane. Streams speak the rabbitmq_stream protocol on
   # 5552, not AMQP on 5672, so this URI is deliberately NOT derived from
