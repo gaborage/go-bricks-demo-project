@@ -20,7 +20,7 @@ import (
 
 func main() {
 	// Create application instance with environment-based configuration
-	application, log, err := app.New()
+	application, log, err := app.NewWithOptions(newAppOptions())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize application")
 	}
@@ -58,6 +58,16 @@ func main() {
 
 	if err := application.Run(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to start application")
+	}
+}
+
+// newAppOptions returns the framework overrides main boots with. Config loading and
+// every dependency still come from configuration (a nil ConfigLoader means
+// config.Load); the only addition is the route-table veto, which refuses startup
+// when a simulator route and its tag disagree (see route_policy.go).
+func newAppOptions() *app.Options {
+	return &app.Options{
+		PostRegisterRoutes: requireTaggedSimulators,
 	}
 }
 

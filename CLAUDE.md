@@ -141,7 +141,7 @@ See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the
 
 ### Application Bootstrap
 
-The application uses `go-bricks/app.New()` which handles:
+The application uses `go-bricks/app.NewWithOptions()` (config-driven like `app.New()`, plus one route-table hook) which handles:
 1. **Configuration loading** - Environment-based config from `config.yaml` (see Config System section)
 2. **Database manager** - Connection pooling and lifecycle management
 3. **Messaging manager** - RabbitMQ client setup
@@ -149,7 +149,7 @@ The application uses `go-bricks/app.New()` which handles:
 5. **HTTP server** - Echo server with middleware
 
 **Entry point:** [cmd/api/main.go](cmd/api/main.go)
-- Calls `app.New()` to bootstrap framework
+- Calls `app.NewWithOptions(newAppOptions())` to bootstrap framework; the only override is the simulator route-table veto (see [Simulator Route Policy](#simulator-route-policy-startup-veto))
 - Registers modules via `getModulesToLoad()`
 - Starts server with `application.Run()`
 
@@ -702,6 +702,20 @@ server.GET(hr, r, "/legacy/products/:id", h.GetProduct,
 
 The handler signature is identical — only the route option changes the wire format. See [internal/modules/legacy/](internal/modules/legacy/) for a complete example.
 
+### Simulator Route Policy (startup veto)
+
+[cmd/api/main.go](cmd/api/main.go) boots with `app.NewWithOptions(newAppOptions())`, and its only override is `PostRegisterRoutes` (go-bricks v0.65.0, #1672). `app.New()` is `app.NewWithOptions(nil)`, so config loading and every dependency stay as they were. The framework calls the hook once per `Run` with every registered route: module routes, the `/_sys/` debug endpoints and the health/ready probes. The call comes after the framework's duplicate-route check and before the listener opens, and a non-nil error aborts startup.
+
+The demo's hook, [cmd/api/route_policy.go](cmd/api/route_policy.go), enforces one marking rule in both directions: a route with a `__sim` path segment carries the `"simulator"` tag, and a route with that tag sits under `/__sim/`. The path is what callers and access logs see. The tag is what the route table carries as data (`server.RouteDescriptor.Tags`). One startup error lists every violation:
+
+```
+app.Options.PostRegisterRoutes rejected the route table: route under /__sim/ lacks the "simulator" tag: POST /api/v1/__sim/peer/tokens (module tokens)
+```
+
+- **To add a simulator,** register it under `/__sim/...` **and** pass `server.WithTags("simulator")`. [cmd/api/route_policy_test.go](cmd/api/route_policy_test.go) builds the real route table from `getModulesToLoad()`, so CI fails when either marker is missing, before `make run` does.
+- **Not every simulator is a route.** The VTS Issuer peer must answer a bare compact as `application/jose`, which no taggable route can do, so it is the relay client's in-process transport (see [JOSE Middleware](#jose-middleware-nested-jwe-of-jws)) and never appears in the route table.
+- **The hook can veto but not gate.** A hook cannot add or drop a route, so it cannot make simulators development-only. The tokens relays call their simulators in-process in every environment, so a "no `/__sim/` outside development" rule would refuse every non-development boot. The activity poison simulator keeps its own development-only guard inside the module, the only place that can decline to register a route.
+
 ### Transactional Outbox Pattern
 
 The products module demonstrates reliable event publishing using the **dual-write pattern**. When creating or deleting a product, the business data and an outbox event are committed in the same database transaction. A background relay (provided by the `outbox` framework module) polls the outbox table and publishes events to RabbitMQ.
@@ -1229,7 +1243,7 @@ All PRs to `main` and pushes to `main` run automated checks via GitHub Actions.
 |-----|-------------|-------|
 | **Lint** | `golangci-lint` via official action | v2 config; produces inline PR annotations |
 | **Test** | `go test -v -race -coverprofile` | Uploads coverage artifact (7-day retention) |
-| **Build** | `go build -o /dev/null ./cmd/api/main.go` | Verifies compilation |
+| **Build** | `go build -o /dev/null ./cmd/api` | Verifies compilation |
 
 **Security workflow** (`.github/workflows/security.yml`):
 - Runs `govulncheck ./...` on PRs, pushes to main, and weekly (Monday 8am UTC)
@@ -1255,7 +1269,7 @@ New to this codebase? Follow this tour to understand how everything fits togethe
 Explore the code in this order:
 
 1. **[cmd/api/main.go](cmd/api/main.go)** - Application entry point
-   - See how `app.New()` bootstraps the framework
+   - See how `app.NewWithOptions()` bootstraps the framework, and how [route_policy.go](cmd/api/route_policy.go) vetoes a mis-marked simulator route before the listener opens
    - Note `getModulesToLoad()` - how modules are registered
    - Observe fail-fast pattern with fatal logging
 
