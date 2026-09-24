@@ -36,6 +36,7 @@ help:
 	@echo "  migrate-multitenant-info      Show migration status for every tenant"
 	@echo "  migrate-multitenant-validate  Validate (no apply) for every tenant"
 	@echo "  migrate-multitenant-verdict   Show run verdicts + exit codes 0/2/1 (validate only)"
+	@echo "  migrate-multitenant-check-roles Check tenant roles sit at the privilege floor (read-only)"
 	@echo "  migrate-multitenant-reset     Drop and recreate every tenant's schema"
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
@@ -309,6 +310,26 @@ migrate-multitenant-verdict: migrate-multitenant-check
 	MULTITENANT_MIGRATIONS_DIR=$(MULTITENANT_MIGRATIONS_DIR) \
 	MULTITENANT_FLYWAY_PATH=$(MULTITENANT_FLYWAY_PATH) \
 	./scripts/migrate-verdict-demo.sh
+
+# ----------------------------------------------------------------------------
+# Tenant roles at the privilege floor (go-bricks v0.66.0, #1718)
+# ----------------------------------------------------------------------------
+# cmd/check-tenant-roles logs in as each tenant of $(MULTITENANT_CONFIG) in a
+# read-only session and asks migration.CheckPGRoleFloor about its role: OK, or
+# the attributes it holds above the floor (SUPERUSER, CREATEDB, CREATEROLE,
+# REPLICATION, BYPASSRLS). Exit 0 all at the floor, 1 not, 2 nothing checked.
+# Unlike migrate-multitenant-init (docker exec) it dials from the HOST, so it is
+# not chained into init: PG_HOST / PG_PORT, when set, replace every tenant's
+# host / port for a postgres published somewhere other than localhost:5432.
+# Built, not `go run`, because go run turns every non-zero exit into 1.
+.PHONY: migrate-multitenant-check-roles
+migrate-multitenant-check-roles:
+	@echo "🔐 Checking tenant roles against the PostgreSQL privilege floor..."
+	@go build -o bin/check-tenant-roles ./cmd/check-tenant-roles
+	@set -- -config "$(MULTITENANT_CONFIG)"; \
+	if [ -n "$$PG_HOST" ]; then set -- "$$@" -host "$$PG_HOST"; fi; \
+	if [ -n "$$PG_PORT" ]; then set -- "$$@" -port "$$PG_PORT"; fi; \
+	./bin/check-tenant-roles "$$@"
 
 # Drop and recreate every tenant's schema. Useful between demo runs or when
 # experimenting with broken migrations.

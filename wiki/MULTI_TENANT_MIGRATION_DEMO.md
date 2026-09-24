@@ -83,6 +83,7 @@ scripts/
     migrate-verdict-demo.sh                   Runs the CLI three ways: exit codes 0/2/1
     multitenant-reset.sh                      Drops + recreates every tenant schema
 etc/docker/postgres/multitenant-init.sql      Roles + schemas bootstrap
+cmd/check-tenant-roles/                       CheckPGRoleFloor for every tenant role
 samples/flyway-output/                        JSON fixtures for go-bricks#376
 ```
 
@@ -95,6 +96,7 @@ make migrate-multitenant-up        # Apply migrations to every tenant
 make migrate-multitenant-info      # Show status for every tenant
 make migrate-multitenant-validate  # Validate (no apply) for every tenant
 make migrate-multitenant-verdict   # Exit codes 0/2/1 + summary records (validate only)
+make migrate-multitenant-check-roles # Every tenant role at the privilege floor (read-only)
 make migrate-multitenant-reset     # Drop + recreate every tenant schema
 make migrate-multitenant-samples   # Capture JSON fixtures (feeds go-bricks#376)
 ```
@@ -291,6 +293,70 @@ The third case, abridged:
   override. With a host Flyway (`make migrate-multitenant-verdict
   MULTITENANT_FLYWAY_PATH=flyway`) the script honours `PG_PORT` and rewrites
   each tenant's `port:` in its temp copy.
+
+## Tenant roles at the privilege floor
+
+The schema-per-tenant isolation above assumes each tenant role is an ordinary
+LOGIN role. A tenant role holding `SUPERUSER` skips every permission check,
+and `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` each give it a power
+a per-tenant role has no use for. go-bricks v0.66.0 (#1718) added
+`migration.CheckPGRoleFloor(ctx, db, role)`. It reads `pg_catalog.pg_roles`
+and reports whether a role still sits at the floor the framework's
+`ProvisionPGRoles` creates roles with: none of those five attributes. The demo's
+roles come from hand-written SQL (`multitenant-init.sql`), not from
+`ProvisionPGRoles`, so nothing re-asserts that floor. A later
+`ALTER ROLE globex CREATEDB` would go unnoticed.
+
+`make migrate-multitenant-check-roles` runs
+[`cmd/check-tenant-roles`](../cmd/check-tenant-roles/main.go), which calls
+`CheckPGRoleFloor` once per tenant in `config.multitenant.yaml`:
+
+```bash
+make migrate-multitenant-init          # the roles must exist
+make migrate-multitenant-check-roles
+```
+
+```text
+Tenant roles in config.multitenant.yaml vs the PostgreSQL privilege floor (go-bricks migration.CheckPGRoleFloor)
+Each tenant logs in as itself, read-only, and reads only pg_catalog.pg_roles.
+  acme     role acme     OK  at the floor
+  globex   role globex   OK  at the floor
+  initech  role initech  OK  at the floor
+3 tenants: 3 at the floor, 0 above it or missing, 0 not checked
+```
+
+A role that has drifted is named with the attributes it holds, and the
+command exits 1:
+
+```text
+  acme     role acme     OK           at the floor
+  globex   role globex   ABOVE FLOOR  holds CREATEDB
+  initech  role initech  OK           at the floor
+3 tenants: 2 at the floor, 1 above it or missing, 0 not checked
+```
+
+* **Read-only, as the tenant.** Each tenant logs in with its own credential
+  from the fleet config, the one `go-bricks-migrate` uses, in a session opened
+  with `default_transaction_read_only=on` and
+  `application_name=check-tenant-roles`. Any role can read `pg_roles`, so LOGIN
+  is all it needs and no superuser credential is involved.
+* **The same tenants as the CLI.** The fleet config is decoded into
+  `config.TenantStore` and listed with `migration/source/static`, the pieces
+  `go-bricks-migrate --source-config` uses, so both tools see the same tenants
+  in the same order.
+* **Exit codes follow the CLI's.** `0` every role is at the floor. `1` at least
+  one role is above it, missing, or could not be checked. `2` nothing was
+  checked: a bad flag, an unreadable config or an empty fleet.
+* **Never prints a credential.** A row names the role. A driver error is printed
+  with the tenant's password removed. A tenant described by
+  `database.connectionstring` is refused rather than quoted.
+* **Postgres on another host port.** The check dials from the host, not through
+  `docker exec` like `migrate-multitenant-init`. When `PG_HOST` / `PG_PORT` are
+  set they replace every tenant's host and port
+  (`make migrate-multitenant-check-roles PG_PORT=55432`). That is also why it is
+  a target of its own and not the last step of `migrate-multitenant-init`:
+  chained there, `migrate-multitenant-up` would start to depend on the host
+  port mapping, which it does not today.
 
 ## Adding a tenant
 

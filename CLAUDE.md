@@ -1267,6 +1267,7 @@ Explore the code in this order:
 
 12. **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Multi-tenant migration tooling (schema-per-tenant via `go-bricks-migrate`)
     - `make migrate-multitenant-verdict` ([scripts/migrate-verdict-demo.sh](scripts/migrate-verdict-demo.sh)) runs `go-bricks-migrate validate --json` three ways and prints exit codes 0 / 2 / 1 beside the `clean` / `nothing_attempted` / `fleet_split` summary records (ADR-115); read-only, nothing is migrated
+    - `make migrate-multitenant-check-roles` builds [cmd/check-tenant-roles](cmd/check-tenant-roles/main.go), which logs in as each tenant's own role (read-only) and calls `migration.CheckPGRoleFloor`: exit 0 when every role sits at the floor, 1 when one holds an attribute above it or cannot be checked, 2 when nothing was checked. It dials `PG_HOST`/`PG_PORT`, so point those at the demo Postgres first
 
 ### Runtime Tour (15-20 minutes)
 
