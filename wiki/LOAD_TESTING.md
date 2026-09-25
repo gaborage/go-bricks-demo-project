@@ -43,8 +43,9 @@ a host process, not a container. Connection counts come from
 `pg_stat_activity`, read with `docker exec` into `PG_CONTAINER` (default
 `go-bricks-postgres`), so the host needs no `psql`. A source that does not
 answer leaves its columns empty, the monitor warns once at start, and every
-check that needed it reports `SKIP`. If every check skips, the analysis exits 2
-(inconclusive) rather than passing.
+check that needed it reports `SKIP`. If every required check skips, the
+analysis exits 2 (inconclusive) rather than passing; the advisory RSS and
+connection peaks alone never make a verdict.
 
 **Phases.** The monitored run writes the running scenario into each sample
 (`read_only`, `crud_mix`, `spike`, `ramp_up`, `sustained`, and `cooldown`

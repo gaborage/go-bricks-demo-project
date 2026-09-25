@@ -123,6 +123,12 @@ current_phase() {
 
 # --- preflight --------------------------------------------------------------
 
+# Appending would mix two runs (elapsed_s restarts at 0) and let an old peak
+# judge a new one, so an output file that already holds samples is refused.
+if [[ -s "$OUT" ]]; then
+    echo "❌ $OUT already contains samples; pick a new output file" >&2
+    exit 2
+fi
 mkdir -p "$(dirname "$OUT")"
 
 echo "📊 Load test monitor"
@@ -133,9 +139,7 @@ echo "   output   : $OUT (every ${INTERVAL}s)"
 [[ -n "$(rss_mb)" ]] || echo "   ⚠️  no host process found for $APP_URL: rss_mb stays empty (set APP_PID)"
 [[ "$(db_connections)" != ",," ]] || echo "   ⚠️  cannot read pg_stat_activity in container $PG_CONTAINER: db_* stay empty (set PG_CONTAINER)"
 
-if [[ ! -s "$OUT" ]]; then
-    echo "timestamp,elapsed_s,phase,goroutines,heap_alloc_mb,rss_mb,db_active,db_idle,db_total" >"$OUT"
-fi
+echo "timestamp,elapsed_s,phase,goroutines,heap_alloc_mb,rss_mb,db_active,db_idle,db_total" >"$OUT"
 
 ROWS=0
 SLEEP_PID=""

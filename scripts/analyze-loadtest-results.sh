@@ -31,8 +31,8 @@
 # apply to it.
 #
 # Exit code: 0 = pass (warnings are reported, not fatal), 1 = FAIL count reached
-# pass_fail.max_critical_issues, 2 = usage, unreadable input, or no check had
-# any samples to judge.
+# pass_fail.max_critical_issues, 2 = usage, unreadable input, or no required
+# check had any samples to judge (an advisory peak alone never makes a verdict).
 
 set -euo pipefail
 
@@ -137,14 +137,19 @@ gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
 
 FAILS=0
 WARNS=0
-JUDGED=0
+# Required checks that had samples. The advisory peaks still add to FAILS and
+# WARNS, but never to this count, so they alone cannot produce a PASS.
+REQUIRED_JUDGED=0
+ADVISORY=0
 report() { # report <PASS|WARN|FAIL|SKIP> <check> <detail>
     printf '  %-4s  %-42s %s\n' "$1" "$2" "$3"
     case "$1" in
         FAIL) FAILS=$((FAILS + 1)) ;;
         WARN) WARNS=$((WARNS + 1)) ;;
     esac
-    [[ "$1" == "SKIP" ]] || JUDGED=$((JUDGED + 1))
+    if [[ "$1" != "SKIP" && "$ADVISORY" -eq 0 ]]; then
+        REQUIRED_JUDGED=$((REQUIRED_JUDGED + 1))
+    fi
 }
 
 # peak_check <check> <column> <label> <unit> <warning> <critical>
@@ -269,12 +274,13 @@ else
     report PASS connection_pool_not_exhausted_below_100vu "peak $POOL_PEAK < max_configured $C_MAX"
 fi
 
+ADVISORY=1
 peak_check rss_peak "$C_RSS" rss MB "$R_WARN" "$R_CRIT"
 peak_check db_connections_peak "$C_DB_TOTAL" "db connections" "" "$C_WARN" "$C_CRIT"
 
 echo ""
-if [[ "$JUDGED" -eq 0 ]]; then
-    echo "⚠️  INCONCLUSIVE: every check was skipped, so nothing was judged (see the monitor's warnings)"
+if [[ "$REQUIRED_JUDGED" -eq 0 ]]; then
+    echo "⚠️  INCONCLUSIVE: every required check was skipped, so nothing was judged (see the monitor's warnings)"
     exit 2
 fi
 if [[ "$FAILS" -ge "$MAX_CRITICAL" ]]; then

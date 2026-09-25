@@ -29,8 +29,10 @@
 #                     from a settled app and a cool machine (default 60)
 #   MONITOR_INTERVAL  seconds between samples (default 10)
 #   RESULTS_DIR       where the run directory is created (default loadtest-results)
-#   APP_URL           the app under test (default http://localhost:8080); also
-#                     passed to k6 as K6_BASE_URL unless that is set
+#   APP_URL           the app under test (default: K6_BASE_URL when set, else
+#                     http://localhost:8080). The preflight, the monitor and k6
+#                     all use it; a K6_BASE_URL that names another target is
+#                     refused, since the samples would describe the wrong app
 #   API_BASE_PATH     the app's server.path.base, for the preflight health
 #                     check (default /api/v1)
 #   APP_PID, PG_CONTAINER, PG_USER, PG_DB   passed to the monitor
@@ -46,8 +48,9 @@
 #                              PERF_SUMMARY_FILE
 #   analysis.txt               the analyzer's report
 #
-# Exit code: 0 when every scenario's k6 thresholds passed and the analysis
-# passed; 1 otherwise. Every scenario runs even after one fails.
+# Exit code: 0 when every scenario's k6 thresholds passed, the analysis passed
+# and the monitor sampled the whole run; 1 otherwise. Every scenario runs even
+# after one fails.
 
 set -euo pipefail
 
@@ -59,10 +62,14 @@ K6_FLAGS="${K6_FLAGS:-}"
 COOLDOWN="${COOLDOWN:-60}"
 MONITOR_INTERVAL="${MONITOR_INTERVAL:-10}"
 RESULTS_DIR="${RESULTS_DIR:-loadtest-results}"
-APP_URL="${APP_URL:-http://localhost:8080}"
+APP_URL="${APP_URL:-${K6_BASE_URL:-http://localhost:8080}}"
 API_BASE_PATH="${API_BASE_PATH:-/api/v1}"
+if [[ -n "${K6_BASE_URL:-}" && "${K6_BASE_URL%/}" != "${APP_URL%/}" ]]; then
+    echo "❌ K6_BASE_URL ($K6_BASE_URL) and APP_URL ($APP_URL) name different targets; k6 would load one app while the monitor samples another. Set only APP_URL." >&2
+    exit 1
+fi
 export APP_URL
-export K6_BASE_URL="${K6_BASE_URL:-$APP_URL}"
+export K6_BASE_URL="$APP_URL"
 
 script_for() {
     case "$1" in
@@ -110,9 +117,18 @@ echo ""
 PHASE_FILE="$PHASE_FILE" scripts/monitor-loadtest.sh "$METRICS" "$MONITOR_INTERVAL" >"$RUN_DIR/monitor.log" 2>&1 &
 MONITOR_PID=$!
 
+# The monitor samples until it is signalled, so finding it gone before
+# stop_monitor signals it means it died mid-run and the samples are partial.
+MONITOR_EARLY_EXIT=0
+MONITOR_STOPPED=0
 stop_monitor() {
+    [[ $MONITOR_STOPPED -eq 0 ]] || return 0
+    MONITOR_STOPPED=1
     if kill -0 "$MONITOR_PID" 2>/dev/null; then
         kill -TERM "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+    else
+        MONITOR_EARLY_EXIT=1
         wait "$MONITOR_PID" 2>/dev/null || true
     fi
 }
@@ -164,7 +180,10 @@ ANALYSIS_RC=0
 scripts/analyze-loadtest-results.sh "$METRICS" | tee "$RUN_DIR/analysis.txt" || ANALYSIS_RC=${PIPESTATUS[0]}
 
 echo ""
+if [[ $MONITOR_EARLY_EXIT -ne 0 ]]; then
+    echo "❌ The monitor exited before the run ended, so the samples are partial (see $RUN_DIR/monitor.log)"
+fi
 echo "📁 Results: $RUN_DIR"
-if [[ $K6_FAILED -ne 0 || $ANALYSIS_RC -ne 0 ]]; then
+if [[ $K6_FAILED -ne 0 || $ANALYSIS_RC -ne 0 || $MONITOR_EARLY_EXIT -ne 0 ]]; then
     exit 1
 fi
