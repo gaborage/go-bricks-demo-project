@@ -41,7 +41,7 @@
 # of scripts/monitor-loadtest.sh. Without them the run still completes, and
 # those checks report SKIP.
 #
-# Output, in loadtest-results/run-<timestamp>/:
+# Output, in loadtest-results/run-<timestamp>-<random>/:
 #   metrics.csv                monitor samples
 #   <scenario>.log             full k6 output (summary included)
 #   <scenario>-summary.json    k6 summary data, for scripts that honour
@@ -88,6 +88,9 @@ for tool in k6 curl jq; do
     command -v "$tool" >/dev/null 2>&1 || { echo "❌ $tool is required (k6: make loadtest-install)" >&2; exit 1; }
 done
 [[ "$COOLDOWN" =~ ^[0-9]+$ ]] || { echo "❌ COOLDOWN must be whole seconds, got '$COOLDOWN'" >&2; exit 1; }
+# The same check scripts/monitor-loadtest.sh applies. Refused there, it would
+# only surface after every scenario ran with no samples taken.
+[[ "$MONITOR_INTERVAL" =~ ^[1-9][0-9]*$ ]] || { echo "❌ MONITOR_INTERVAL must be a positive whole number of seconds, got '$MONITOR_INTERVAL'" >&2; exit 1; }
 [[ -n "${TESTS// /}" ]] || { echo "❌ TESTS is empty" >&2; exit 1; }
 for t in $TESTS; do
     script_for "$t" >/dev/null || { echo "❌ unknown scenario '$t' in TESTS (read_only crud_mix spike ramp_up sustained)" >&2; exit 1; }
@@ -100,8 +103,10 @@ fi
 # K6_FLAGS is word-split on purpose: it carries several flags.
 read -r -a K6_ARGS <<<"$K6_FLAGS"
 
-RUN_DIR="$RESULTS_DIR/run-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RUN_DIR"
+# mktemp creates the directory atomically under a unique name, so two runs
+# started in the same second never share a phase file, logs or metrics.csv.
+mkdir -p "$RESULTS_DIR"
+RUN_DIR="$(mktemp -d "$RESULTS_DIR/run-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
 METRICS="$RUN_DIR/metrics.csv"
 PHASE_FILE="$RUN_DIR/phase"
 echo "idle" >"$PHASE_FILE"

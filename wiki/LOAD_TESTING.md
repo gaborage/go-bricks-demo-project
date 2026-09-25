@@ -64,7 +64,7 @@ pipeline in about three minutes:
 K6_FLAGS="--vus 3 --duration 20s" COOLDOWN=5 MONITOR_INTERVAL=2 make loadtest-all-monitored
 ```
 
-Each run gets its own directory, `loadtest-results/run-<timestamp>/`, holding
+Each run gets its own directory, `loadtest-results/run-<timestamp>-<random>/`, holding
 `metrics.csv`, one k6 log per scenario, the k6 summary JSON for the scripts that
 honour `PERF_SUMMARY_FILE`, and `analysis.txt`.
 
