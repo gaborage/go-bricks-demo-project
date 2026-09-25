@@ -753,12 +753,15 @@ loadtest-type-check:
 	@npm run type-check
 	@echo "✅ Type check passed"
 
-# Run all load tests with monitoring and automated analysis
-loadtest-all-monitored:
+# Run all load tests with monitoring and automated analysis. Needs the app
+# running; the goroutine and heap columns need its debug endpoints (see the
+# header of scripts/monitor-loadtest.sh). K6_FLAGS="--vus 2 --duration 20s"
+# COOLDOWN=5 runs the whole pipeline in about three minutes.
+loadtest-all-monitored: check-k6
 	@echo "🔍 Running load tests with monitoring..."
 	@echo "This will:"
 	@echo "  - Monitor goroutines, memory, and DB connections"
-	@echo "  - Run all 5 load tests (~60 minutes)"
+	@echo "  - Run all 5 load tests (~65 minutes plus cooldowns)"
 	@echo "  - Generate automated analysis report"
 	@echo ""
 	@./scripts/run-loadtest-all-monitored.sh

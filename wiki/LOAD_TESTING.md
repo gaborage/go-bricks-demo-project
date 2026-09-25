@@ -17,6 +17,54 @@ described in the header comment of their script under `loadtests/`, and the
 knobs that tune them (database pool size, rate limit, slow-query threshold) are
 listed under "Performance tuning" in CLAUDE.md's Load Testing section.
 
+## Monitored runs (resource leaks and recovery)
+
+k6 reports what the client saw. Three targets watch the server side of the
+same run: goroutines, heap, RSS and database connections, judged against
+[`loadtests/thresholds.yaml`](../loadtests/thresholds.yaml).
+
+| Target | Script | What it does |
+| --- | --- | --- |
+| `loadtest-monitor` | [`scripts/monitor-loadtest.sh`](../scripts/monitor-loadtest.sh) | Samples the app every 10s into `loadtest-results/metrics-<timestamp>.csv` until Ctrl+C |
+| `loadtest-analyze FILE=...` | [`scripts/analyze-loadtest-results.sh`](../scripts/analyze-loadtest-results.sh) | Per-phase peaks and means, plus the five `pass_fail.required_checks`; exit 1 on a critical issue |
+| `loadtest-all-monitored` | [`scripts/run-loadtest-all-monitored.sh`](../scripts/run-loadtest-all-monitored.sh) | The `loadtest-all` scenarios in order, a cooldown between them, the monitor throughout, then the analysis |
+
+**Sources.** Goroutines and heap come from the framework's debug endpoints,
+which are off by default, loopback-only and served at the URL root. Start the
+app with them on:
+
+```bash
+DEBUG_ENABLED=true DEBUG_ALLOWEDIPS=127.0.0.1,::1 \
+DEBUG_ENDPOINTS_INFO=true DEBUG_ENDPOINTS_GC=true make run
+```
+
+RSS comes from `ps` on the process listening on `APP_URL`'s port, so it needs
+a host process, not a container. Connection counts come from
+`pg_stat_activity`, read with `docker exec` into `PG_CONTAINER` (default
+`go-bricks-postgres`), so the host needs no `psql`. A source that does not
+answer leaves its columns empty, the monitor warns once at start, and every
+check that needed it reports `SKIP`. If every check skips, the analysis exits 2
+(inconclusive) rather than passing.
+
+**Phases.** The monitored run writes the running scenario into each sample
+(`read_only`, `crud_mix`, `spike`, `ramp_up`, `sustained`, and `cooldown`
+between them). The leak check compares the first and last quarter of the
+`sustained` samples. The recovery check compares the end of `spike` with its
+baseline stage. A hand-started monitor labels every row `manual`, so only the
+peak checks apply to it.
+
+**Short runs.** `K6_FLAGS` is passed to every `k6 run`, and `TESTS`,
+`COOLDOWN` and `MONITOR_INTERVAL` trim the rest. This exercises the whole
+pipeline in about three minutes:
+
+```bash
+K6_FLAGS="--vus 3 --duration 20s" COOLDOWN=5 MONITOR_INTERVAL=2 make loadtest-all-monitored
+```
+
+Each run gets its own directory, `loadtest-results/run-<timestamp>/`, holding
+`metrics.csv`, one k6 log per scenario, the k6 summary JSON for the scripts that
+honour `PERF_SUMMARY_FILE`, and `analysis.txt`.
+
 ## Tokens relays (JOSE end to end)
 
 Each tokens relay takes a **plaintext** `{"pan": ...}` body, seals it with the

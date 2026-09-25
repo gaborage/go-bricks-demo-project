@@ -130,6 +130,9 @@ make loadtest-spike      # Test resilience under traffic spikes (~6 min)
 make loadtest-sustained  # Detect memory/connection leaks (~17 min)
 make loadtest-topology-repair  # Delete both AMQP exchanges under load; repair time + lost 202s (~2.5 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
+make loadtest-all-monitored  # loadtest-all + goroutine/heap/DB-connection sampling + thresholds.yaml verdict
+make loadtest-monitor        # Sample the running app into loadtest-results/metrics-<ts>.csv (Ctrl+C stops)
+make loadtest-analyze FILE=loadtest-results/metrics-<ts>.csv  # Judge a sample CSV against loadtests/thresholds.yaml
 make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
 make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
 make loadtest-tokens-vts-smoke  # Tokens VTS Issuer relay: JWS-of-JWE, PS256 (30s); loadtest-tokens-vts for the full run
