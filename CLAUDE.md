@@ -755,9 +755,14 @@ The products report job ([internal/modules/products/job/report_job.go](internal/
 
 ```go
 sess, err := db.Session(ctx) // db is ctx.DB(), the job's context-aware handle
-defer sess.Close()           // deferred first, so it runs LAST
+if err != nil {
+    return fmt.Errorf("report job: open session: %w", err)
+}
+defer sess.Close() // deferred first, so it runs LAST
 var acquired bool
-err = sess.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ReportLockKey).Scan(&acquired)
+if err = sess.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ReportLockKey).Scan(&acquired); err != nil {
+    return fmt.Errorf("report job: try advisory lock: %w", err) // a failed query is not a skip
+}
 if !acquired {
     log.Info().Msg("Report job skipped: another replica holds the lock")
     return nil // a skip is not a failure
