@@ -619,7 +619,7 @@ docker run --rm --network docker_app-network -p 127.0.0.1:8080:8080 \
   go-bricks-demo-project
 ```
 
-`docker_app-network` is the network `make docker-up` creates. Stop `make run` first, or publish another host port. The `HEALTHCHECK` requests `/api/v1/health` with the image's busybox `wget` and honours `SERVER_PORT` and `SERVER_PATH_BASE`, so `docker ps` reports `healthy` once the server is listening.
+`docker_app-network` is the network `make docker-up` creates. Stop `make run` first, or publish another host port. Telemetry stays off, as under `make run`. To export it from the container, add the `OBSERVABILITY_*` variables from the [CLAUDE.md](CLAUDE.md) runtime tour, but set `OBSERVABILITY_TRACE_ENDPOINT` and `OBSERVABILITY_METRICS_ENDPOINT` to `grafana-alloy:4317` (local profile) or `otel-collector-newrelic:4317` (New Relic profile): inside the container `localhost:4317` is the container itself. The `HEALTHCHECK` requests `/api/v1/health` with the image's busybox `wget` and honours `SERVER_PORT` and `SERVER_PATH_BASE`, so `docker ps` reports `healthy` once the server is listening.
 
 ### Adding a Module
 
