@@ -1,0 +1,91 @@
+# Grafana Tempo Configuration - Monolithic Mode for Local Development
+# Simplified configuration for DataDog APM-like local observability
+
+# Server configuration
+server:
+  http_listen_port: 3200
+  log_level: info
+
+# Distributor configuration - receives traces via OTLP, Jaeger, Zipkin protocols
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    # Optional: Support legacy Jaeger protocol for compatibility
+    jaeger:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:14250
+        thrift_http:
+          endpoint: 0.0.0.0:14268
+
+# Ingester configuration
+ingester:
+  max_block_duration: 5m
+
+# Compactor configuration
+compactor:
+  compaction:
+    block_retention: 48h
+
+# Metrics generator - creates APM-style RED metrics from traces
+# This is critical for DataDog APM parity!
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: local
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    service_graphs:
+      max_items: 50000
+      wait: 10s
+    span_metrics:
+      dimensions:
+        - http.method
+        - http.status_code
+        - http.route
+        - service.name
+
+# Storage configuration - using local filesystem
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+    block:
+      bloom_filter_false_positive: 0.05
+
+# Query frontend configuration
+query_frontend:
+  search:
+    default_result_limit: 20
+    max_result_limit: 100
+
+# Limits configuration
+overrides:
+  ingestion_rate_limit_bytes: 15000000
+  ingestion_burst_size_bytes: 20000000
+  metrics_generator_processors:
+    - service-graphs
+    - span-metrics
+  metrics_generator_ring_size: 1
+  # Enable TraceQL metrics for Grafana drilldown
+  metrics_generator_forwarder_queue_size: 100
+  metrics_generator_forwarder_workers: 2
+
+# Usage report - disable telemetry
+usage_report:
+  reporting_enabled: false

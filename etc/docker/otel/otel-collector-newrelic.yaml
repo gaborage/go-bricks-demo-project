@@ -1,0 +1,99 @@
+# OpenTelemetry Collector Configuration for New Relic Integration
+# This collector acts as an intermediary between your application and New Relic
+# Application -> OTel Collector (OTLP) -> New Relic (OTLP)
+
+receivers:
+  # OTLP receiver - accepts traces, metrics, and logs from your application
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor - batches telemetry before export for efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Resource detection processor - adds cloud/host metadata
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 2s
+
+  # Resource processor - explicitly sets service metadata for New Relic
+  resource:
+    attributes:
+      - key: service.name
+        value: go-bricks-demo-project
+        action: upsert
+      - key: deployment.environment
+        value: development
+        action: upsert
+      - key: service.version
+        value: 1.0.0
+        action: upsert
+
+exporters:
+  # New Relic OTLP exporter - sends data to New Relic using standard OTLP protocol
+  otlphttp:
+    endpoint: https://otlp.nr-data.net:4318
+    headers:
+      api-key: ${NEW_RELIC_LICENSE_KEY}
+    # Compression for efficient data transfer
+    compression: gzip
+    # Retry configuration
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    # Timeout configuration
+    timeout: 30s
+
+  # Debug exporter - logs telemetry to console for troubleshooting
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  pipelines:
+    # ========== TRACE PIPELINE ==========
+    # Receive traces from application and send to New Relic
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp, debug]
+
+    # ========== METRICS PIPELINE ==========
+    # Receive metrics from application and send to New Relic
+    metrics:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp]
+
+    # ========== LOGS PIPELINE ==========
+    # Receive logs from application and send to New Relic
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp]
+
+  # Telemetry configuration for the collector itself
+  telemetry:
+    logs:
+      level: debug  # Enable verbose logging to see New Relic export details
+
+# New Relic Region Endpoints:
+# - US:  https://otlp.nr-data.net:4318 (configured above)
+# - EU:  https://otlp.eu01.nr-data.net:4318
+#
+# This configuration uses the US endpoint by default.
+# To use EU, change the endpoint URL in the otlphttp exporter configuration above.
+#
+# Authentication is done via api-key header with your New Relic license key.
+#
+# Note: Unlike DataDog, New Relic natively supports OTLP, so no connector is needed.
+# All traces, metrics, and logs are sent directly using the standard OTLP protocol.

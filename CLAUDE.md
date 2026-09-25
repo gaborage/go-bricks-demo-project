@@ -1747,10 +1747,18 @@ docker ps | grep go-bricks
 curl -G -s "http://localhost:3100/loki/api/v1/query" --data-urlencode 'query={container_name=~".*"}' | jq
 ```
 
-### OTel Collector Unhealthy Status
+### Observability Container Health and Image Pins
 ```bash
-# This is expected behavior - collector may show "unhealthy" but still works
-# Check if it's actually processing telemetry:
-curl http://localhost:8889/metrics | grep gobricks_  # Should show metrics
-docker logs go-bricks-otel-collector-local | tail -20  # Should show trace/metric processing
+# The local-profile collector is Grafana Alloy (go-bricks-alloy). The image ships
+# bash but no wget or curl, so its healthcheck sends GET /-/ready over bash's
+# /dev/tcp and `docker ps` shows it healthy once every component is up. By hand:
+curl -s http://localhost:12345/-/ready        # "Alloy is ready."
+docker logs go-bricks-alloy | tail -20
+# The New Relic collector image is distroless, so it has no in-container probe.
+# Ask its health_check extension from the host instead:
+curl -f http://localhost:13133/
+# Every observability image is pinned in etc/docker/docker-compose.yml, none on
+# :latest. grafana/tempo stays on 2.9.0: Tempo 3.x rejects
+# etc/docker/tempo/tempo.yaml ("field ingester not found in type app.Config")
+# and exits 1. Bump a pin only together with a config the new version accepts.
 ```

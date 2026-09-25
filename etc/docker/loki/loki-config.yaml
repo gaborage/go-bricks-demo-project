@@ -1,0 +1,100 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  # Enable OTLP HTTP receiver
+  http_server_read_timeout: 600s
+  http_server_write_timeout: 600s
+
+# Enable OTLP ingestion
+# Loki will accept logs at /otlp/v1/logs endpoint
+distributor:
+  ring:
+    kvstore:
+      store: inmemory
+
+ingester:
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+  chunk_idle_period: 5m
+  chunk_retain_period: 30s
+  wal:
+    enabled: true
+    dir: /loki/wal
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  filesystem:
+    directory: /loki/chunks
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+# Enable structured metadata for OTLP attributes
+limits_config:
+  # Allow structured metadata (required for OTLP attributes)
+  allow_structured_metadata: true
+  # Enable log volume tracking
+  volume_enabled: true
+  # Increase ingestion limits for OTLP
+  ingestion_rate_mb: 10
+  ingestion_burst_size_mb: 20
+  # Reject logs older than 1 hour
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  # Per-stream rate limits
+  per_stream_rate_limit: 3MB
+  per_stream_rate_limit_burst: 15MB
+  # Maximum label name length
+  max_label_name_length: 1024
+  max_label_value_length: 2048
+  max_label_names_per_series: 30
+
+# Compact and retention settings
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: filesystem
+
+# Table manager for index management
+table_manager:
+  retention_deletes_enabled: true
+  retention_period: 336h  # 14 days
+
+# Ruler configuration (optional)
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  ring:
+    kvstore:
+      store: inmemory
+  rule_path: /loki/scratch
+  alertmanager_url: http://localhost:9093
+  enable_api: true
+
+# Query limits
+query_range:
+  max_retries: 5
+  parallelise_shardable_queries: true
+
+# Analytics (disabled)
+analytics:
+  reporting_enabled: false
