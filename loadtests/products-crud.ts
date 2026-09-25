@@ -190,7 +190,6 @@ function createProduct(): void {
         if (product.id) {
           // Store the created product ID for later use
           createdProductIDs.push(product.id);
-          productsCreated.add(1);
           // Limit array size to prevent memory issues
           if (createdProductIDs.length > 100) {
             createdProductIDs.shift();
@@ -204,6 +203,10 @@ function createProduct(): void {
     },
   });
 
+  // Count a creation only when every check passed (201 and an ID).
+  if (success) {
+    productsCreated.add(1);
+  }
   createProductRate.add(success ? 1 : 0);
   createProductDuration.add(response.timings.duration);
 }
