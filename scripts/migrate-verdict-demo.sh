@@ -181,6 +181,10 @@ YAML
 REAL_COUNT="$(listed_count "$FLEET_CONFIG")"
 SPLIT_COUNT="$(listed_count "$SPLIT_CONFIG")"
 [[ "$REAL_COUNT" -gt 0 ]] || fail "$MULTITENANT_CONFIG lists no tenants"
+# A listing that FAILS also ends in nothing_attempted (exit 2), so case 2 proves
+# an empty fleet only if this listing succeeds and returns zero tenants.
+EMPTY_COUNT="$(listed_count "$EMPTY_CONFIG")" || fail "listing the empty fleet failed"
+[[ "$EMPTY_COUNT" == 0 ]] || fail "the empty fleet lists '$EMPTY_COUNT' tenants, not 0"
 [[ "$SPLIT_COUNT" -eq $((REAL_COUNT + 1)) ]] \
     || fail "appending '$GHOST_TENANT' did not add a tenant ($REAL_COUNT -> $SPLIT_COUNT); is multitenant.tenants still the last block of $MULTITENANT_CONFIG?"
 
@@ -188,13 +192,15 @@ SPLIT_COUNT="$(listed_count "$SPLIT_CONFIG")"
 
 MISMATCHES=0
 
-# run_case TITLE CONFIG WANT_EXIT WANT_VERDICT WANT_FAILED
+# run_case TITLE CONFIG WANT_EXIT WANT_VERDICT WANT_FLEET WANT_FAILED
 #
 # WANT_FAILED pins the failed count too: fleet_split alone would also accept a
-# case 3 where the real tenants failed beside the unreachable one.
+# case 3 where the real tenants failed beside the unreachable one. WANT_FLEET
+# pins the tenant counts: every case runs with --continue-on-error, so each run
+# must list WANT_FLEET tenants, attempt all of them and leave none unattempted.
 run_case() {
-    local title="$1" config="$2" want_exit="$3" want_verdict="$4" want_failed="$5"
-    local out="$WORK_DIR/stdout" err="$WORK_DIR/stderr" rc=0 summary verdict failed
+    local title="$1" config="$2" want_exit="$3" want_verdict="$4" want_fleet="$5" want_failed="$6"
+    local out="$WORK_DIR/stdout" err="$WORK_DIR/stderr" rc=0 summary verdict failed counts
 
     section "$title"
     echo "\$ $GO_BRICKS_MIGRATE $VERDICT_ACTION --source-config <$(basename "$config")> ... --continue-on-error --json"
@@ -225,25 +231,28 @@ run_case() {
     [[ -n "$verdict" ]] \
         || fail "summary has no verdict: this go-bricks-migrate predates go-bricks v0.67.0 (#1770). Re-run make migrate-multitenant-install"
     failed="$(jq -r '.failed' <<<"$summary")"
+    counts="$(jq -r '"\(.listed)/\(.attempted)/\(.not_attempted)"' <<<"$summary")"
 
     echo "  summary:   $summary"
     if [[ -s "$err" ]]; then
         echo "  stderr:    $(tail -n 1 "$err")"
     fi
-    if [[ "$rc" -eq "$want_exit" && "$verdict" == "$want_verdict" && "$failed" -eq "$want_failed" ]]; then
-        echo "  exit code: $rc  ✅ expected $want_exit ($want_verdict, $want_failed failed)"
+    # String compares: a missing field reads "null", which must mismatch, not error.
+    if [[ "$rc" == "$want_exit" && "$verdict" == "$want_verdict" && "$failed" == "$want_failed" \
+        && "$counts" == "$want_fleet/$want_fleet/0" ]]; then
+        echo "  exit code: $rc  ✅ expected $want_exit ($want_verdict, $want_failed failed, listed/attempted/not_attempted $counts)"
     else
-        echo "  exit code: $rc ($verdict, $failed failed)  ❌ expected $want_exit ($want_verdict, $want_failed failed)"
+        echo "  exit code: $rc ($verdict, $failed failed, listed/attempted/not_attempted $counts)  ❌ expected $want_exit ($want_verdict, $want_failed failed, $want_fleet/$want_fleet/0)"
         MISMATCHES=$((MISMATCHES + 1))
     fi
 }
 
 run_case "1/3 the real fleet: $REAL_COUNT tenants from $MULTITENANT_CONFIG" \
-    "$FLEET_CONFIG" 0 clean 0
+    "$FLEET_CONFIG" 0 clean "$REAL_COUNT" 0
 run_case "2/3 an empty fleet: the listing returns no tenant" \
-    "$EMPTY_CONFIG" 2 nothing_attempted 0
+    "$EMPTY_CONFIG" 2 nothing_attempted 0 0
 run_case "3/3 a split fleet: the real $REAL_COUNT plus '$GHOST_TENANT' (no such role or database)" \
-    "$SPLIT_CONFIG" 1 fleet_split 1
+    "$SPLIT_CONFIG" 1 fleet_split "$SPLIT_COUNT" 1
 
 section "Result"
 if [[ "$MISMATCHES" -eq 0 ]]; then
