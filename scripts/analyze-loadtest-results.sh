@@ -22,16 +22,21 @@
 #                                          phases "read_only" and "crud_mix": max db_total
 #                                          below database.connections.max_configured
 #   rss_peak / db_connections_peak / ...   advisory WARN/FAIL on memory.rss and
-#                                          database.connections warning/critical
+#                                          database.connections warning/critical.
+#                                          An advisory FAIL is reported but never
+#                                          counts toward max_critical_issues: those
+#                                          thresholds are global, and the spike and
+#                                          ramp_up phases expect 45-50 connections
 #
 # A check whose samples are missing (a phase that did not run, a column the
-# monitor could not read) reports SKIP and never fails the run. Phases come
+# monitor could not read, a comparison window with no readings) reports SKIP
+# and never fails the run. Phases come
 # from the CSV's phase column, which scripts/run-loadtest-all-monitored.sh sets;
 # a hand-started monitor labels every row "manual", so only the peak checks
 # apply to it.
 #
-# Exit code: 0 = pass (warnings are reported, not fatal), 1 = FAIL count reached
-# pass_fail.max_critical_issues, 2 = usage, unreadable input, or no required
+# Exit code: 0 = pass (warnings are reported, not fatal), 1 = required-check FAIL
+# count reached pass_fail.max_critical_issues, 2 = usage, unreadable input, or no required
 # check had any samples to judge (an advisory peak alone never makes a verdict).
 
 set -euo pipefail
@@ -107,24 +112,29 @@ MAX_WARNINGS="$(yaml_get pass_fail.max_warnings)"
 # stat <column> <max|mean|count> [phases] [from] [to]
 # Non-empty values of <column> on rows whose phase is in the comma-separated
 # [phases] (all rows when empty), restricted to the slice [from, to) of those
-# rows as fractions (0 1 = all). Prints nothing when no value matches.
+# rows as fractions (0 1 = all). The slice is cut from every phase row, empty
+# readings included, so a window keeps its place in time: a baseline whose
+# readings were all missed stays empty rather than borrowing later samples.
+# Prints nothing when the slice holds no value.
 stat() {
     awk -F, -v col="$1" -v fn="$2" -v phases="${3:-}" -v from="${4:-0}" -v to="${5:-1}" '
         BEGIN { n = split(phases, list, ","); for (i = 1; i <= n; i++) want[list[i]] = 1 }
         NR == 1 { next }
         n > 0 && !($3 in want) { next }
-        $col != "" { vals[++count] = $col + 0 }
+        { rows++; has[rows] = ($col != ""); vals[rows] = $col + 0 }
         END {
-            if (count == 0) exit
-            lo = int(count * from) + 1
-            hi = int(count * to)
+            if (rows == 0) exit
+            lo = int(rows * from) + 1
+            hi = int(rows * to)
             if (hi < lo) hi = lo
-            if (hi > count) hi = count
+            if (hi > rows) hi = rows
             m = 0; sum = 0; k = 0
             for (i = lo; i <= hi; i++) {
+                if (!has[i]) continue
                 if (k == 0 || vals[i] > m) m = vals[i]
                 sum += vals[i]; k++
             }
+            if (k == 0) exit
             if (fn == "max") printf "%.1f\n", m
             else if (fn == "mean") printf "%.1f\n", sum / k
             else if (fn == "count") print k
@@ -137,14 +147,19 @@ gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
 
 FAILS=0
 WARNS=0
-# Required checks that had samples. The advisory peaks still add to FAILS and
-# WARNS, but never to this count, so they alone cannot produce a PASS.
+# Required checks that had samples. The advisory peaks never add to this count,
+# so they alone cannot produce a PASS.
 REQUIRED_JUDGED=0
+# An advisory peak at its critical threshold counts here, never in FAILS: the
+# global thresholds do not know the phase, and the spike and ramp_up phases
+# expect the connection pool at 45-50 (thresholds.yaml database.connections.phases),
+# above the global critical of 48. Only the required checks decide the verdict.
+ADVISORY_FAILS=0
 ADVISORY=0
 report() { # report <PASS|WARN|FAIL|SKIP> <check> <detail>
     printf '  %-4s  %-42s %s\n' "$1" "$2" "$3"
     case "$1" in
-        FAIL) FAILS=$((FAILS + 1)) ;;
+        FAIL) if [[ "$ADVISORY" -eq 0 ]]; then FAILS=$((FAILS + 1)); else ADVISORY_FAILS=$((ADVISORY_FAILS + 1)); fi ;;
         WARN) WARNS=$((WARNS + 1)) ;;
     esac
     if [[ "$1" != "SKIP" && "$ADVISORY" -eq 0 ]]; then
@@ -177,6 +192,14 @@ leak_check() {
     fi
     first="$(stat "$1" mean sustained 0 0.25)"
     last="$(stat "$1" mean sustained 0.75 1)"
+    if [[ -z "$first" ]]; then
+        LEAK_RESULT="SKIP|$2: no readings in the first quarter"
+        return
+    fi
+    if [[ -z "$last" ]]; then
+        LEAK_RESULT="SKIP|$2: no readings in the last quarter"
+        return
+    fi
     if ! ge "$first" 0.1; then
         LEAK_RESULT="SKIP|$2: first-quarter mean is 0"
         return
@@ -200,6 +223,14 @@ recovery_check() {
     fi
     baseline="$(stat "$1" mean spike 0 0.2)"
     final="$(stat "$1" mean spike 0.9 1)"
+    if [[ -z "$baseline" ]]; then
+        REC_RESULT="SKIP|$2: no readings in the baseline window"
+        return
+    fi
+    if [[ -z "$final" ]]; then
+        REC_RESULT="SKIP|$2: no readings in the final window"
+        return
+    fi
     if ! ge "$baseline" 0.1; then
         REC_RESULT="SKIP|$2: baseline mean is 0"
         return
@@ -283,12 +314,16 @@ if [[ "$REQUIRED_JUDGED" -eq 0 ]]; then
     echo "⚠️  INCONCLUSIVE: every required check was skipped, so nothing was judged (see the monitor's warnings)"
     exit 2
 fi
+ADVISORY_NOTE=""
+if [[ "$ADVISORY_FAILS" -gt 0 ]]; then
+    ADVISORY_NOTE=", $ADVISORY_FAILS advisory peak(s) at critical (not fatal)"
+fi
 if [[ "$FAILS" -ge "$MAX_CRITICAL" ]]; then
-    echo "❌ FAIL: $FAILS critical issue(s) (fails at $MAX_CRITICAL), $WARNS warning(s)"
+    echo "❌ FAIL: $FAILS critical issue(s) (fails at $MAX_CRITICAL), $WARNS warning(s)$ADVISORY_NOTE"
     exit 1
 fi
-if [[ "$WARNS" -gt "$MAX_WARNINGS" ]]; then
-    echo "⚠️  PASS with $WARNS warning(s), above pass_fail.max_warnings ($MAX_WARNINGS): investigate"
+if [[ "$((WARNS + ADVISORY_FAILS))" -gt "$MAX_WARNINGS" ]]; then
+    echo "⚠️  PASS with $WARNS warning(s)$ADVISORY_NOTE, above pass_fail.max_warnings ($MAX_WARNINGS): investigate"
 else
-    echo "✅ PASS: 0 critical issues, $WARNS warning(s)"
+    echo "✅ PASS: 0 critical issues, $WARNS warning(s)$ADVISORY_NOTE"
 fi

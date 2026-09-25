@@ -44,8 +44,10 @@ a host process, not a container. Connection counts come from
 `go-bricks-postgres`), so the host needs no `psql`. A source that does not
 answer leaves its columns empty, the monitor warns once at start, and every
 check that needed it reports `SKIP`. If every required check skips, the
-analysis exits 2 (inconclusive) rather than passing; the advisory RSS and
-connection peaks alone never make a verdict.
+analysis exits 2 (inconclusive) rather than passing. The advisory RSS and
+connection peaks never decide the verdict: they cannot make one alone, and a
+peak at its global critical threshold is reported without failing the run,
+since the spike and ramp-up phases expect a nearly full connection pool.
 
 **Phases.** The monitored run writes the running scenario into each sample
 (`read_only`, `crud_mix`, `spike`, `ramp_up`, `sustained`, and `cooldown`
