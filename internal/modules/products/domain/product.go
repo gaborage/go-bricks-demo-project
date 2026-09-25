@@ -32,17 +32,28 @@ func New(id, name, description string, price float64, imageURL string) *Product 
 	}
 }
 
+// Keys of a partial-update map, as Product.Update and the repository's Update
+// read it. Each key is the field's JSON name (the struct tags above), so the PUT
+// body, the service and the repository spell a field one way. updatedDate is not
+// among them: the repository stamps it on every update.
+const (
+	FieldName        = "name"
+	FieldDescription = "description"
+	FieldPrice       = "price"
+	FieldImageURL    = "imageURL"
+)
+
 func (p *Product) Update(updates map[string]any) {
-	if name, ok := updates["name"].(string); ok {
+	if name, ok := updates[FieldName].(string); ok {
 		p.Name = name
 	}
-	if description, ok := updates["description"].(string); ok {
+	if description, ok := updates[FieldDescription].(string); ok {
 		p.Description = description
 	}
-	if price, ok := updates["price"].(float64); ok {
+	if price, ok := updates[FieldPrice].(float64); ok {
 		p.Price = price
 	}
-	if imageURL, ok := updates["image_url"].(string); ok {
+	if imageURL, ok := updates[FieldImageURL].(string); ok {
 		p.ImageURL = imageURL
 	}
 	p.UpdatedDate = time.Now().UTC()

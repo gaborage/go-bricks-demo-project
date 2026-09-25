@@ -642,6 +642,48 @@ func TestUpdateProduct(t *testing.T) {
 	}
 }
 
+// TestUpdateProductSendsRepositoryKeys pins the update map the service hands the
+// repository to the domain.Field* keys it maps to columns. The service used to
+// write "image_url" and "updated_date", which the repository skipped, so an
+// image URL change never reached the database.
+func TestUpdateProductSendsRepositoryKeys(t *testing.T) {
+	name := "Renamed"
+	description := "New description"
+	price := 12.5
+	imageURL := "https://example.com/new.png"
+
+	var got map[string]any
+	mockRepo := &mockRepository{
+		updateFunc: func(_ context.Context, _ string, updates map[string]any) error {
+			got = updates
+			return nil
+		},
+		getByIDFunc: func(_ context.Context, id string) (*domain.Product, error) {
+			return domain.New(id, name, description, price, imageURL), nil
+		},
+	}
+	svc := &ProductService{repository: mockRepo, logger: newMockLogger()}
+
+	if _, err := svc.UpdateProduct(context.Background(), testID, &name, &description, &price, &imageURL); err != nil {
+		t.Fatalf("UpdateProduct() unexpected error = %v", err)
+	}
+
+	want := map[string]any{
+		domain.FieldName:        name,
+		domain.FieldDescription: description,
+		domain.FieldPrice:       price,
+		domain.FieldImageURL:    imageURL,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("repository updates = %v, want exactly %v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("repository updates[%q] = %v, want %v", key, got[key], value)
+		}
+	}
+}
+
 func TestDeleteProduct(t *testing.T) {
 	ctx := context.Background()
 	log := newMockLogger()
