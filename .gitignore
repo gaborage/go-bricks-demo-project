@@ -22,6 +22,10 @@
 
 !Makefile
 
+# Container build (Dockerfile is tracked; its context allowlist must be too)
+!Dockerfile
+!.dockerignore
+
 # Example files
 !.env.example
 !config.example.yaml

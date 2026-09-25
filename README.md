@@ -603,6 +603,24 @@ make seal-payload          # JSON on stdin -> nested JWE-of-JWS body for POST /a
 make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for the MLE simulator
 ```
 
+### Running the container
+
+The [Dockerfile](Dockerfile) builds the API against `go.mod` alone (`GOWORK=off`), and `.dockerignore` sends only `go.mod`, `go.sum`, `cmd/`, `internal/` and `config.development.yaml` to the daemon, so `certs/` and `.env` never reach an image layer. The image runs with `APP_ENV=development`. Mount the keys read-only, and point the app at the compose services by their network names:
+
+```bash
+docker build -t go-bricks-demo-project .
+docker run --rm --network docker_app-network -p 127.0.0.1:8080:8080 \
+  -v "$PWD/certs:/app/certs:ro" \
+  -e DATABASE_HOST=postgres \
+  -e DATABASES_ANALYTICS_HOST=postgres-analytics -e DATABASES_ANALYTICS_PORT=5432 \
+  -e MESSAGING_BROKER_URL=amqp://rabbitmq:5672/ \
+  -e MESSAGING_STREAMS_URI='rabbitmq-stream://guest:guest@rabbitmq:5552/%2f' \
+  -e MESSAGING_STREAMS_ADDRESSRESOLVER_HOST=rabbitmq \
+  go-bricks-demo-project
+```
+
+`docker_app-network` is the network `make docker-up` creates. Stop `make run` first, or publish another host port. The `HEALTHCHECK` requests `/api/v1/health` with the image's busybox `wget` and honours `SERVER_PORT` and `SERVER_PATH_BASE`, so `docker ps` reports `healthy` once the server is listening.
+
 ### Adding a Module
 
 1. Create structure: `mkdir -p internal/modules/mymodule/{domain,repository,service,http}`
