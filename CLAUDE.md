@@ -286,7 +286,7 @@ docker-compose --profile local up -d
 - Loki: http://localhost:3100 (log aggregation)
 
 **Features:**
-- **Metrics** scraped from OTel Collector on port 8889
+- **Metrics** pushed by the app over OTLP to Grafana Alloy (host port 4317), which remote-writes them to Prometheus. The app serves no `/metrics` and nothing scrapes it: go-bricks has no Prometheus pull exporter
 - **Distributed tracing** with Tempo (DataDog APM-like capabilities)
 - **APM metrics generation** - Automatic RED metrics from traces (like DataDog!)
 - **Service graphs** - Visual service topology and dependencies
@@ -1387,14 +1387,20 @@ Experience the application running:
 
 4. **Review telemetry:**
    - **Logs:** Check terminal for structured JSON logs with trace IDs
-   - **Metrics:** Open http://localhost:9090 (Prometheus) → Graph → search `gobricks_`
+   - **Metrics:** Open http://localhost:9090 (Prometheus) → Graph → search `http_server_request_duration` (needs the export enabled, see step 5)
    - **Traces:** Open http://localhost:3000 (Grafana) → Explore → Tempo → search recent traces
    - **Dashboards:** http://localhost:3000/d/go-bricks-overview
 
 5. **Inspect generated metrics:**
    ```bash
-   # See what metrics are being emitted
-   curl http://localhost:8889/metrics | grep gobricks_
+   # The app pushes metrics over OTLP only; it serves no /metrics. config.development.yaml
+   # has no observability block, so turn the export on for the run (Alloy listens on 4317):
+   OBSERVABILITY_ENABLED=true OBSERVABILITY_SERVICE_NAME=go-bricks-demo-project \
+   OBSERVABILITY_TRACE_ENDPOINT=localhost:4317 OBSERVABILITY_TRACE_PROTOCOL=grpc OBSERVABILITY_TRACE_INSECURE=true \
+   OBSERVABILITY_METRICS_ENDPOINT=localhost:4317 OBSERVABILITY_METRICS_PROTOCOL=grpc OBSERVABILITY_METRICS_INSECURE=true \
+   make run
+   # Alloy remote-writes them to Prometheus under job="go-bricks-demo-project":
+   curl -s 'http://localhost:9090/api/v1/label/__name__/values?match[]={job="go-bricks-demo-project"}' | jq
    ```
 
 6. **Run load test:**
