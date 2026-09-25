@@ -110,12 +110,17 @@ make migrate-multitenant-install
 ```
 
 > **Why not `go install …@latest`?** The framework's `tools/migration/go.mod`
-> uses a `replace github.com/gaborage/go-bricks => ../../` directive so the
-> CLI builds against the in-repo framework changes. Go's module proxy
-> rejects replace directives on `go install`, so the target clones the
-> framework into a temp dir and runs `go install` from inside the submodule
-> where replaces are honored. Set `GO_BRICKS_PATH=/path/to/go-bricks` to
-> skip the clone if you have a checkout already.
+> pins an older parent go-bricks than the CLI source at `GO_BRICKS_REF` needs
+> (v0.66.0 at the v0.67.0 tag). The framework's root `go.work` is what builds
+> the CLI against the parent in the same checkout, and the module proxy never
+> sees a `go.work`. So the target clones the framework into a temp dir, checks
+> out `GO_BRICKS_REF`, and runs `go install` with `GOWORK` set explicitly to
+> the clone's `go.work`. That makes the build independent of your shell: an
+> exported `GOWORK=off` used to link the pinned v0.66.0 parent without any
+> error. The target then fails unless `go version -m` reports the binary's
+> `github.com/gaborage/go-bricks` dependency as `(devel)`, which means the
+> in-tree checkout. Set `GO_BRICKS_PATH=/path/to/go-bricks` to skip the clone
+> if you have a checkout already; it must contain `go.work`.
 
 ### 2. Boot Postgres and bootstrap tenant roles
 
