@@ -754,6 +754,7 @@ tx.Commit(ctx)
 The products report job ([internal/modules/products/job/report_job.go](internal/modules/products/job/report_job.go)) demonstrates the **database Session door** (go-bricks v0.65.0, ADR-112): `db.Session(ctx)` returns a handle pinned to ONE physical connection, for session-scoped state a pool would silently lose. Here that state is a PostgreSQL advisory lock that elects one runner across replicas. The scheduler only stops the SAME job overlapping inside one process, and every replica ticks on its own.
 
 ```go
+// Execute returns a named err, so the deferred unlock can report its failure.
 sess, err := db.Session(ctx) // db is ctx.DB(), the job's context-aware handle
 if err != nil {
     return fmt.Errorf("report job: open session: %w", err)
@@ -767,13 +768,17 @@ if !acquired {
     log.Info().Msg("Report job skipped: another replica holds the lock")
     return nil // a skip is not a failure
 }
-defer releaseReportLock(ctx, sess) // pg_advisory_unlock, runs BEFORE Close
+defer func() { // pg_advisory_unlock, runs BEFORE Close
+    if unlockErr := releaseReportLock(ctx, sess); unlockErr != nil && err == nil {
+        err = unlockErr
+    }
+}()
 log.Info().Msg("Report job lock acquired")
 return j.generate(ctx)
 ```
 
 - **Lock, work and unlock share one Session.** Through the pool, the unlock can run on another backend and release nothing, while both statements still succeed.
-- **Unlock before Close, on a detached context.** `Close` returns the connection to the pool without ending the backend. A lock left held would ride along on that pooled connection, and every replica would skip the report until the connection died. The unlock is registered as soon as the lock is held and runs on `context.WithoutCancel(ctx)` bounded to 5s, so a shutdown mid-report still releases it.
+- **Unlock before Close, on a detached context.** `Close` returns the connection to the pool without ending the backend. A lock left held would ride along on that pooled connection until it died. Runs on any other backend would skip the report, and a run that reuses that backend would re-acquire it: PostgreSQL stacks session advisory locks, so that run's single unlock leaves the stale lock held. The unlock is registered as soon as the lock is held and runs on `context.WithoutCancel(ctx)` bounded to 5s, so a shutdown mid-report still releases it.
 - **Non-blocking on purpose.** `pg_try_advisory_lock`, not `pg_advisory_lock`: the replica that loses skips this tick instead of queueing a second report.
 - **A Session holds one pool connection for the whole run** (25 per pool by default), so acquire it late and release it early. A lock that only has to span one transaction should use `pg_advisory_xact_lock` on an ordinary transaction, with no Session.
 - **The key is database-wide.** `ReportLockKey` (`0x52505254`, ASCII "RPRT") shares one bigint namespace with every client of the database.

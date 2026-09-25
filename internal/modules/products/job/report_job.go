@@ -80,8 +80,10 @@ func (j *ReportJob) Execute(ctx scheduler.JobContext) (err error) {
 
 	// Registered as soon as the lock is held, so no later return can skip it.
 	// Close hands the connection back to the pool WITHOUT ending the backend, so
-	// a lock left held would ride along on a pooled connection and every replica
-	// would skip the report until that connection died.
+	// a lock left held would ride along on a pooled connection until it died.
+	// Runs on any other backend would skip the report, and a run that reuses
+	// that backend would re-acquire it: PostgreSQL stacks session advisory
+	// locks, so that run's single unlock leaves the stale lock held.
 	defer func() {
 		if unlockErr := releaseReportLock(ctx, sess); unlockErr != nil {
 			if err == nil {
