@@ -35,12 +35,20 @@ processors:
         value: 1.0.0
         action: upsert
 
+extensions:
+  # Answers GET / on 13133 (published to the host by docker-compose.yml), so
+  # `curl -f http://localhost:13133/` reports the collector's health.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 exporters:
-  # New Relic OTLP exporter - sends data to New Relic using standard OTLP protocol
-  otlphttp:
+  # New Relic OTLP exporters, one per region. The pipelines below pick one with
+  # NEW_RELIC_REGION (US or EU, set by docker-compose.yml, default US); any other
+  # value names an exporter that does not exist and the collector refuses to start.
+  otlphttp/US:
     endpoint: https://otlp.nr-data.net:4318
     headers:
-      api-key: ${NEW_RELIC_LICENSE_KEY}
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
     # Compression for efficient data transfer
     compression: gzip
     # Retry configuration
@@ -52,6 +60,18 @@ exporters:
     # Timeout configuration
     timeout: 30s
 
+  otlphttp/EU:
+    endpoint: https://otlp.eu01.nr-data.net:4318
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    timeout: 30s
+
   # Debug exporter - logs telemetry to console for troubleshooting
   debug:
     verbosity: detailed
@@ -59,39 +79,42 @@ exporters:
     sampling_thereafter: 200
 
 service:
+  extensions: [health_check]
   pipelines:
     # ========== TRACE PIPELINE ==========
     # Receive traces from application and send to New Relic
     traces:
       receivers: [otlp]
       processors: [resourcedetection, resource, batch]
-      exporters: [otlphttp, debug]
+      # Block list: `{` inside a flow list [...] is YAML syntax, not text.
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
+        - debug
 
     # ========== METRICS PIPELINE ==========
     # Receive metrics from application and send to New Relic
     metrics:
       receivers: [otlp]
       processors: [resourcedetection, resource, batch]
-      exporters: [otlphttp]
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
 
     # ========== LOGS PIPELINE ==========
     # Receive logs from application and send to New Relic
     logs:
       receivers: [otlp]
       processors: [resourcedetection, resource, batch]
-      exporters: [otlphttp]
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
 
   # Telemetry configuration for the collector itself
   telemetry:
     logs:
       level: debug  # Enable verbose logging to see New Relic export details
 
-# New Relic Region Endpoints:
-# - US:  https://otlp.nr-data.net:4318 (configured above)
+# New Relic Region Endpoints (selected by NEW_RELIC_REGION):
+# - US:  https://otlp.nr-data.net:4318
 # - EU:  https://otlp.eu01.nr-data.net:4318
-#
-# This configuration uses the US endpoint by default.
-# To use EU, change the endpoint URL in the otlphttp exporter configuration above.
 #
 # Authentication is done via api-key header with your New Relic license key.
 #
