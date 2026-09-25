@@ -18,7 +18,7 @@ import { check, sleep } from 'k6';
 import { Rate, Trend, Counter, Gauge } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import type { RefinedResponse, ResponseType } from 'k6/http';
-import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers, summaryTrendStats } from './config.ts';
 import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics to detect degradation over time
@@ -70,6 +70,8 @@ export const options: Options = {
     'timeout_errors': ['count<5'],  // Almost no timeouts
   },
   batch: 10,
+  // Adds p(99), which the summary prints, to k6's default trend stats.
+  summaryTrendStats,
 };
 
 const createdProductIDs: string[] = [];

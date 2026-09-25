@@ -19,7 +19,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
-import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles, resolveScenario, summaryOutputs, maybeSleep } from './config.ts';
+import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles, resolveScenario, summaryOutputs, summaryTrendStats, maybeSleep } from './config.ts';
 import type { ProductResponse, ProductListResponse, Product } from './types/index.ts';
 
 // Custom metrics
@@ -50,6 +50,8 @@ export const options: Options = {
     'get_product_success': ['rate>0.99'],
   },
   batch: 15,
+  // Adds p(99), which the summary prints, to k6's default trend stats.
+  summaryTrendStats,
 };
 
 // Store product IDs discovered during list operations

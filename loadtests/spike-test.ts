@@ -21,7 +21,7 @@ import { check } from 'k6';
 import { Rate, Trend, Gauge } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import type { RefinedResponse, ResponseType } from 'k6/http';
-import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers, resolveSpikeScenario, spikePhaseBoundaries, summaryOutputs, maybeSleep } from './config.ts';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers, resolveSpikeScenario, spikePhaseBoundaries, summaryOutputs, summaryTrendStats, maybeSleep } from './config.ts';
 import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
@@ -62,6 +62,8 @@ export const options: Options = {
     'recovery_errors': ['rate<0.02'],
   },
   batch: 10,
+  // Adds p(99), which the summary prints, to k6's default trend stats.
+  summaryTrendStats,
 };
 
 // Track which stage we're in
