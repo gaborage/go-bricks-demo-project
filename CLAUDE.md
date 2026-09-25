@@ -800,7 +800,7 @@ The tokens module ([internal/modules/tokens/](internal/modules/tokens/)) demonst
 
 - **Inbound**: request body is a compact JWE-of-JWS. The framework decrypts with our private key, verifies the inner JWS with the peer public key, then binds the plaintext into a struct before the handler runs.
 - **Outbound**: response struct is sealed with our private signing key + peer public encryption key.
-- **Outbound `JOSETransport`**: the relay endpoint wraps an `httpclient.Client` with `WithJOSE(...)` and POSTs to an in-process peer simulator, exercising the same code path a production app uses to call Visa.
+- **Outbound `JOSETransport`**: the relay endpoint wraps an `httpclient.Client` with `WithJOSE(...)` and POSTs to an in-process peer simulator, exercising the same code path a production app uses to call Visa. The nested and MLE relays address their simulators at an absolute URL built in `Init` from `deps.Config.Server` (scheme from `server.tls.enabled`, `server.host` with a wildcard dialed as `localhost`, `server.port`, `server.path.base`) plus the route constants `handlers.PeerSimulatorPath` / `handlers.MLEPeerSimulatorPath`, so a boot on another port (`SERVER_PORT=18081`) keeps both relays working.
 
 ```go
 // Both halves of the integration must declare matching jose: tags. Asymmetric

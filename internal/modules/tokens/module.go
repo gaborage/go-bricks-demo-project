@@ -8,10 +8,15 @@ package tokens
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens/handlers"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens/service"
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -33,6 +38,11 @@ type Module struct {
 	mleHandler   *handlers.MLEHandler
 	vtsHandler   *handlers.RelayHandler
 	logger       logger.Logger
+
+	// Absolute URLs of the in-process peer simulators, built in Init from
+	// deps.Config.Server so the relays follow the listener's port and base path.
+	peerSimulatorURL    string
+	mlePeerSimulatorURL string
 }
 
 var _ app.MessagingDeclarer = (*Module)(nil)
@@ -55,11 +65,18 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return errors.New("tokens module requires a registered keystore module")
 	}
 
+	selfURL, err := selfBaseURL(deps.Config)
+	if err != nil {
+		return err
+	}
+	m.peerSimulatorURL = selfURL + handlers.PeerSimulatorPath
+	m.mlePeerSimulatorURL = selfURL + handlers.MLEPeerSimulatorPath
+
 	tokenSvc := service.NewTokenizationService()
 	m.handler = handlers.NewHandler(tokenSvc, m.logger)
 
 	relaySvc, err := service.NewRelayService(&service.RelayConfig{
-		PartnerURL: peerSimulatorURL,
+		PartnerURL: m.peerSimulatorURL,
 		KeyStore:   deps.KeyStore,
 		SignKid:    OurKid,
 		EncryptKid: PeerKid,
@@ -81,8 +98,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 
 	m.logger.Info().
-		Str("partner_url", peerSimulatorURL).
-		Str("mle_partner_url", mlePeerSimulatorURL).
+		Str("partner_url", m.peerSimulatorURL).
+		Str("mle_partner_url", m.mlePeerSimulatorURL).
 		Str("vts_issuer_partner_url", vtsIssuerPeerURL).
 		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + VTS Issuer relay + peer simulators")
 	return nil
@@ -93,7 +110,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // the nested demo — the kid names an identity, not a wire shape.
 func (m *Module) initMLE(deps *app.ModuleDeps) error {
 	mleRelay, err := service.NewMLERelayService(&service.MLERelayConfig{
-		PartnerURL: mlePeerSimulatorURL,
+		PartnerURL: m.mlePeerSimulatorURL,
 		KeyStore:   deps.KeyStore,
 		EncryptKid: PeerKid, // bare outbound declares an encrypt kid and nothing else
 		DecryptKid: OurKid,  // bare inbound declares a decrypt kid and nothing else
@@ -185,16 +202,55 @@ func (m *Module) RegisterJobs(_ app.JobRegistrar) error { return nil }
 // Shutdown is a no-op — nothing the runtime owns needs explicit teardown.
 func (m *Module) Shutdown() error { return nil }
 
-// peerSimulatorURL is the absolute URL the relay service POSTs to. The simulator
-// runs inside this same process under /api/v1/__sim/peer/tokens — but the
-// outbound httpclient is a fully external caller from the loopback's
-// perspective, so the URL must be absolute. Demo-only.
-const peerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/tokens"
+// selfBaseURL returns the absolute URL of this process's own route root: the
+// scheme, host and port the server listens on, plus server.path.base. The nested
+// and MLE relays POST to peer simulators that run inside this same process, but
+// the outbound httpclient is an external caller from the loopback's perspective,
+// so their URLs must be absolute. They used to hardcode localhost:8080, so a boot
+// on any other port (SERVER_PORT) sent both relays to the wrong listener.
+//
+// A wildcard or empty server.host is dialed as localhost. server.port must be a
+// real port: config validation refuses 0 at boot, and a relay cannot address an
+// ephemeral port that is only known after the listener binds. Demo-only.
+func selfBaseURL(cfg *config.Config) (string, error) {
+	if cfg == nil {
+		return "", errors.New("tokens module requires deps.Config to address its in-process peer simulators")
+	}
+	srv := cfg.Server
+	if srv.Port < 1 || srv.Port > 65535 {
+		return "", fmt.Errorf("tokens module: server.port %d cannot address the in-process peer simulators", srv.Port)
+	}
 
-// mlePeerSimulatorURL is the Visa MLE counterpart of peerSimulatorURL: same
-// process, different wire shape ({"encData":"<compact JWE>"} rather than a bare
-// compact). Demo-only.
-const mlePeerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/mle"
+	host := strings.Trim(srv.Host, "[]")
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "localhost"
+	}
+	scheme := "http"
+	if srv.TLS.Enabled {
+		scheme = "https"
+	}
+
+	u := url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(host, strconv.Itoa(srv.Port)),
+		Path:   normalizeBasePath(srv.Path.Base),
+	}
+	return u.String(), nil
+}
+
+// normalizeBasePath mirrors how the go-bricks server mounts server.path.base:
+// a leading slash is added, trailing slashes are dropped, and "" or "/" means
+// routes sit at the root.
+func normalizeBasePath(base string) string {
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return ""
+	}
+	if !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	return base
+}
 
 // vtsIssuerPeerURL is what the VTS Issuer relay addresses. No socket is ever
 // opened for it: the in-process simulator is the client's base transport, so
@@ -206,7 +262,8 @@ const vtsIssuerPeerURL = "http://vts-issuer-peer-sim.invalid/tokens"
 // Peer names for the relay clients (httpclient.Builder.WithPeerName, go-bricks
 // v0.65.0 #1648). Each one labels its client's outbound metrics with a
 // low-cardinality partner name, and names the partner when the transport refuses
-// a plaintext 2xx. They pair with the URLs above: one name per counterparty.
+// a plaintext 2xx. One name per counterparty: the two simulator routes and the
+// VTS Issuer transport.
 const (
 	peerSimulatorName    = "tokens-peer-sim"
 	mlePeerSimulatorName = "visa-mle-peer-sim"
