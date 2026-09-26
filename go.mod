@@ -3,7 +3,7 @@ module github.com/gaborage/go-bricks-demo-project
 go 1.27.0
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.46.0
+	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.3
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.48.0
 	github.com/gaborage/go-bricks v0.67.0
