@@ -298,3 +298,28 @@ export function summaryOutputs(data: unknown, stdout: string): Record<string, st
   }
   return outputs;
 }
+
+// Trend stats every products summary reads. k6's default summaryTrendStats stops
+// at p(95), so without this list values['p(99)'] is absent from handleSummary's
+// data and a `|| 0` fallback printed "P99 Response Time: 0.00ms".
+export const summaryTrendStats: string[] = ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'];
+
+/** Shape of one metric in handleSummary data, as far as the summaries read it. */
+export interface SummaryMetric {
+  values?: Record<string, number | undefined>;
+}
+
+/**
+ * A Rate metric as a percentage, or "n/a (none ran)" when the metric recorded no
+ * sample. k6 omits a metric that never received a value, and rendering that as
+ * 0.00% reads as "every request failed".
+ */
+export function formatRate(metric: SummaryMetric | undefined): string {
+  const rate = metric?.values?.rate;
+  return rate === undefined ? 'n/a (none ran)' : `${(rate * 100).toFixed(2)}%`;
+}
+
+/** A trend stat in milliseconds, or "n/a" when the run recorded none. */
+export function formatMs(value: number | undefined): string {
+  return value === undefined ? 'n/a' : `${value.toFixed(2)}ms`;
+}

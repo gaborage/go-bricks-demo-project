@@ -93,7 +93,7 @@ func (h *MLEHandler) PeerSimulate(req MLEEnvelope, ctx server.HandlerContext) (*
 // httpclient.ErrJOSEPlaintextResponse (go-bricks v0.65.0, #1637).
 func (h *MLEHandler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.POST(hr, r, "/tokens/mle-relay", h.Relay)
-	server.POST(hr, r, "/__sim/peer/mle", h.PeerSimulate,
+	server.POST(hr, r, MLEPeerSimulatorPath, h.PeerSimulate,
 		server.WithRawResponse(),
 		server.WithTags("simulator"),
 	)

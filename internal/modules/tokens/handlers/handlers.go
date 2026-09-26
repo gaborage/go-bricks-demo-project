@@ -169,12 +169,20 @@ func (h *Handler) RegisterPartnerRoute(hr *server.HandlerRegistry, r server.Rout
 	server.POST(hr, r, "/tokens", h.CreateToken)
 }
 
-// RegisterSimulatorRoute attaches the peer simulator at /__sim/peer/tokens.
+// Peer simulator routes, relative to server.path.base. The module builds the
+// relays' absolute partner URLs from these same constants, so a moved route
+// moves the URL with it.
+const (
+	PeerSimulatorPath    = "/__sim/peer/tokens"
+	MLEPeerSimulatorPath = "/__sim/peer/mle"
+)
+
+// RegisterSimulatorRoute attaches the peer simulator at PeerSimulatorPath.
 // Hosted under the same registrar (so it lives under /api/v1) for routing
 // simplicity; the path prefix makes the demo intent obvious. The "simulator"
 // tag is required: cmd/api refuses startup when a /__sim/ route lacks it.
 func (h *Handler) RegisterSimulatorRoute(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.POST(hr, r, "/__sim/peer/tokens", h.PeerSimulate,
+	server.POST(hr, r, PeerSimulatorPath, h.PeerSimulate,
 		server.WithTags("simulator"),
 	)
 }

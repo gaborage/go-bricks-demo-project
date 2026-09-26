@@ -14,7 +14,7 @@
 
 import http from 'k6/http';
 import { check } from 'k6';
-import { Rate, Trend } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import {
   config,
@@ -26,8 +26,12 @@ import {
   loadProfiles,
   resolveScenario,
   summaryOutputs,
+  summaryTrendStats,
+  formatMs,
+  formatRate,
   maybeSleep,
 } from './config.ts';
+import type { SummaryMetric } from './config.ts';
 import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput, ReadyResponse } from './types/index.ts';
 
 // Custom metrics
@@ -43,6 +47,11 @@ const createProductDuration = new Trend('create_product_duration');
 const updateProductDuration = new Trend('update_product_duration');
 const deleteProductDuration = new Trend('delete_product_duration');
 
+// Products this run created, counted across every VU. The createdProductIDs
+// array below is per VU, and teardown runs in a VU of its own, so it could never
+// report this total.
+const productsCreated = new Counter('products_created');
+
 // Test configuration - rampUp VU stages by default; controlled
 // constant-arrival-rate when PERF_RATE is set (see resolveScenario in config.ts).
 const crudScenario = resolveScenario();
@@ -51,13 +60,16 @@ export const options: Options = {
     ? { scenarios: { steady: crudScenario } }
     : { stages: loadProfiles.rampUp.stages }),
   thresholds: config.thresholds,
+  // Adds p(99), which the summary prints, to k6's default trend stats.
+  summaryTrendStats,
   // Batch multiple HTTP requests together for better performance
   batch: 10,
   // Don't throw errors on failed HTTP requests
   discardResponseBodies: false,
 };
 
-// Store created product IDs for use in update/delete operations
+// Product IDs this VU created, for its own later get/update/delete operations.
+// Module state is per VU: never read it for a run-wide total.
 const createdProductIDs: string[] = [];
 
 // Main test function - executed by each virtual user repeatedly
@@ -191,6 +203,10 @@ function createProduct(): void {
     },
   });
 
+  // Count a creation only when every check passed (201 and an ID).
+  if (success) {
+    productsCreated.add(1);
+  }
   createProductRate.add(success ? 1 : 0);
   createProductDuration.add(response.timings.duration);
 }
@@ -326,31 +342,33 @@ export function setup(): void {
 export function teardown(): void {
   console.log('');
   console.log('✅ Load test completed');
-  console.log(`📦 Created ${createdProductIDs.length} products during test`);
+  // The created-product total is in the summary (products_created): this
+  // function runs in a fresh VU, whose createdProductIDs is always empty.
 }
 
 // Custom summary - human-readable stdout plus optional JSON capture (A/B).
 export function handleSummary(data: any): Record<string, string> {
-  const m = data.metrics || {};
+  const m: Record<string, SummaryMetric | undefined> = data.metrics || {};
   const dur = m.http_req_duration?.values || {};
-  const pct = (k: string) => ((m[k]?.values?.rate || 0) * 100).toFixed(2);
+  const pct = (k: string) => formatRate(m[k]);
   const summary = `
 ═══════════════════════════════════════════════════════════
                      CRUD MIX TEST SUMMARY
 ═══════════════════════════════════════════════════════════
 Total Requests:          ${m.http_reqs?.values?.count || 0}
 Throughput:              ${(m.http_reqs?.values?.rate || 0).toFixed(1)} req/s
-Overall Error Rate:      ${((m.http_req_failed?.values?.rate || 0) * 100).toFixed(2)}%
-Avg Response Time:       ${(dur.avg || 0).toFixed(2)}ms
-P95 Response Time:       ${(dur['p(95)'] || 0).toFixed(2)}ms
-P99 Response Time:       ${(dur['p(99)'] || 0).toFixed(2)}ms
+Overall Error Rate:      ${pct('http_req_failed')}
+Avg Response Time:       ${formatMs(dur.avg)}
+P95 Response Time:       ${formatMs(dur['p(95)'])}
+P99 Response Time:       ${formatMs(dur['p(99)'])}
+Products Created:        ${m.products_created?.values?.count ?? 0}
 
 Success Rate by Operation:
-  List:                  ${pct('list_products_success')}%
-  Get:                   ${pct('get_product_success')}%
-  Create:                ${pct('create_product_success')}%
-  Update:                ${pct('update_product_success')}%
-  Delete:                ${pct('delete_product_success')}%
+  List:                  ${pct('list_products_success')}
+  Get:                   ${pct('get_product_success')}
+  Create:                ${pct('create_product_success')}
+  Update:                ${pct('update_product_success')}
+  Delete:                ${pct('delete_product_success')}
 ═══════════════════════════════════════════════════════════
 `;
 

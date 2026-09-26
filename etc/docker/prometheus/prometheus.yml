@@ -23,14 +23,10 @@ scrape_configs:
         labels:
           service: 'grafana-alloy'
 
-  # Scrape application metrics directly (for load testing and real-time monitoring)
-  # Note: On macOS, use host.docker.internal to reach host processes from containers
-  - job_name: 'go-bricks-demo-project'
-    scrape_interval: 10s
-    scrape_timeout: 5s
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['host.docker.internal:8080']
-        labels:
-          service: 'go-bricks-demo-project'
-          environment: 'development'
+  # No job scrapes the application. go-bricks exports metrics by OTLP push only
+  # (observability.metrics.endpoint: stdout or an OTLP collector) and serves no
+  # /metrics route, so a scrape of host.docker.internal:8080/metrics only earned a
+  # 404 and a WARN access-log line in the app every interval. Application metrics
+  # arrive through Alloy instead:
+  #   app --OTLP :4317--> grafana-alloy --remote_write--> /api/v1/write (this server)
+  # which is why the server runs with --web.enable-remote-write-receiver.

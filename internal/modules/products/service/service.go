@@ -262,18 +262,18 @@ func (s *ProductService) UpdateProduct(ctx context.Context, id string, name *str
 		if err := validateName(*name); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 		}
-		updates["name"] = *name
+		updates[domain.FieldName] = *name
 	}
 
 	if description != nil {
-		updates["description"] = *description
+		updates[domain.FieldDescription] = *description
 	}
 
 	if price != nil {
 		if *price < 0 {
 			return nil, fmt.Errorf("%w: price must be non-negative", ErrValidation)
 		}
-		updates["price"] = *price
+		updates[domain.FieldPrice] = *price
 	}
 
 	if imageURL != nil {
@@ -282,7 +282,7 @@ func (s *ProductService) UpdateProduct(ctx context.Context, id string, name *str
 				return nil, fmt.Errorf("%w: invalid image URL: %v", ErrValidation, err)
 			}
 		}
-		updates["image_url"] = *imageURL
+		updates[domain.FieldImageURL] = *imageURL
 	}
 
 	// Return error if no fields to update
@@ -290,9 +290,7 @@ func (s *ProductService) UpdateProduct(ctx context.Context, id string, name *str
 		return nil, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
-	// Always update the updated_date
-	updates["updated_date"] = "NOW()"
-
+	// The repository stamps updated_date on every update; it is not a caller field.
 	// Perform update in repository
 	if err := s.repository.Update(ctx, id, updates); err != nil {
 		if errors.Is(err, repository.ErrProductNotFound) {

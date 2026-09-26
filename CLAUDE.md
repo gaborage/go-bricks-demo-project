@@ -130,6 +130,9 @@ make loadtest-spike      # Test resilience under traffic spikes (~6 min)
 make loadtest-sustained  # Detect memory/connection leaks (~17 min)
 make loadtest-topology-repair  # Delete both AMQP exchanges under load; repair time + lost 202s (~2.5 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
+make loadtest-all-monitored  # loadtest-all + goroutine/heap/DB-connection sampling + thresholds.yaml verdict
+make loadtest-monitor        # Sample the running app into loadtest-results/metrics-<ts>.csv (Ctrl+C stops)
+make loadtest-analyze FILE=loadtest-results/metrics-<ts>.csv  # Judge a sample CSV against loadtests/thresholds.yaml
 make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
 make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
 make loadtest-tokens-vts-smoke  # Tokens VTS Issuer relay: JWS-of-JWE, PS256 (30s); loadtest-tokens-vts for the full run
@@ -286,7 +289,7 @@ docker-compose --profile local up -d
 - Loki: http://localhost:3100 (log aggregation)
 
 **Features:**
-- **Metrics** scraped from OTel Collector on port 8889
+- **Metrics** pushed by the app over OTLP to Grafana Alloy (host port 4317), which remote-writes them to Prometheus. The app serves no `/metrics` and nothing scrapes it: go-bricks has no Prometheus pull exporter
 - **Distributed tracing** with Tempo (DataDog APM-like capabilities)
 - **APM metrics generation** - Automatic RED metrics from traces (like DataDog!)
 - **Service graphs** - Visual service topology and dependencies
@@ -810,7 +813,7 @@ The tokens module ([internal/modules/tokens/](internal/modules/tokens/)) demonst
 
 - **Inbound**: request body is a compact JWE-of-JWS. The framework decrypts with our private key, verifies the inner JWS with the peer public key, then binds the plaintext into a struct before the handler runs.
 - **Outbound**: response struct is sealed with our private signing key + peer public encryption key.
-- **Outbound `JOSETransport`**: the relay endpoint wraps an `httpclient.Client` with `WithJOSE(...)` and POSTs to an in-process peer simulator, exercising the same code path a production app uses to call Visa.
+- **Outbound `JOSETransport`**: the relay endpoint wraps an `httpclient.Client` with `WithJOSE(...)` and POSTs to an in-process peer simulator, exercising the same code path a production app uses to call Visa. The nested and MLE relays address their simulators at an absolute URL built in `Init` from `deps.Config.Server` (scheme from `server.tls.enabled`, `server.host` with a wildcard dialed as `localhost`, `server.port`, `server.path.base`) plus the route constants `handlers.PeerSimulatorPath` / `handlers.MLEPeerSimulatorPath`, so a boot on another port (`SERVER_PORT=18081`) keeps both relays working.
 
 ```go
 // Both halves of the integration must declare matching jose: tags. Asymmetric
@@ -1397,14 +1400,20 @@ Experience the application running:
 
 4. **Review telemetry:**
    - **Logs:** Check terminal for structured JSON logs with trace IDs
-   - **Metrics:** Open http://localhost:9090 (Prometheus) → Graph → search `gobricks_`
+   - **Metrics:** Open http://localhost:9090 (Prometheus) → Graph → search `http_server_request_duration` (needs the export enabled, see step 5)
    - **Traces:** Open http://localhost:3000 (Grafana) → Explore → Tempo → search recent traces
    - **Dashboards:** http://localhost:3000/d/go-bricks-overview
 
 5. **Inspect generated metrics:**
    ```bash
-   # See what metrics are being emitted
-   curl http://localhost:8889/metrics | grep gobricks_
+   # The app pushes metrics over OTLP only; it serves no /metrics. config.development.yaml
+   # has no observability block, so turn the export on for the run (Alloy listens on 4317):
+   OBSERVABILITY_ENABLED=true OBSERVABILITY_SERVICE_NAME=go-bricks-demo-project \
+   OBSERVABILITY_TRACE_ENDPOINT=localhost:4317 OBSERVABILITY_TRACE_PROTOCOL=grpc OBSERVABILITY_TRACE_INSECURE=true \
+   OBSERVABILITY_METRICS_ENDPOINT=localhost:4317 OBSERVABILITY_METRICS_PROTOCOL=grpc OBSERVABILITY_METRICS_INSECURE=true \
+   make run
+   # Alloy remote-writes them to Prometheus under job="go-bricks-demo-project":
+   curl -s 'http://localhost:9090/api/v1/label/__name__/values?match[]={job="go-bricks-demo-project"}' | jq
    ```
 
 6. **Run load test:**
@@ -1757,10 +1766,18 @@ docker ps | grep go-bricks
 curl -G -s "http://localhost:3100/loki/api/v1/query" --data-urlencode 'query={container_name=~".*"}' | jq
 ```
 
-### OTel Collector Unhealthy Status
+### Observability Container Health and Image Pins
 ```bash
-# This is expected behavior - collector may show "unhealthy" but still works
-# Check if it's actually processing telemetry:
-curl http://localhost:8889/metrics | grep gobricks_  # Should show metrics
-docker logs go-bricks-otel-collector-local | tail -20  # Should show trace/metric processing
+# The local-profile collector is Grafana Alloy (go-bricks-alloy). The image ships
+# bash but no wget or curl, so its healthcheck sends GET /-/ready over bash's
+# /dev/tcp and `docker ps` shows it healthy once every component is up. By hand:
+curl -s http://localhost:12345/-/ready        # "Alloy is ready."
+docker logs go-bricks-alloy | tail -20
+# The New Relic collector image is distroless, so it has no in-container probe.
+# Ask its health_check extension from the host instead:
+curl -f http://localhost:13133/
+# Every observability image is pinned in etc/docker/docker-compose.yml, none on
+# :latest. grafana/tempo stays on 2.9.0: Tempo 3.x rejects
+# etc/docker/tempo/tempo.yaml ("field ingester not found in type app.Config")
+# and exits 1. Bump a pin only together with a config the new version accepts.
 ```

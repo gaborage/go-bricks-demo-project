@@ -248,6 +248,17 @@ migrate-multitenant-check:
 # repo's root go.work resolves the in-tree parent at $(GO_BRICKS_REF) — robust
 # across versions (the v0.60.0 CLI was verified to build this way).
 #
+# The recipe passes GOWORK=<checkout>/go.work explicitly. Relying on go's
+# go.work discovery made the result depend on the caller's environment: with
+# GOWORK=off exported (as the demo's own scripts do), the build silently fell
+# back to tools/migration/go.mod and linked its pinned parent (v0.66.0 for the
+# v0.67.0 tag) instead of $(GO_BRICKS_REF). After installing, the recipe checks
+# with `go version -m` that the binary's go-bricks dependency is the in-tree
+# checkout, reported as (devel), and fails if it is not. The checkout path is
+# resolved with `pwd -P`: go matches go.work's `use` entries against the
+# physical working directory, and macOS's mktemp returns /var/..., a symlink
+# to /private/var/....
+#
 # The clone is deliberately NOT `--depth 1 --branch $(GO_BRICKS_REF)`: `--branch`
 # takes a branch or tag only, so it breaks whenever GO_BRICKS_REF is overridden
 # with a commit hash (as it was pinned before the v0.63.0 tag existed). We clone
@@ -259,16 +270,27 @@ migrate-multitenant-install:
 	@echo "📦 Installing go-bricks-migrate..."
 	@set -e; \
 	if [ -n "$$GO_BRICKS_PATH" ] && [ -d "$$GO_BRICKS_PATH/tools/migration/cmd/go-bricks-migrate" ]; then \
-		echo "  using existing framework checkout: $$GO_BRICKS_PATH"; \
-		go -C "$$GO_BRICKS_PATH/tools/migration" install ./cmd/go-bricks-migrate; \
+		SRC=$$(cd "$$GO_BRICKS_PATH" && pwd -P); \
+		echo "  using existing framework checkout: $$SRC"; \
 	else \
-		TMP=$$(mktemp -d); \
-		trap 'rm -rf "$$TMP"' EXIT; \
-		echo "  cloning framework into $$TMP, checking out $(GO_BRICKS_REF)"; \
-		git clone --quiet --filter=blob:none https://github.com/gaborage/go-bricks.git "$$TMP"; \
-		git -c advice.detachedHead=false -C "$$TMP" checkout --quiet "$(GO_BRICKS_REF)"; \
-		go -C "$$TMP/tools/migration" install ./cmd/go-bricks-migrate; \
-	fi
+		SRC=$$(cd "$$(mktemp -d)" && pwd -P); \
+		trap 'rm -rf "$$SRC"' EXIT; \
+		echo "  cloning framework into $$SRC, checking out $(GO_BRICKS_REF)"; \
+		git clone --quiet --filter=blob:none https://github.com/gaborage/go-bricks.git "$$SRC"; \
+		git -c advice.detachedHead=false -C "$$SRC" checkout --quiet "$(GO_BRICKS_REF)"; \
+	fi; \
+	if [ ! -f "$$SRC/go.work" ]; then \
+		echo "❌ $$SRC/go.work not found: it is what builds the CLI against the in-tree go-bricks"; \
+		exit 1; \
+	fi; \
+	GOWORK="$$SRC/go.work" go -C "$$SRC/tools/migration" install ./cmd/go-bricks-migrate; \
+	BIN=$$(go env GOBIN); BIN=$${BIN:-$$(go env GOPATH | cut -d: -f1)/bin}; \
+	if ! go version -m "$$BIN/go-bricks-migrate" | grep -Eq '^[[:space:]]+dep[[:space:]]+github.com/gaborage/go-bricks[[:space:]]+\(devel\)'; then \
+		echo "❌ $$BIN/go-bricks-migrate did not link the in-tree go-bricks:"; \
+		go version -m "$$BIN/go-bricks-migrate" | grep -E 'github.com/gaborage/go-bricks[[:space:]]' || true; \
+		exit 1; \
+	fi; \
+	echo "  linked github.com/gaborage/go-bricks from $$SRC ($$(git -C "$$SRC" describe --tags --always 2>/dev/null))"
 	@echo "✅ go-bricks-migrate installed (verify with: which go-bricks-migrate)"
 
 # Apply the per-tenant role + schema bootstrap SQL against the running
@@ -731,12 +753,15 @@ loadtest-type-check:
 	@npm run type-check
 	@echo "✅ Type check passed"
 
-# Run all load tests with monitoring and automated analysis
-loadtest-all-monitored:
+# Run all load tests with monitoring and automated analysis. Needs the app
+# running; the goroutine and heap columns need its debug endpoints (see the
+# header of scripts/monitor-loadtest.sh). K6_FLAGS="--vus 2 --duration 20s"
+# COOLDOWN=5 runs the whole pipeline in about three minutes.
+loadtest-all-monitored: check-k6
 	@echo "🔍 Running load tests with monitoring..."
 	@echo "This will:"
 	@echo "  - Monitor goroutines, memory, and DB connections"
-	@echo "  - Run all 5 load tests (~60 minutes)"
+	@echo "  - Run all 5 load tests (~65 minutes plus cooldowns)"
 	@echo "  - Generate automated analysis report"
 	@echo ""
 	@./scripts/run-loadtest-all-monitored.sh

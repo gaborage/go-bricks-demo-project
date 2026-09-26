@@ -22,6 +22,10 @@
 
 !Makefile
 
+# Container build (Dockerfile is tracked; its context allowlist must be too)
+!Dockerfile
+!.dockerignore
+
 # Example files
 !.env.example
 !config.example.yaml
@@ -79,6 +83,13 @@
 # gitignore drops the file and a fresh clone's `docker compose up` bind-mounts
 # a path that does not exist.
 !etc/docker/rabbitmq/enabled_plugins
+
+# Observability backends' configs, bind-mounted by etc/docker/docker-compose.yml.
+# Without these a fresh clone's `--profile local` (or `newrelic`) mounts paths
+# that do not exist, and Tempo/Loki/the collector exit at startup.
+!etc/docker/tempo/*.yaml
+!etc/docker/loki/*.yaml
+!etc/docker/otel/*.yaml
 
 # ...even if they are in subdirectories
 !*/

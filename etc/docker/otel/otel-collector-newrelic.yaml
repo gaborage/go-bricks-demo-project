@@ -1,0 +1,122 @@
+# OpenTelemetry Collector Configuration for New Relic Integration
+# This collector acts as an intermediary between your application and New Relic
+# Application -> OTel Collector (OTLP) -> New Relic (OTLP)
+
+receivers:
+  # OTLP receiver - accepts traces, metrics, and logs from your application
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor - batches telemetry before export for efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Resource detection processor - adds cloud/host metadata
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 2s
+
+  # Resource processor - explicitly sets service metadata for New Relic
+  resource:
+    attributes:
+      - key: service.name
+        value: go-bricks-demo-project
+        action: upsert
+      - key: deployment.environment
+        value: development
+        action: upsert
+      - key: service.version
+        value: 1.0.0
+        action: upsert
+
+extensions:
+  # Answers GET / on 13133 (published to the host by docker-compose.yml), so
+  # `curl -f http://localhost:13133/` reports the collector's health.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+exporters:
+  # New Relic OTLP exporters, one per region. The pipelines below pick one with
+  # NEW_RELIC_REGION (US or EU, set by docker-compose.yml, default US); any other
+  # value names an exporter that does not exist and the collector refuses to start.
+  otlphttp/US:
+    endpoint: https://otlp.nr-data.net:4318
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    # Compression for efficient data transfer
+    compression: gzip
+    # Retry configuration
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    # Timeout configuration
+    timeout: 30s
+
+  otlphttp/EU:
+    endpoint: https://otlp.eu01.nr-data.net:4318
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    timeout: 30s
+
+  # Debug exporter - logs telemetry to console for troubleshooting
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  extensions: [health_check]
+  pipelines:
+    # ========== TRACE PIPELINE ==========
+    # Receive traces from application and send to New Relic
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      # Block list: `{` inside a flow list [...] is YAML syntax, not text.
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
+        - debug
+
+    # ========== METRICS PIPELINE ==========
+    # Receive metrics from application and send to New Relic
+    metrics:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
+
+    # ========== LOGS PIPELINE ==========
+    # Receive logs from application and send to New Relic
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters:
+        - otlphttp/${env:NEW_RELIC_REGION}
+
+  # Telemetry configuration for the collector itself
+  telemetry:
+    logs:
+      level: debug  # Enable verbose logging to see New Relic export details
+
+# New Relic Region Endpoints (selected by NEW_RELIC_REGION):
+# - US:  https://otlp.nr-data.net:4318
+# - EU:  https://otlp.eu01.nr-data.net:4318
+#
+# Authentication is done via api-key header with your New Relic license key.
+#
+# Note: Unlike DataDog, New Relic natively supports OTLP, so no connector is needed.
+# All traces, metrics, and logs are sent directly using the standard OTLP protocol.

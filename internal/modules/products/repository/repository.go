@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"time"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products/domain"
 	"github.com/gaborage/go-bricks/database"
@@ -13,6 +16,11 @@ import (
 
 var (
 	ErrProductNotFound = errors.New("product not found")
+
+	// ErrUnknownUpdateField rejects an Update key that maps to no column. A
+	// misspelled key used to be skipped silently, so the write reported success
+	// while the value was never stored.
+	ErrUnknownUpdateField = errors.New("unknown product update field")
 )
 
 // Repository defines the interface for product data access
@@ -32,15 +40,12 @@ type Repository interface {
 
 const (
 	dbUnavailableErrMsg = "failed to get database connection: %w"
-
-	// fieldKeyName is the JSON/updates-map key for the product name field,
-	// shared with repository_test.go where it is used as a map key literal.
-	fieldKeyName = "name"
 )
 
 type ProductRepository struct {
 	getDB func(context.Context) (database.Interface, error)
-	cols  dbtypes.Columns // Cached column metadata for type-safe queries
+	cols  dbtypes.Columns  // Cached column metadata for type-safe queries
+	now   func() time.Time // Clock for updated_date; tests pin it
 }
 
 func NewSQLProductRepository(getDB func(context.Context) (database.Interface, error)) *ProductRepository {
@@ -48,6 +53,7 @@ func NewSQLProductRepository(getDB func(context.Context) (database.Interface, er
 	return &ProductRepository{
 		getDB: getDB,
 		cols:  qb.Columns(&domain.ProductEntity{}), // Cache once at construction
+		now:   func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -182,8 +188,17 @@ func (r *ProductRepository) List(ctx context.Context, limit, offset int) ([]*dom
 	return products, total, nil
 }
 
-// Update performs a partial update on a product using type-safe column mapping
+// Update performs a partial update on a product using type-safe column mapping.
+// updates is keyed by the domain.Field* names; any other key fails with
+// ErrUnknownUpdateField before a statement runs. Every update also stamps
+// updated_date, so callers never pass it.
 func (r *ProductRepository) Update(ctx context.Context, id string, updates map[string]any) error {
+	// Build the statement first: a bad key is refused before any round trip.
+	query, args, err := r.buildUpdate(id, updates)
+	if err != nil {
+		return err
+	}
+
 	db, err := r.getDB(ctx)
 	if err != nil {
 		return fmt.Errorf(dbUnavailableErrMsg, err)
@@ -193,40 +208,6 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	_, err = r.GetByID(ctx, id)
 	if err != nil {
 		return err
-	}
-
-	// Map JSON field names (camelCase per struct tags) to type-safe database column names
-	fieldToColumn := map[string]string{
-		fieldKeyName:  r.cols.Col("Name"),
-		"description": r.cols.Col("Description"),
-		"price":       r.cols.Col("Price"),
-		"imageURL":    r.cols.Col("ImageURL"),
-		"updatedDate": r.cols.Col("UpdatedDate"),
-	}
-
-	qb := database.NewQueryBuilder(database.PostgreSQL)
-	f := qb.Filter()
-	updateBuilder := qb.Update("products")
-
-	// Add each field to update using type-safe column names
-	columnsSet := 0
-	for key, value := range updates {
-		if colName, ok := fieldToColumn[key]; ok {
-			updateBuilder = updateBuilder.Set(colName, value)
-			columnsSet++
-		}
-	}
-
-	// Bail out early if no valid columns to update
-	if columnsSet == 0 {
-		return fmt.Errorf("no valid fields to update")
-	}
-
-	query, args, err := updateBuilder.
-		Where(f.Eq(r.cols.Col("ID"), id)).
-		ToSQL()
-	if err != nil {
-		return fmt.Errorf("failed to build update query: %w", err)
 	}
 
 	result, err := db.Exec(ctx, query, args...)
@@ -244,6 +225,43 @@ func (r *ProductRepository) Update(ctx context.Context, id string, updates map[s
 	}
 
 	return nil
+}
+
+// buildUpdate renders the partial UPDATE for Update. Keys are sorted so the same
+// input always yields the same SQL.
+func (r *ProductRepository) buildUpdate(id string, updates map[string]any) (query string, args []any, err error) {
+	if len(updates) == 0 {
+		return "", nil, fmt.Errorf("no valid fields to update")
+	}
+
+	// Map the update keys (the fields' JSON names) to type-safe database column names
+	fieldToColumn := map[string]string{
+		domain.FieldName:        r.cols.Col("Name"),
+		domain.FieldDescription: r.cols.Col("Description"),
+		domain.FieldPrice:       r.cols.Col("Price"),
+		domain.FieldImageURL:    r.cols.Col("ImageURL"),
+	}
+
+	qb := database.NewQueryBuilder(database.PostgreSQL)
+	f := qb.Filter()
+	updateBuilder := qb.Update("products")
+
+	for _, key := range slices.Sorted(maps.Keys(updates)) {
+		colName, ok := fieldToColumn[key]
+		if !ok {
+			return "", nil, fmt.Errorf("%w: %q", ErrUnknownUpdateField, key)
+		}
+		updateBuilder = updateBuilder.Set(colName, updates[key])
+	}
+	updateBuilder = updateBuilder.Set(r.cols.Col("UpdatedDate"), r.now())
+
+	query, args, err = updateBuilder.
+		Where(f.Eq(r.cols.Col("ID"), id)).
+		ToSQL()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to build update query: %w", err)
+	}
+	return query, args, nil
 }
 
 // Delete removes a product from the database using type-safe column reference

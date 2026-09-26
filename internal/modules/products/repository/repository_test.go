@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,8 +139,8 @@ func TestUpdate(t *testing.T) {
 
 		repo := NewSQLProductRepository(getDB)
 		err := repo.Update(ctx, "test-id", map[string]any{
-			fieldKeyName: "Updated Name",
-			"price":      149.99,
+			domain.FieldName:  "Updated Name",
+			domain.FieldPrice: 149.99,
 		})
 
 		if err != nil {
@@ -156,7 +158,7 @@ func TestUpdate(t *testing.T) {
 		}
 
 		repo := NewSQLProductRepository(getDB)
-		err := repo.Update(ctx, "missing-id", map[string]any{fieldKeyName: "Updated"})
+		err := repo.Update(ctx, "missing-id", map[string]any{domain.FieldName: "Updated"})
 
 		if !errors.Is(err, ErrProductNotFound) {
 			t.Errorf("Update() error = %v, want %v", err, ErrProductNotFound)
@@ -177,12 +179,101 @@ func TestUpdate(t *testing.T) {
 		}
 
 		repo := NewSQLProductRepository(getDB)
-		err := repo.Update(ctx, "test-id", map[string]any{fieldKeyName: "Updated Name"})
+		err := repo.Update(ctx, "test-id", map[string]any{domain.FieldName: "Updated Name"})
 
 		if !errors.Is(err, ErrProductNotFound) {
 			t.Errorf("Update() error = %v, want %v", err, ErrProductNotFound)
 		}
 	})
+}
+
+// TestUpdatePersistsEveryAcceptedField pins the contract the service relies on:
+// each key the service writes reaches a column, and updated_date is stamped by
+// the repository. The keys used to disagree ("image_url" from the service,
+// "imageURL" here), so an image URL change was dropped without an error.
+func TestUpdatePersistsEveryAcceptedField(t *testing.T) {
+	ctx := context.Background()
+	stamp := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	const newURL = "https://example.com/new.png"
+
+	db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery("SELECT").
+		WillReturnRows(
+			dbtest.NewRowSet("id", "name", "description", "price", "image_url", "created_date", "updated_date").
+				AddRow("test-id", "Test Product", "Description", 99.99, "https://example.com/old.png", stamp, stamp),
+		)
+	db.ExpectExec("UPDATE products").WillReturnRowsAffected(1)
+
+	repo := NewSQLProductRepository(func(context.Context) (database.Interface, error) { return db, nil })
+	repo.now = func() time.Time { return stamp }
+
+	err := repo.Update(ctx, "test-id", map[string]any{
+		domain.FieldName:        "Renamed",
+		domain.FieldDescription: "New description",
+		domain.FieldPrice:       12.5,
+		domain.FieldImageURL:    newURL,
+	})
+	if err != nil {
+		t.Fatalf("Update() unexpected error = %v", err)
+	}
+
+	execs := db.ExecLog()
+	if len(execs) != 1 {
+		t.Fatalf("Update() ran %d statements, want 1", len(execs))
+	}
+	for _, col := range []string{"name", "description", "price", "image_url", "updated_date"} {
+		if !strings.Contains(execs[0].SQL, col+" = ") {
+			t.Errorf("UPDATE does not set %s: %s", col, execs[0].SQL)
+		}
+	}
+	for _, want := range []any{"Renamed", "New description", 12.5, newURL, stamp, "test-id"} {
+		if !slices.Contains(execs[0].Args, want) {
+			t.Errorf("UPDATE args %v lack %v", execs[0].Args, want)
+		}
+	}
+}
+
+func TestUpdateStampsUpdatedDateOnSingleFieldChange(t *testing.T) {
+	ctx := context.Background()
+	stamp := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery("SELECT").
+		WillReturnRows(
+			dbtest.NewRowSet("id", "name", "description", "price", "image_url", "created_date", "updated_date").
+				AddRow("test-id", "Test Product", "Description", 99.99, "", stamp, stamp),
+		)
+	db.ExpectExec("UPDATE products").WillReturnRowsAffected(1)
+
+	repo := NewSQLProductRepository(func(context.Context) (database.Interface, error) { return db, nil })
+	repo.now = func() time.Time { return stamp }
+
+	if err := repo.Update(ctx, "test-id", map[string]any{domain.FieldImageURL: "https://example.com/x.png"}); err != nil {
+		t.Fatalf("Update() unexpected error = %v", err)
+	}
+
+	execs := db.ExecLog()
+	if len(execs) != 1 || !strings.Contains(execs[0].SQL, "image_url = ") || !strings.Contains(execs[0].SQL, "updated_date = ") {
+		t.Fatalf("UPDATE = %v, want image_url and updated_date set", execs)
+	}
+	if !slices.Contains(execs[0].Args, any(stamp)) {
+		t.Errorf("UPDATE args %v lack the updated_date stamp %v", execs[0].Args, stamp)
+	}
+}
+
+func TestUpdateRejectsUnknownField(t *testing.T) {
+	db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+	repo := NewSQLProductRepository(func(context.Context) (database.Interface, error) { return db, nil })
+
+	for _, key := range []string{"image_url", "updated_date", "updatedDate"} {
+		err := repo.Update(context.Background(), "test-id", map[string]any{key: "x"})
+		if !errors.Is(err, ErrUnknownUpdateField) {
+			t.Errorf("Update(%q) error = %v, want %v", key, err, ErrUnknownUpdateField)
+		}
+	}
+	if n := len(db.QueryLog()) + len(db.ExecLog()); n != 0 {
+		t.Errorf("a refused update reached the database %d time(s)", n)
+	}
 }
 
 func TestCreateTx(t *testing.T) {

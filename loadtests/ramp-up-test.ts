@@ -21,7 +21,7 @@ import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
 import type { RefinedResponse, ResponseType } from 'k6/http';
-import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers } from './config.ts';
+import { config, getURL, getRandomProduct, getRandomPage, getSeededProductID, headers, summaryTrendStats } from './config.ts';
 import type { ProductResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
 
 // Custom metrics
@@ -57,6 +57,8 @@ export const options: Options = {
     'success': ['rate>0.95'],  // Require 95% success rate
   },
   batch: 10,
+  // Adds p(99), which the summary prints, to k6's default trend stats.
+  summaryTrendStats,
 };
 
 // Operation weights - balanced mix

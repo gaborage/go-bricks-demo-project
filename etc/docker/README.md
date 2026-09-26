@@ -113,7 +113,7 @@ docker-compose ps
 
 **[otel/otel-collector-prometheus.yaml](otel/otel-collector-prometheus.yaml)**
 - Receives OTLP from application
-- Exports metrics to Prometheus (scraped on port 8889)
+- Exports metrics to Prometheus (scraped on port 8889). Superseded by Grafana Alloy in the `local` profile; no service mounts this file
 - Exports traces to Jaeger via OTLP
 - Simple, clean pipelines for local testing
 
@@ -126,7 +126,8 @@ docker-compose ps
 ### Prometheus Config
 
 **[prometheus/prometheus.yml](prometheus/prometheus.yml)**
-- Scrapes OTel Collector metrics endpoint (port 8889)
+- Receives application metrics by remote_write from Grafana Alloy (`--web.enable-remote-write-receiver`)
+- Scrapes only itself and Alloy. The app serves no `/metrics`: go-bricks exports metrics by OTLP push, never by pull
 - 15-second scrape interval
 - 15-day retention
 

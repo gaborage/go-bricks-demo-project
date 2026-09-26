@@ -63,8 +63,13 @@ func newModuleTestDeps(t *testing.T) *app.ModuleDeps {
 
 	return &app.ModuleDeps{
 		Logger: logger.New("disabled", false),
-		// development: the environment `make run` boots in.
-		Config:   &config.Config{App: config.AppConfig{Name: "test", Version: "1.0.0", Env: config.EnvDevelopment}},
+		// development: the environment `make run` boots in. The server section is
+		// what a real boot validates: the framework's default port and the base path
+		// config.development.yaml sets. The tokens module builds its relay URLs from it.
+		Config: &config.Config{
+			App:    config.AppConfig{Name: "test", Version: "1.0.0", Env: config.EnvDevelopment},
+			Server: config.ServerConfig{Host: "0.0.0.0", Port: 8080, Path: config.PathConfig{Base: "/api/v1"}},
+		},
 		Inbox:    inboxtest.NewMockInbox(),
 		KeyStore: ks,
 	}
