@@ -1,7 +1,8 @@
 // Package tokens demonstrates the go-bricks JOSE middleware via a Visa Token
 // Services–style POST /tokens endpoint. Both inbound (decrypt + verify) and
-// outbound (sign + encrypt) directions are exercised, plus an httpclient
-// JOSETransport relay against an in-process peer simulator.
+// outbound (sign + encrypt) directions are exercised, plus httpclient
+// JOSETransport relays in all three seal modes (nested JWE-of-JWS, Visa MLE
+// bare JWE, VTS Issuer JWS-of-JWE) against in-process peer simulators.
 package tokens
 
 import (
@@ -16,8 +17,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// Kid names used throughout the module. Centralized so the module + cmd/seal-payload
-// stay in lockstep without stringly-typed drift.
+// Kid names used throughout the module. Centralized so the module stays free of
+// stringly-typed drift. scripts/seal-payload.sh (make seal-payload / seal-mle)
+// repeats them for the framework seal-payload CLI and must follow any rename.
 const (
 	OurKid  = "tokens-our"
 	PeerKid = "tokens-peer"
@@ -29,6 +31,7 @@ type Module struct {
 	handler      *handlers.Handler
 	relayHandler *handlers.RelayHandler
 	mleHandler   *handlers.MLEHandler
+	vtsHandler   *handlers.RelayHandler
 	logger       logger.Logger
 }
 
@@ -62,6 +65,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		EncryptKid: PeerKid,
 		VerifyKid:  PeerKid,
 		DecryptKid: OurKid,
+		PeerName:   peerSimulatorName,
 		Logger:     m.logger,
 	})
 	if err != nil {
@@ -72,11 +76,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if err := m.initMLE(deps); err != nil {
 		return err
 	}
+	if err := m.initVTSIssuer(deps); err != nil {
+		return err
+	}
 
 	m.logger.Info().
 		Str("partner_url", peerSimulatorURL).
 		Str("mle_partner_url", mlePeerSimulatorURL).
-		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + peer simulators")
+		Str("vts_issuer_partner_url", vtsIssuerPeerURL).
+		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + VTS Issuer relay + peer simulators")
 	return nil
 }
 
@@ -89,6 +97,7 @@ func (m *Module) initMLE(deps *app.ModuleDeps) error {
 		KeyStore:   deps.KeyStore,
 		EncryptKid: PeerKid, // bare outbound declares an encrypt kid and nothing else
 		DecryptKid: OurKid,  // bare inbound declares a decrypt kid and nothing else
+		PeerName:   mlePeerSimulatorName,
 		Logger:     m.logger,
 	})
 	if err != nil {
@@ -110,14 +119,59 @@ func (m *Module) initMLE(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// RegisterRoutes attaches the partner route, the relay route, and the
-// peer simulator. All three live under the same /api/v1 base group; the
-// simulator path is prefixed with /__sim/ to make its demo-only nature obvious.
+// initVTSIssuer wires the Visa Token Service Issuer half of the module: the
+// JWS-of-JWE relay and its counterparty. The kids are the same four as the
+// nested relay, because this mode signs and encrypts in both directions.
+//
+// The counterparty is handed to the relay as its base transport rather than
+// served under /__sim/: the Issuer wire is a bare compact on application/jose,
+// which only an untagged raw route could answer (see
+// service.VTSIssuerPeerSimulator). The relay's JOSE wiring is unchanged by that;
+// production passes its mTLS transport in the same slot.
+func (m *Module) initVTSIssuer(deps *app.ModuleDeps) error {
+	// Inverse identities: the simulator verifies our signature and decrypts with
+	// the peer key, then encrypts to us and signs with the peer key.
+	vtsPeer, err := service.NewVTSIssuerPeerSimulator(&service.VTSIssuerPeerConfig{
+		KeyStore:   deps.KeyStore,
+		DecryptKid: PeerKid,
+		VerifyKid:  OurKid,
+		SignKid:    PeerKid,
+		EncryptKid: OurKid,
+		Logger:     m.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("init VTS issuer peer simulator: %w", err)
+	}
+
+	vtsRelay, err := service.NewVTSIssuerRelayService(&service.VTSIssuerRelayConfig{
+		PartnerURL: vtsIssuerPeerURL,
+		KeyStore:   deps.KeyStore,
+		SignKid:    OurKid,
+		EncryptKid: PeerKid,
+		VerifyKid:  PeerKid,
+		DecryptKid: OurKid,
+		PeerName:   vtsIssuerPeerName,
+		Transport:  vtsPeer,
+		Logger:     m.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("init VTS issuer relay service: %w", err)
+	}
+
+	m.vtsHandler = handlers.NewVTSIssuerRelayHandler(vtsRelay, m.logger)
+	return nil
+}
+
+// RegisterRoutes attaches the partner route, the three relay routes, and the
+// two HTTP peer simulators. All live under the same /api/v1 base group; the
+// simulator paths are prefixed with /__sim/ to make their demo-only nature
+// obvious. The VTS Issuer counterparty has no route (see initVTSIssuer).
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	m.handler.RegisterPartnerRoute(hr, r)
 	m.handler.RegisterSimulatorRoute(hr, r)
 	m.relayHandler.RegisterRoute(hr, r)
 	m.mleHandler.RegisterRoutes(hr, r)
+	m.vtsHandler.RegisterRoute(hr, r)
 }
 
 // DeclareMessaging is a no-op — the module only speaks HTTP.
@@ -141,3 +195,20 @@ const peerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/tokens"
 // process, different wire shape ({"encData":"<compact JWE>"} rather than a bare
 // compact). Demo-only.
 const mlePeerSimulatorURL = "http://localhost:8080/api/v1/__sim/peer/mle"
+
+// vtsIssuerPeerURL is what the VTS Issuer relay addresses. No socket is ever
+// opened for it: the in-process simulator is the client's base transport, so
+// the URL only supplies the request line and the server.address metric label.
+// The .invalid TLD (RFC 6761) never resolves, so a client that lost that
+// transport fails at DNS instead of reaching a real host. Demo-only.
+const vtsIssuerPeerURL = "http://vts-issuer-peer-sim.invalid/tokens"
+
+// Peer names for the relay clients (httpclient.Builder.WithPeerName, go-bricks
+// v0.65.0 #1648). Each one labels its client's outbound metrics with a
+// low-cardinality partner name, and names the partner when the transport refuses
+// a plaintext 2xx. They pair with the URLs above: one name per counterparty.
+const (
+	peerSimulatorName    = "tokens-peer-sim"
+	mlePeerSimulatorName = "visa-mle-peer-sim"
+	vtsIssuerPeerName    = "visa-vts-issuer-peer-sim"
+)

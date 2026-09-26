@@ -34,6 +34,7 @@ This is a **go-bricks demo project** demonstrating production-ready patterns for
 - Transactional Outbox for reliable event publishing (dual-write pattern)
 - KeyStore for named RSA key pair management (signing/verification)
 - RabbitMQ native streams: a partitioned super stream (`product-activity`, 3 partitions) consumed by a typed, replayable projection
+- External exchange reference: an opt-in module consumes `partner-events`, an exchange another service owns (passive verification + bounded startup wait)
 - Dual observability stacks: Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - Comprehensive load testing with k6
 
@@ -81,7 +82,7 @@ make run
 
 # 4. Test the API
 curl http://localhost:8080/api/v1/health
-curl http://localhost:8080/api/v1/products
+curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
 
 ## Essential Commands
@@ -127,16 +128,20 @@ make loadtest-read       # Read-only baseline test (~12 min)
 make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience under traffic spikes (~6 min)
 make loadtest-sustained  # Detect memory/connection leaks (~17 min)
+make loadtest-topology-repair  # Delete both AMQP exchanges under load; repair time + lost 202s (~2.5 min)
 make loadtest-all        # Run all tests sequentially (~60 min)
+make loadtest-tokens-smoke      # Tokens nested JWE-of-JWS relay (30s); loadtest-tokens for the full run
+make loadtest-tokens-mle-smoke  # Tokens MLE relay: bare JWE in the encData envelope (30s); loadtest-tokens-mle for the full run
+make loadtest-tokens-vts-smoke  # Tokens VTS Issuer relay: JWS-of-JWE, PS256 (30s); loadtest-tokens-vts for the full run
 ```
 
-See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for detailed load testing guide.
+See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the scenarios that need more than their script header; the products scenarios are described in the header of their script under `loadtests/`.
 
 ## Architecture
 
 ### Application Bootstrap
 
-The application uses `go-bricks/app.New()` which handles:
+The application uses `go-bricks/app.NewWithOptions()` (config-driven like `app.New()`, plus one route-table hook) which handles:
 1. **Configuration loading** - Environment-based config from `config.yaml` (see Config System section)
 2. **Database manager** - Connection pooling and lifecycle management
 3. **Messaging manager** - RabbitMQ client setup
@@ -144,7 +149,7 @@ The application uses `go-bricks/app.New()` which handles:
 5. **HTTP server** - Echo server with middleware
 
 **Entry point:** [cmd/api/main.go](cmd/api/main.go)
-- Calls `app.New()` to bootstrap framework
+- Calls `app.NewWithOptions(newAppOptions())` to bootstrap framework; the only override is the simulator route-table veto (see [Simulator Route Policy](#simulator-route-policy-startup-veto))
 - Registers modules via `getModulesToLoad()`
 - Starts server with `application.Run()`
 
@@ -456,6 +461,15 @@ go test -run TestProductService_Create ./...     # Run specific test
 make test                                        # Run all tests (uses race detector)
 ```
 
+### Cross-Module Messaging Validation
+
+[cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
+
+- **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `payments-sign-v1` and `payments-encrypt-v1`, and restores the previous runtime in `t.Cleanup`.
+- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.67.0, and their `Init` needs a validated config, a database or DER files.
+- **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
+- **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
+
 ### API Testing
 ```bash
 make test-products-api     # Uses scripts/test-products-api.sh
@@ -471,12 +485,12 @@ make run
 
 # Test endpoints
 curl http://localhost:8080/api/v1/health
-curl http://localhost:8080/api/v1/products
+curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 ```
 
 ### Load Testing
 
-The project includes comprehensive k6 load testing scripts. See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for details.
+The project includes k6 load testing scripts. Each products scenario is described in its script's header under `loadtests/`; [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) covers running them and the scenarios that need more than a header.
 
 **Quick start:**
 ```bash
@@ -496,6 +510,7 @@ make loadtest-crud
 - **Ramp-Up** - Find breaking points by gradually increasing load
 - **Spike** - Validate resilience under sudden traffic spikes
 - **Sustained** - Detect memory/connection leaks over 15 minutes
+- **Topology Repair** - Deletes `product-events` and `payment-events` mid-run (destructive, so not in `loadtest-all`); reports the self-repair time and the payments lost in the repair window
 
 **TypeScript Support:**
 All load tests are written in TypeScript for better type safety and IDE support. k6 v1.3.0+ has native TypeScript support, so tests run directly without any build step:
@@ -553,9 +568,11 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` is pinned to go-bricks `v0.63.0`. There is no
+**go-bricks version:** `go.mod` is pinned to go-bricks `v0.67.0`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
-like any other dependency.
+like any other dependency. The per-environment operator decisions for the
+v0.64.0 → v0.67.0 upgrade live in
+[wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
 
 **Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
 file. It stays untracked — `.gitignore` is a deny-all allowlist, so `go.work` is
@@ -590,16 +607,21 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 **Health checks:**
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
+- `GET /_sys/health-debug` - Per-component readiness detail, including the consumer arm (framework debug endpoint at the URL root, off by default and loopback-only; `make demo-consumer-readiness` enables it for the app it boots)
+
+**Scheduler system endpoints** (framework; loopback-only while `scheduler.security.cidrallowlist` is empty):
+- `GET /api/v1/_sys/job` - List the registered jobs (the products report job is `test-job`)
+- `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once
 
 **Products module:**
-- `GET /api/v1/products` - List all products
+- `GET /api/v1/products?page=1&pageSize=10` - List products (paginated; `page` and `pageSize` are required, a bare call answers 400)
 - `GET /api/v1/products/:id` - Get product by ID
 - `POST /api/v1/products` - Create product
 - `PUT /api/v1/products/:id` - Update product
 - `DELETE /api/v1/products/:id` - Delete product
 
 **Legacy module** (raw response, no APIResponse envelope):
-- `GET /api/v1/legacy/products` - List products (raw JSON)
+- `GET /api/v1/legacy/products?page=1&pageSize=10` - List products (raw JSON; same required pagination)
 - `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
 
 **Webhooks module** (KeyStore signing demo):
@@ -612,6 +634,7 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 - `POST /api/v1/__sim/peer/tokens` - In-process peer simulator (inverse JOSE policy; demo-only)
 - `POST /api/v1/tokens/mle-relay` - Plaintext entry that drives the outbound bare-JWE + Visa MLE envelope transport against the MLE peer simulator
 - `POST /api/v1/__sim/peer/mle` - In-process MLE peer simulator (bare-JWE, manual `jose.Open`; demo-only)
+- `POST /api/v1/tokens/vts-issuer-relay` - Plaintext entry that drives the outbound JWS-of-JWE (VTS Issuer) transport; its peer simulator is the relay client's in-process base transport, so it has no `/__sim/` route
 
 **Payments module** (sealed AMQP messages demo):
 - `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
@@ -619,6 +642,14 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 **Activity module** (RabbitMQ super-stream demo):
 - `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on), and `publisherReady` — the v0.64.0 `streams.Publisher.Ready()` snapshot for the module's publisher handle
 - `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
+
+**Analytics module** (named-database demo — stores views in the `analytics` database via `deps.DBByName`):
+- `POST /api/v1/analytics/views` - Record a product view (`{"productId": ...}` plus optional user agent, IP, session and referrer)
+- `GET /api/v1/analytics/views/:productId` - View stats for one product (total, today, this week, last viewed)
+- `GET /api/v1/analytics/views` - Most-viewed products (`?limit=`)
+
+**Partner feed module** (external exchange demo, off by default):
+- No HTTP routes. Its only surface is a typed consumer on `partnerfeed.stock.updated`, bound to `partner-events` — an exchange another service owns. See [External Exchanges](#external-exchanges-consuming-from-an-exchange-another-service-owns).
 
 ## Configuration Files
 
@@ -652,6 +683,7 @@ Security is mandatory, not optional:
   // SECURITY: Manual SQL review completed - identifier quoting verified
   query := qb.WhereRaw("custom_condition")
   ```
+  The same annotation is required on every raw-SQL door the framework lists — `f.Raw`, `jf.Raw`, `database.Raw`, a string `Having(...)`, and (framework convention as of go-bricks v0.65.0, #1616) every `qb.Expr` / `qb.MustExpr` SQL body. The compiler does not enforce it; review does.
 - **Secrets management:** Only load secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault). See [internal/modules/shared/secrets/](internal/modules/shared/secrets/)
 - **No hardcoded credentials** - Never commit secrets. No secrets in logs or error messages
 - **Audit logging** - Log sensitive operations (access control changes, data modifications) with trace IDs for correlation
@@ -674,6 +706,20 @@ server.GET(hr, r, "/legacy/products/:id", h.GetProduct,
 ```
 
 The handler signature is identical — only the route option changes the wire format. See [internal/modules/legacy/](internal/modules/legacy/) for a complete example.
+
+### Simulator Route Policy (startup veto)
+
+[cmd/api/main.go](cmd/api/main.go) boots with `app.NewWithOptions(newAppOptions())`, and its only override is `PostRegisterRoutes` (go-bricks v0.65.0, #1672). `app.New()` is `app.NewWithOptions(nil)`, so config loading and every dependency stay as they were. The framework calls the hook once per `Run` with every registered route: module routes, the `/_sys/` debug endpoints and the health/ready probes. The call comes after the framework's duplicate-route check and before the listener opens, and a non-nil error aborts startup.
+
+The demo's hook, [cmd/api/route_policy.go](cmd/api/route_policy.go), enforces one marking rule in both directions: a route with a `__sim` path segment carries the `"simulator"` tag, and a route with that tag sits under `/__sim/`. The path is what callers and access logs see. The tag is what the route table carries as data (`server.RouteDescriptor.Tags`). One startup error lists every violation:
+
+```
+app.Options.PostRegisterRoutes rejected the route table: route under /__sim/ lacks the "simulator" tag: POST /api/v1/__sim/peer/tokens (module tokens)
+```
+
+- **To add a simulator,** register it under `/__sim/...` **and** pass `server.WithTags("simulator")`. [cmd/api/route_policy_test.go](cmd/api/route_policy_test.go) builds the real route table from `getModulesToLoad()`, so CI fails when either marker is missing, before `make run` does.
+- **Not every simulator is a route.** The VTS Issuer peer must answer a bare compact as `application/jose`, which no taggable route can do, so it is the relay client's in-process transport (see [JOSE Middleware](#jose-middleware-nested-jwe-of-jws)) and never appears in the route table.
+- **The hook can veto but not gate.** A hook cannot add or drop a route, so it cannot make simulators development-only. The tokens relays call their simulators in-process in every environment, so a "no `/__sim/` outside development" rule would refuse every non-development boot. The activity poison simulator keeps its own development-only guard inside the module, the only place that can decline to register a route.
 
 ### Transactional Outbox Pattern
 
@@ -701,7 +747,45 @@ tx.Commit(ctx)
 - `outbox.NewModule()` — provides `deps.Outbox` (OutboxPublisher)
 
 **Event types:** `product.created`, `product.updated`, `product.deleted`
-**Exchange:** `product-events` (topic, durable) declared in products module's `DeclareMessaging()`
+**Exchange:** `product-events` (topic, durable) declared with `decls.DeclareTopicExchange` in products module's `DeclareMessaging()`
+
+### Scheduled Job Under an Advisory Lock (Database Session)
+
+The products report job ([internal/modules/products/job/report_job.go](internal/modules/products/job/report_job.go)) demonstrates the **database Session door** (go-bricks v0.65.0, ADR-112): `db.Session(ctx)` returns a handle pinned to ONE physical connection, for session-scoped state a pool would silently lose. Here that state is a PostgreSQL advisory lock that elects one runner across replicas. The scheduler only stops the SAME job overlapping inside one process, and every replica ticks on its own.
+
+```go
+// Execute returns a named err, so the deferred unlock can report its failure.
+sess, err := db.Session(ctx) // db is ctx.DB(), the job's context-aware handle
+if err != nil {
+    return fmt.Errorf("report job: open session: %w", err)
+}
+defer sess.Close() // deferred first, so it runs LAST
+var acquired bool
+if err = sess.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ReportLockKey).Scan(&acquired); err != nil {
+    return fmt.Errorf("report job: try advisory lock: %w", err) // a failed query is not a skip
+}
+if !acquired {
+    log.Info().Msg("Report job skipped: another replica holds the lock")
+    return nil // a skip is not a failure
+}
+defer func() { // pg_advisory_unlock, runs BEFORE Close
+    if unlockErr := releaseReportLock(ctx, sess); unlockErr != nil && err == nil {
+        err = unlockErr
+    }
+}()
+log.Info().Msg("Report job lock acquired")
+return j.generate(ctx)
+```
+
+- **Lock, work and unlock share one Session.** Through the pool, the unlock can run on another backend and release nothing, while both statements still succeed.
+- **Unlock before Close, on a detached context.** `Close` returns the connection to the pool without ending the backend. A lock left held would ride along on that pooled connection until it died. Runs on any other backend would skip the report, and a run that reuses that backend would re-acquire it: PostgreSQL stacks session advisory locks, so that run's single unlock leaves the stale lock held. The unlock is registered as soon as the lock is held and runs on `context.WithoutCancel(ctx)` bounded to 5s, so a shutdown mid-report still releases it.
+- **Non-blocking on purpose.** `pg_try_advisory_lock`, not `pg_advisory_lock`: the replica that loses skips this tick instead of queueing a second report.
+- **A Session holds one pool connection for the whole run** (25 per pool by default), so acquire it late and release it early. A lock that only has to span one transaction should use `pg_advisory_xact_lock` on an ordinary transaction, with no Session.
+- **The key is database-wide.** `ReportLockKey` (`0x52505254`, ASCII "RPRT") shares one bigint namespace with every client of the database.
+
+**Testing:** `dbtest.TestDB.ExpectSession()` queues a strict `TestSession` with its own query expectations, and `dbtest.AssertSessionClosed` checks the release. `job/report_job_test.go` also asserts that the pool saw no statement and that the unlock ran on a live context after cancellation.
+
+**Proof:** `make advisory-lock-demo` runs [scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh). It starts two extra replicas on `REPLICA_PORTS` (default `8081 8082`) with `custom.products.report.hold` set (env `CUSTOM_PRODUCTS_REPORT_HOLD`, script `HOLD`, default `8s`), so the winner keeps the lock long enough for the loser to find it held. It then fires `POST /api/v1/_sys/job/test-job` at both replicas at once and waits for their first scheduled tick. Each time, exactly one replica logs `Report job lock acquired` and the other logs `Report job skipped: another replica holds the lock`, while `pg_locks` shows one holder — and none once the winner logs `Report job lock released`, checked while both replicas are still up. `GET /api/v1/_sys/job` (list) and `POST /api/v1/_sys/job/:jobId` (manual trigger) are the scheduler's system endpoints, loopback-only while `scheduler.security.cidrallowlist` is empty. The hold is a demo knob and `make run` leaves it unset.
 
 ### KeyStore RSA Signing
 
@@ -765,9 +849,29 @@ if err != nil {
 
 **Bare-JWE / Visa MLE (v0.64.0, ADR-107 + #1585):** the MLE relay endpoint exercises the second seal mode — `jose.Policy{Mode: jose.SealModeBareJWE}` is encrypt-only `JWE(payload)` (no inner JWS), paired with `httpclient.VisaMLEEnvelope()` on `JOSEConfig.Envelope`, which wraps the compact as `{"encData":"<compact>"}` `application/json` on the wire and unwraps inbound responses by shape. Bare mode admits `A128GCM` (via a direct `go-jose/v4` import — no go-bricks alias) and stamps `iat` in milliseconds when `IATMillis: true`. Two invariants shape the demo: bare mode does **not** authenticate the sender (no signature — production pairs it with mTLS / X-Pay-Token), and there is no `mode` key in the `jose:` struct-tag grammar, so a server route cannot select bare mode — the MLE peer simulator binds the envelope as plain JSON and opens/seals manually with `jose.Open`/`jose.Seal`. See [internal/modules/tokens/service/mle_relay_service.go](internal/modules/tokens/service/mle_relay_service.go).
 
-**Helper CLI:** `cmd/seal-payload` plays the peer role — reads JSON from stdin, signs with peer private + encrypts to our public, prints a compact JWE for `curl --data-binary @-`. See [cmd/seal-payload/main.go](cmd/seal-payload/main.go).
+**JWS-of-JWE / VTS Issuer (v0.65.0, ADR-111 + #1610/#1623):** `POST /api/v1/tokens/vts-issuer-relay` exercises the third seal mode — `jose.Policy{Mode: jose.SealModeJWSofJWE}` encrypts first and signs the compact JWE: an outer JWS (`PS256`, `typ: JOSE`, `cty: JWE`, `iat` in seconds, fixed by the mode) over the inner JWE bare mode builds (`A256GCM`, `Policy.Typ`, millisecond `iat` under `IATMillis`, no `cty` even though `WithJOSE` fills `Policy.Cty`). No `Envelope`: the compact is the body, `application/jose`, both ways. Three rules shape the code:
+- **`SigAlg: josev4.PS256` is explicit on both policies.** Visa requires PS256; `httpclient.Builder.Build` fills an unset `SigAlg` with `jose.DefaultSigAlg` (RS256), so omitting it builds and seals and is rejected only by the partner. Inbound, `SigAlg` is a pin, not an allowlist: `Open` refuses any other outer `alg` (`JOSE_ALGORITHM_DISALLOWED`) before touching a key.
+- **Verify before decrypt.** `Open` refuses a non-3-segment body (`JOSE_OUTER_NOT_JWS` — the nested and bare shapes are poison here, never a fallback), a bad signature, or an outer header without `cty: JWE` before the private key is used.
+- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokens-our`/`tokens-peer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids.
 
-**Reference:** [go-bricks v0.63.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.63.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Why the VTS Issuer simulator is a transport, not a `/__sim/` route:** a typed go-bricks route (the only kind that takes `server.WithTags("simulator")`) always JSON-encodes its result, and the raw door `RouteRegistrar.Add` could answer `application/jose` but takes no route options, so its descriptor carries no tags; no `jose:` tag selects this mode either. Rather than wrap the compact in a JSON envelope Visa does not send, `service.VTSIssuerPeerSimulator` implements `http.RoundTripper` and is passed to `WithTransport` — the base slot below `JOSETransport` that production fills with its mTLS transport. Seal, retry loop, peer-labelled metrics, verify-then-decrypt and the plaintext-2xx refusal all run unchanged; only the dial is replaced. The relay addresses `http://vts-issuer-peer-sim.invalid/tokens` (RFC 6761: never resolves), so a client that lost that transport fails at DNS rather than reaching a real host. See [internal/modules/tokens/service/vts_issuer_relay_service.go](internal/modules/tokens/service/vts_issuer_relay_service.go).
+
+**Helper CLI:** request bodies for `curl` come from the framework's `seal-payload` CLI (go-bricks v0.65.0, #1615/#1620). It replaced the demo's own `cmd/seal-payload`, which could only do nested mode. Both targets read JSON on stdin and print only the sealed body, so it pipes into `curl --data-binary @-`:
+
+- `make seal-payload` plays the peer for `POST /api/v1/tokens`. It is a nested JWE-of-JWS that signs with `certs/tokens_peer_private.der` (`-sign-kid tokens-peer`, the route's `verify=`) and encrypts to `certs/tokens_our_public.der` (`-encrypt-kid tokens-our`, its `decrypt=`).
+- `make seal-mle` mints a Visa MLE body for `POST /api/v1/__sim/peer/mle`: `-mode bare -enc A128GCM -typ JOSE -iat-ms -envelope visa-mle`, encrypted to `certs/tokens_peer_public.der` (`-encrypt-kid tokens-peer`), which is the key the MLE peer simulator opens with. Nothing is signed. This is the same header shape as `NewMLEOutboundPolicy`.
+
+[scripts/seal-payload.sh](scripts/seal-payload.sh) runs with `GOWORK=off` and resolves the CLI version with `go list -m` from `go.mod`, so there is no second pin to drift. The script repeats the module's kids, so a kid rename has to touch it too (the server reports drift as `JOSE_KID_UNKNOWN`). The CLI only seals and never opens a reply; the relay endpoints are what decrypt.
+
+```bash
+printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
+  curl -s -X POST http://localhost:8080/api/v1/__sim/peer/mle \
+       -H 'Content-Type: application/json' --data-binary @-
+```
+
+**PAN-bearing requests in logs (go-bricks v0.65.0, ADR-110):** `TokenizeRequest`, `PeerSimRequest`, `RelayRequest` and `MLERelayRequest` implement `logger.Redactor` with a value receiver, so a filtered logger handed the whole struct — the decrypted JOSE request or a plaintext relay body — renders `{"last4":"…"}` and never the PAN. Same rules as the payments card (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)): it backs up `log.sensitivefields`, it is consulted only at `Interface`/`WithFields`, and it does not make logging request bodies acceptable. It cannot reach bytes that were already marshaled, so the relays' outbound `httpclient` body preview stays covered by the `pan` needle. [internal/modules/tokens/handlers/pan_redaction_test.go](internal/modules/tokens/handlers/pan_redaction_test.go) pins all four types.
+
+**Reference:** [go-bricks v0.67.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.67.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Sealed Messages (JWE-of-JWS on AMQP)
 
@@ -790,7 +894,9 @@ Ordering is the security decision: **encrypt the Subject first, then sign the wh
 
 **Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
 
-**Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
+**Proof:** `make show-sealed-message` publishes one payment, then reads the message off the consumerless `payments.authorized.tap` queue via the RabbitMQ management API and prints the raw body, its decoded JOSE headers and the still-clear routing fields — asserting the PAN appears nowhere on the wire. It then opens the same bytes with `open-event` and the consumer half of the keys (see below), asserting that the verified envelope and clear fields match the decoded wire view and that the card renders as `"<redacted>"`. See [scripts/show-sealed-message.sh](scripts/show-sealed-message.sh).
+
+**Card data in logs (go-bricks v0.65.0, ADR-110):** `domain.CardDetails` implements `logger.Redactor` with a value receiver. `RedactedForLog()` returns `{last4}` only, the one card fragment `Last4` allows in a log line, so a whole `CardDetails`, `PaymentAuthorized` or `service.AuthorizeRequest` handed to a filtered logger's `Interface` or `WithFields` renders that shape, never the PAN, the expiry or the holder's name. The HTTP body's `handlers.CardRequest` renders the same view by delegating to it, which also covers a whole `AuthorizePaymentRequest`: the `pan` needle alone would mask the PAN there but leave the expiry and the holder in clear. This hardens the masking already in place and replaces none of it: the consumer still logs `cardLast4` explicitly, and `log.sensitivefields: [pan]` still masks any field named `pan`. The hook is not consulted at `Err`, through `Msgf` or by an unfiltered logger. Its result is filtered by the needle list again, so its keys must never contain `pan`. [internal/modules/payments/domain/card_redaction_test.go](internal/modules/payments/domain/card_redaction_test.go) and [internal/modules/payments/handlers/card_redaction_test.go](internal/modules/payments/handlers/card_redaction_test.go) log each struct through the app's filter and through the framework default (which has no `pan` needle), and assert that no digit run longer than four reaches the sink.
 
 **Minting sealed events outside the app:** `make seal-event-demo` runs
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh), which uses the
@@ -806,11 +912,14 @@ dedup on the stable `<sign family>:<jti>` key (every HTTP call mints a fresh
 `jti`, so two calls never collide — only a replayed body does); and a body sealed
 with a wrong `-event-type` is refused at open-rule 7 with
 `SEAL_EVENT_TYPE_MISMATCH` and parks on `payments.authorized.dlq`. The broker
-records only the `x-death` rejection — the `SEAL_*` code lives in the app log, as
-a `*messaging.PayloadError` at stage `open`.
+records only the `x-death` rejection. The `SEAL_*` code lives in the app log, as
+a `*messaging.PayloadError` at stage `open`. The script's step 5 also reads it
+back off the parked bytes with `open-event` (below): exit `3` plus
+`SEAL_EVENT_TYPE_MISMATCH` under the consumer's declared type. A control run
+under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 
 ```bash
-printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
   -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -820,7 +929,57 @@ printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0
 `-tenant-id` is omitted on purpose: `multitenant.enabled` is false here, so the
 signed `tid` carries no rule and is only surfaced on the envelope.
 
-**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md) (its "Minting test events" section covers the CLI) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
+**Opening sealed events outside the app (v0.65.0, #1640 + #1633):** the
+framework's `open-event` CLI mirrors `seal-event`. It verifies and decrypts one
+body through `sealed.OpenDocument`, the type-free door that runs the typed
+consume door's open rules in the same order with the same `SEAL_*` codes. It
+takes the **consumer** half: `certs/payments_sign_v1_public.der` (sign PUBLIC) and
+`certs/payments_encrypt_v1_private.der` (encrypt PRIVATE). Both scripts drive it
+through [scripts/lib/open-event.sh](scripts/lib/open-event.sh):
+
+- **Install, never `go run`.** `install_open_event` runs
+  `GOBIN=<scratch> go install …/cmd/open-event@${SEAL_EVENT_VERSION}`. `go run`
+  collapses every non-zero exit of its child into its own `1`, and the scripts
+  assert the real codes: `0` opened, `1` tool error, `2` usage, `3` refused.
+- **Never `-print-subject`.** It prints the decrypted card, PAN included, and is
+  a fixture-only hatch. `open_event` refuses the flag in every spelling. The
+  default renders the subject member as the fixed literal `"<redacted>"`, with no
+  length hint. Under `-json` it travels HTML-escaped as `"\u003credacted\u003e"`,
+  which `jq` decodes to `<redacted>`, so compare the decoded value, never the raw
+  bytes. `assert_redacted` greps the
+  captured stdout and stderr for the PAN before either is printed.
+- **Kids are declared, not peeked.** `-sign-kid` and `-encrypt-kid` are required
+  flags, never read from the unauthenticated header. After a rotation,
+  show-sealed-message takes `OPEN_SIGN_KID` / `OPEN_ENCRYPT_KID` and derives the
+  key file from the keystore's DER naming.
+- **`-tenancy disabled`** is passed explicitly: `multitenant.enabled` is false.
+- **The seal-event demo matches the parked message by bytes.** The DLQ is durable
+  and accumulates across runs, so the script peeks up to `DLQ_PEEK_MAX` messages
+  (`ack_requeue_true`) and opens the one that is byte-identical to the body it
+  minted, not the head.
+- **Rule 9 can be reached from the consumer side.** open-event with
+  `-subject amount` refuses a valid body with `SEAL_MANIFEST_MISMATCH`, which is
+  consumer declaration drift. seal-event cannot mint that case.
+
+```bash
+open-event \
+  -sign-key-file certs/payments_sign_v1_public.der \
+  -encrypt-key-file certs/payments_encrypt_v1_private.der \
+  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -subject card -event-type payment.authorized -tenancy disabled -json < body.txt
+```
+
+**Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" and "Inspecting sealed events" sections cover the two CLIs) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
+
+### Topology Self-Repair (exchange loss, go-bricks v0.67.0)
+
+As of go-bricks v0.67.0 (#1776/#1779, ADR-113 amendment) an AMQP exchange deleted under a live app **heals itself**. Every pooled publisher drives the topology redeclare pass, not only the consumer: the first publish into the hole takes the broker's 404 on the publisher's channel, the client opens a replacement channel, and that channel wakes the registry, which re-declares every exchange, queue and binding over its own connection (INFO `Messaging topology redeclared on new channel`). The publish retries on the new channel. Before v0.67.0 nothing triggered that pass, and every later publish failed with `ErrPublishRetriesExhausted` until a restart. Both publishing paths here share the single-tenant pooled publisher, so a payment or an outbox drain of a product write repairs `payment-events` and `product-events` alike.
+
+- **The streams lane does not self-repair.** `product-activity` (port 5552) is declared at startup only; a deleted stream, or a broker wipe, needs an app restart.
+- **The repair has an ack-and-drop window.** The pass declares exchanges, then queues, then bindings, and the typed payments publisher sets no `Mandatory` flag (the framework has no returned-message handler). A publish landing after `payment-events` is back but before `payments.authorized` / `payments.authorized.tap` are re-bound is broker-acked and dropped as unroutable, while the caller already got **202**. Treat a deleted exchange as an incident and reconcile the payments authorized during the repair.
+- **`product-events` has no bound queue** in this demo, so its repair proves the relay's publishes are confirmed again, not delivered.
+
+**See it:** `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) publishes a payment, deletes `payment-events` through the management API, publishes into the hole, and shows the exchange and both bindings back and a post-repair payment on the tap; then it deletes `product-events` and lets the outbox relay repair it. The payment body carries a documented test PAN and is never echoed. **Measure it:** `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts), see [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)) deletes both exchanges under constant-arrival traffic and reports "Lost in repair window" (202s that never reached the tap) as a number, never a failed threshold. Both honour `APP_URL` and `RABBIT_MGMT` / `RABBIT_USER` / `RABBIT_PASS`.
 
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 
@@ -866,7 +1025,7 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 **Semantics that shape the handler:**
 - **At-least-once, with batched offset commits → handlers must be idempotent.** An offset is committed only *after* its handler returned successfully, and then only in batches: every `offsetstore.countbeforestorage` successes (framework default 500; this demo lowers it to 10 so the count-driven commit is reachable at demo volume — the 5s flush would commit either way), every `offsetstore.flushinterval` (5s), and once more as a final flush at shutdown. That flush narrows the replay window without closing it, so a crash re-delivers everything after the last stored offset.
 - **A super-stream handler is called concurrently across partitions → it must be goroutine-safe.** Each partition is its own connection with its own delivery loop: sequential and ordered *within* a partition, concurrent *between* them. There is no worker pool and no handler timeout — bound your own slow work with `context.WithTimeout`.
-- **Poison is skipped, never parked (ADR-092).** A body that fails to decode, or decodes but fails `validate`, is deterministic poison: it fails the same way on every attempt and every replica. The lane returns it `Permanent` (no in-place retry whatever `Retry` says), never parks it in the hold ledger, and skips its offset. It survives only in the failure log line and the consume metric — match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` / `streams.ErrPayloadInvalid`. This is what `POST /api/v1/__sim/streams/poison` proves: the consumer logs and moves on rather than stalling the partition.
+- **Poison is skipped, never parked (ADR-092).** A body that fails to decode, or decodes but fails `validate`, is deterministic poison: it fails the same way on every attempt and every replica. The lane returns it `Permanent` (no in-place retry whatever `Retry` says), never parks it in the hold ledger, and skips its offset. It survives only in the failure log line and the consume metric — match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` / `streams.ErrPayloadInvalid`. This is what `POST /api/v1/__sim/streams/poison` proves: the consumer logs and moves on rather than stalling the partition. "Skips" means the handler is never retried, not that the offset is committed: the poison offset is never stored, so a poison message that is the last one on its partition is delivered again, and logged again at ERROR, at every restart until a later good message on that partition commits past it. The simulator's default key `poison-demo` always lands on the same partition, so an ERROR at boot after the poison demo is this replay, not an unclean restart.
 - **A stored offset always wins over `Start`.** At startup — and at each SAC promotion — the framework asks the broker for the consumer name's stored offset and resumes at `stored + 1`. `OffsetFirst()` therefore replays the whole log only on the *first* run under that consumer name; after that it is ignored. A failed offset query never silently falls back to `Start`.
 - **Routing is murmur3, and that is a compatibility guarantee.** The client hashes `RoutingKey` with murmur3 under RabbitMQ's shared seed, modulo the partition list — the cross-client default, so the Java, .NET and Python clients place the same key on the same partition. `msg.Stream` reports the partition a message actually reached.
 
@@ -886,6 +1045,81 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 **Requires RabbitMQ 3.13+** — `DeclareSuperStream` is a 3.13-only command — plus the `rabbitmq_stream` plugin enabled and port 5552 published.
 
 **Reference:** framework [wiki/streams.md](https://github.com/gaborage/go-bricks/blob/main/wiki/streams.md) for the full lane, plus [ADR-059](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_059_streams_consumption.md) (consumption and skip-on-failure), [ADR-063](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_063_streams_native_publishing.md) (native publishing), [ADR-091](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_091_streams_opt_in_registration.md) (opt-in at the build graph) and [ADR-092](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_092_typed_stream_consumers_skip_poison.md) (typed consumers skip poison).
+
+### Consumer-Aware Readiness (`messaging.consumers.critical`)
+
+Before go-bricks v0.65.0, `/ready` judged the messaging kind by its **publisher** alone, so a service whose AMQP consumer had silently detached stayed in rotation while its queue filled up. v0.65.0 tracks every declared consumer's subscription (#1684), and the opt-in key `messaging.consumers.critical` (#1686, ADR-114) lets that state fail readiness:
+
+- **Consumer arm:** once a declared AMQP consumer (here only `payments.authorized`) is unsubscribed **and** its supervisor has failed **5** re-subscribes in a row, `/ready` answers 503. Five is the framework constant at which the `Consumer re-subscribe attempt failed` log turns WARN, and it is not configurable. A reconnect that recovers inside the streak never reaches the verdict.
+- **Publisher arm:** the existing "is the leased publisher ready?" check becomes critical too, so a broker outage answers 503 **at once**, with no streak. That is why the key is absent in [config.development.yaml](config.development.yaml), with only a commented example: turning it on is a per-environment decision (env `MESSAGING_CONSUMERS_CRITICAL=true`).
+- **Not covered:** stream consumers (the activity projection). The streams kind is never critical.
+
+Where to watch it:
+
+| View | What it shows |
+|------|---------------|
+| `GET /api/v1/ready` → 200 | `messaging_stats.declared_consumers`, `subscribed_consumers`, `consumer_max_fail_streak` (worst current streak, `0` when healthy), `consumer_resubscribes` (cumulative successes) and `consumer_registries`. Bare numbers only: never which consumer. |
+| `GET /api/v1/ready` → 503 | The fixed body `{"status":"not ready","messaging":"unhealthy","error":"messaging unavailable"}`. It carries no stats and no queue name (ADR-048), so the streak is not visible here once the verdict flips. |
+| `GET /_sys/health-debug` | This view is off by default. It is served at the URL root, not under `/api/v1`, and is access-controlled (`debug.allowedips` defaults to loopback). `data.components.messaging` shows `critical`, the same counters under `details`, and the arm that failed: `error` is `consumer re-subscribe exhausted` or `publisher not ready`. |
+
+**Proof:** `make demo-consumer-readiness` runs [scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh). The script:
+
+1. Builds and boots its **own** app with `MESSAGING_CONSUMERS_CRITICAL=true`, plus `/_sys/health-debug` on loopback only. Stop `make run` first: the script refuses a busy port.
+2. Records the app user's vhost permissions with `rabbitmqctl list_user_permissions`.
+3. Revokes **read on `payments.authorized` only**, with the read regex `^(?!payments\.authorized$).*`. Configure and write are unchanged, and every other queue and stream stays readable.
+4. Closes the consumer's own AMQP connection through the management API. The broker checks permissions at subscribe time, not per delivery.
+5. Polls `/ready` while `consumer_max_fail_streak` climbs. Once it hits 5, `/ready` answers 503 and the debug view names the consumer arm.
+6. Restores the **exact** recorded permissions and shows the recovery: `subscribed_consumers` back to `declared_consumers`, `consumer_resubscribes` +1, `/ready` 200.
+
+A trap restores the permissions on every exit, including Ctrl-C. The exact restore command is printed before anything changes, in case of a SIGKILL. The demo never stops the broker: the publisher arm would flip `/ready` at once and hide the consumer arm, and every product write would stall on its streams publish for up to 2s.
+
+**Operating it:** gate **liveness** on `/health` (static), never on `/ready`, or a broker incident becomes a restart loop. Read ADR-114's threat note before enabling the key. Anyone who can make a consumer's re-subscribe fail five times running can take every replica out of the load balancer at once, for example by revoking consume, deleting the queue, or causing a `PRECONDITION_FAILED` that is skipped until restart.
+
+**Reference:** framework [ADR-114](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_114_critical_consumer_readiness.md) and [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md).
+
+### External Exchanges (consuming from an exchange another service owns)
+
+The partnerfeed module ([internal/modules/partnerfeed/](internal/modules/partnerfeed/)) demonstrates the **single-declarer pattern** (go-bricks v0.67.0, #1773/#1774, ADR-119): one service owns an exchange and declares its shape, and every other service only binds to it or publishes through it. `partner-events` belongs to a partner service outside this repository, so the module *references* it instead of declaring it. Every other exchange in the demo is declared by the module that uses it.
+
+```go
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    if !m.enabled { // custom.partnerfeed.enabled — off by default
+        return
+    }
+    // Name only: verified with a passive exchange.declare, never created.
+    partner := decls.DeclareExternalExchange("partner-events")
+    // The queue, its DLQ pair and the binding are this service's own.
+    queue := decls.DeclareQueueWithDLQ("partnerfeed.stock.updated",
+        &messaging.DeadLetterSpec{QueueType: messaging.QueueTypeQuorum})
+    decls.DeclareBinding(queue.Name, partner.Name, "partner.stock.updated") // exact key, not a pattern
+    messaging.DeclareTypedConsumer(decls, &messaging.ConsumerOptions{
+        Queue: queue.Name, Consumer: "partnerfeed-stock-updated",
+        EventType: "partner.stock.updated", Workers: 1,
+    }, m.onStockUpdated) // func(ctx, domain.StockUpdated) error — decoded + validated first
+}
+```
+
+**Semantics that shape the module:**
+- **Verified on every declare pass, never created.** The startup pass and each ADR-113 redeclare pass on a new channel issue `exchange.declare` with `passive=true`: the broker answers declare-ok or 404. The owner's later declare of its real shape still succeeds, because this service never sends one. The startup log line is `External exchange verified` (INFO, `exchange=partner-events`).
+- **Existence only.** A passive declare cannot see the owner's type or durability, so nothing checks them. That is why the binding uses an exact routing key, which routes the same through a direct or a topic exchange; a wildcard would silently match nothing on a direct one.
+- **Name only.** `DeclareExternalExchange` takes no type, flags or `Args`, and `Validate()` refuses an external declaration that carries any of them.
+- **No `configure` permission needed.** A passive declare creates nothing, so in production the broker user can be scoped to the entities the service really owns. The demo keeps the default dev user and does not show this.
+- **One owner per declaration set.** All modules share one set, so a name that one module declares and another marks external fails startup with `declared locally and marked external in the same declaration set`. That is why the demo uses a new name rather than `product-events` or `payment-events`.
+- **A missing exchange aborts startup.** The module declares a consumer, so the passive declare's 404 is fatal: `failed to declare exchange partner-events: Exception (404) Reason: "NOT_FOUND - no exchange 'partner-events' in vhost '/'"`. A publisher-only service would warn and continue instead.
+- **`messaging.declare.externalwait` makes the abort wait** (#1774, default `0`, env `MESSAGING_DECLARE_EXTERNALWAIT`). On a 404 the startup declare pass re-runs with backoff (first gap `min(1s, externalwait/4)`, doubling to 5s) until the owner creates the exchange or the budget runs out. It logs one WARN, `Broker answered 404, re-running the startup declare pass until it succeeds or externalwait elapses`. It engages only for a service that declared consumers, only on a 404, and only on the control-plane startup pass. Two costs: a **mistyped** external name also spends the whole budget before failing, and the HTTP listener starts only after this pass, so a `startupProbe` must allow the first attempt, plus `externalwait`, plus one final attempt. The demo config carries it commented out.
+- **At-least-once, one worker.** The handler only logs, so a redelivery is harmless; a handler that writes state would dedup first (for example `inbox.ProcessOnce` on the partner's `eventId`, through `DeclareTypedConsumerWithMeta`). `Workers: 1` keeps one SKU's stock updates in broker order, because a stock level is last-write-wins.
+- **The partner's contract is validated at the boundary.** `domain.StockUpdated` carries `validate` tags. A body that fails decode or validation is nacked without requeue and parks on `partnerfeed.stock.updated.dlq`. `Quantity` is a `*int`, so a missing field is refused rather than read as zero stock.
+
+**Why it is off by default:** no partner service runs locally. Switched on with the exchange absent, plain `make run` would abort on the 404. Switch it on with `CUSTOM_PARTNERFEED_ENABLED=true` (or `custom.partnerfeed.enabled: true`) only where something owns `partner-events`. The module is always registered in [cmd/api/main.go](cmd/api/main.go) and reads the switch in `Init`, because `main` never sees the loaded config (`app.App` exposes no accessor).
+
+**Proof:** `make external-exchange-demo` runs [scripts/external-exchange-demo.sh](scripts/external-exchange-demo.sh). It starts its own app instance with the module on and plays the partner through the RabbitMQ management API, in three steps:
+1. With the exchange absent and `externalwait` at 0, startup fails fast on the broker's 404.
+2. With `externalwait` at 60s, the app logs the WARN and keeps its listener down. The script creates the exchange, and startup completes with `External exchange verified`, without a restart.
+3. A `partner.stock.updated` event published to the exchange reaches the consumer.
+
+Cleanup deletes the exchange, plus the queue, DLQ and DLX when the run created them. The script refuses to run while anything listens on the `APP_URL` port, so stop `make run` first. It honors `APP_URL` and `RABBIT_MGMT`.
+
+**Reference:** framework [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md#external-exchanges) ("External exchanges" and "Startup wait"), [ADR-119](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_119_external_exchange_passive_verification.md), and [wiki/startup_defaults.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/startup_defaults.md) for the probe sizing.
 
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
@@ -936,14 +1170,18 @@ it to the declared expression hatch `qb.Expr()` / `qb.MustExpr()`:
 
 ```go
 qb.Select("COUNT(*)")                        // REJECTED
+// SECURITY: Manual SQL review completed - constant aggregate, no caller input
 qb.Select(qb.MustExpr("COUNT(*)"))           // SAFE
+// SECURITY: Manual SQL review completed - constant aggregate over a fixed column, no caller input
 qb.Select(qb.MustExpr("AVG(price)", "avg"))  // SAFE — expression + alias
 qb.OrderBy("created_date DESC")              // SAFE — bounded direction is in the grammar
 ```
 
 `Expr`/`MustExpr` carry SQL verbatim and are NOT escaped — never interpolate user
-input into them. `cols.As(alias)` is the one door that **panics** (at the `As` call,
-with `*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
+input into them, and annotate every call site with `// SECURITY: Manual SQL review
+completed - <what was verified>` (see [Security Requirements](#security-requirements)).
+`cols.As(alias)` is the one door that **panics** (at the `As` call, with
+`*dbtypes.InvalidAliasError`) rather than deferring to `ToSQL()`.
 
 ### Migrations
 - Place SQL files in [migrations/](migrations/) directory
@@ -1020,7 +1258,7 @@ All PRs to `main` and pushes to `main` run automated checks via GitHub Actions.
 |-----|-------------|-------|
 | **Lint** | `golangci-lint` via official action | v2 config; produces inline PR annotations |
 | **Test** | `go test -v -race -coverprofile` | Uploads coverage artifact (7-day retention) |
-| **Build** | `go build -o /dev/null ./cmd/api/main.go` | Verifies compilation |
+| **Build** | `go build -o /dev/null ./cmd/api` | Verifies compilation |
 
 **Security workflow** (`.github/workflows/security.yml`):
 - Runs `govulncheck ./...` on PRs, pushes to main, and weekly (Monday 8am UTC)
@@ -1046,7 +1284,7 @@ New to this codebase? Follow this tour to understand how everything fits togethe
 Explore the code in this order:
 
 1. **[cmd/api/main.go](cmd/api/main.go)** - Application entry point
-   - See how `app.New()` bootstraps the framework
+   - See how `app.NewWithOptions()` bootstraps the framework, and how [route_policy.go](cmd/api/route_policy.go) vetoes a mis-marked simulator route before the listener opens
    - Note `getModulesToLoad()` - how modules are registered
    - Observe fail-fast pattern with fatal logging
 
@@ -1055,6 +1293,7 @@ Explore the code in this order:
    - Dependency injection via `Init(deps *app.ModuleDeps)`
    - Module wiring: repository → service → handler chain
    - Route registration in `RegisterRoutes()`
+   - `job/report_job.go` — the scheduled report under a PostgreSQL advisory lock on a pinned `db.Session` (see [Scheduled Job Under an Advisory Lock](#scheduled-job-under-an-advisory-lock-database-session)); `make advisory-lock-demo` ([scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh)) races two replicas for it
 
 3. **[internal/modules/products/http/](internal/modules/products/http/)** - HTTP handlers
    - Request validation
@@ -1083,15 +1322,20 @@ Explore the code in this order:
 
 8. **[internal/modules/tokens/](internal/modules/tokens/)** - Tokens module (JOSE middleware demo)
    - `handlers/handlers.go` declares `jose:`-tagged request/response structs that drive the inbound + outbound middleware
+   - Every PAN-bearing request struct implements `logger.Redactor` (value receiver), so a filtered logger handed one whole renders only `{"last4":"…"}`; `handlers/pan_redaction_test.go` pins all four
    - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
    - In-process peer simulator with the inverse policy makes the demo self-contained
-   - [cmd/seal-payload/](cmd/seal-payload/) is the developer tool that produces compact JWE-of-JWS bodies for `curl`
+   - `service/mle_relay_service.go` and `service/vts_issuer_relay_service.go` are the other two seal modes (bare JWE behind `VisaMLEEnvelope`; JWS-of-JWE with an explicit `PS256`); `service/vts_issuer_peer_simulator.go` is the one simulator wired as an `http.RoundTripper` via `WithTransport` instead of a `/__sim/` route
+   - `make seal-payload` / `make seal-mle` ([scripts/seal-payload.sh](scripts/seal-payload.sh)) mint nested JWE-of-JWS and Visa MLE bodies for `curl` with the framework's `seal-payload` CLI, at the go-bricks version in `go.mod`
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
+   - `domain.CardDetails` and the HTTP body's `handlers.CardRequest` implement `logger.Redactor`, so a card (or the event or request that holds it) handed to a filtered logger renders `{last4}` and never the PAN, expiry or holder
    - `module.go` shows the classic typed lane — `DeclareTypedPublisher` + `DeclareTypedConsumerWithMeta`, the quorum DLQ pair (explicit `DeadLetterSpec.QueueType`; quorum is the v0.64.0 default, see Troubleshooting for the retained-volume trap) and the consumerless `payments.authorized.tap` queue
    - `service/service.go` mints the order id and publishes once behind `messaging.EventPublisher[T]`; `module.go`'s handler dedups the delivery through `inbox.ProcessOnce` on `Meta.DedupKey()`
-   - `make show-sealed-message` proves the PAN never reaches the broker
+   - `make show-sealed-message` proves the PAN never reaches the broker, then opens the same bytes with `open-event` (consumer keys, card still `"<redacted>"`)
+   - `make demo-consumer-readiness` ([scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh)) stalls this module's `payments.authorized` consumer until `/ready` fails closed (see [Consumer-Aware Readiness](#consumer-aware-readiness-messagingconsumerscritical))
+   - `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) deletes `payment-events` under the live app and watches the next publish repair it; `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts)) measures the same under load (see [Topology Self-Repair](#topology-self-repair-exchange-loss-go-bricks-v0670))
 
 10. **[internal/modules/activity/](internal/modules/activity/)** - Activity module (RabbitMQ super-stream demo)
     - `module.go` carries the `messaging/streams` import that opts the lane in (ADR-091) and holds the `DeclareStreams` topology: super stream, publisher handle, typed consumer
@@ -1106,6 +1350,22 @@ Explore the code in this order:
     - The commented-out `messaging.seal.active` selector (rotation story)
     - `messaging.streams` — stream URI (port 5552), `addressresolver` for Docker port mapping, and the lowered `offsetstore.countbeforestorage`
     - See `make generate-keys` for key generation
+
+12. **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Multi-tenant migration tooling (schema-per-tenant via `go-bricks-migrate`)
+    - `make migrate-multitenant-verdict` ([scripts/migrate-verdict-demo.sh](scripts/migrate-verdict-demo.sh)) runs `go-bricks-migrate validate --json` three ways and prints exit codes 0 / 2 / 1 beside the `clean` / `nothing_attempted` / `fleet_split` summary records (ADR-115); read-only, nothing is migrated
+    - `make migrate-multitenant-check-roles` builds [cmd/check-tenant-roles](cmd/check-tenant-roles/main.go), which logs in as each tenant's own role (read-only) and calls `migration.CheckPGRoleFloor`: exit 0 when every role sits at the floor, 1 when one holds an attribute above it or cannot be checked, 2 when nothing was checked. It dials `PG_HOST`/`PG_PORT`, so point those at the demo Postgres first
+
+13. **[internal/modules/partnerfeed/](internal/modules/partnerfeed/)** - Partner feed module (external exchange demo, off by default)
+    - `module.go` reads `custom.partnerfeed.enabled` in `Init` and, when on, calls `DeclareExternalExchange("partner-events")`: a name-only reference that every declare pass verifies passively and never creates (ADR-119). The queue, its quorum DLQ pair and the binding are declared normally.
+    - `domain/stock.go` declares `StockUpdated`, the partner's `validate`-tagged contract, and the topology names. Its trap comment explains why no module in this process may also declare `partner-events`.
+    - The typed consumer runs one worker, which keeps a SKU's updates in order, and only logs, so a redelivery is harmless.
+    - [config.development.yaml](config.development.yaml) carries the switch and `messaging.declare.externalwait` commented out, with the startupProbe sizing caveat.
+    - `make external-exchange-demo` shows the broker 404 abort, the `messaging.declare.externalwait` wait, and consumption.
+
+14. **[internal/modules/analytics/](internal/modules/analytics/)** - Analytics module (named databases demo)
+    - `module.go` resolves the `analytics` database with `deps.DBByName(ctx, "analytics")` instead of `deps.DB(ctx)`; it is the second PostgreSQL instance (port 5433 in the base compose file) that the `databases.analytics` section of [config.development.yaml](config.development.yaml) describes, with its own session timezone (`Asia/Tokyo`)
+    - `handlers/` serves `POST /api/v1/analytics/views`, `GET /api/v1/analytics/views/:productId` and `GET /api/v1/analytics/views`
+    - `make migrate-analytics` applies its schema (Flyway, `--profile migrations`)
 
 ### Runtime Tour (15-20 minutes)
 
@@ -1128,7 +1388,7 @@ Experience the application running:
    curl http://localhost:8080/api/v1/ready
 
    # Products CRUD
-   curl http://localhost:8080/api/v1/products
+   curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
    curl http://localhost:8080/api/v1/products/1
 
    # Or use the test script
@@ -1206,7 +1466,8 @@ CORS_DEV_WILDCARD=true APP_ENV=development ./bin/go-bricks-demo-project
 # As of go-bricks v0.60.0 (ADR-082), every identifier door is validated against a
 # safe identifier grammar. This bit the products repository's pagination COUNT
 # query (internal/modules/products/repository/repository.go).
-# Fix: wrap the expression in the declared hatch.
+# Fix: wrap the expression in the declared hatch, and annotate the call site
+# with the `// SECURITY: Manual SQL review completed - ...` comment (#1616).
 #   qb.Select("COUNT(*)")              ->  qb.Select(qb.MustExpr("COUNT(*)"))
 # Note this is a RUNTIME rejection, not a compile error — `go build` stays green,
 # so exercise the affected endpoint (GET /api/v1/products?page=1&pageSize=2) after
@@ -1263,6 +1524,8 @@ APP_ENV=development make run   # app.debug: true is already in config.developmen
 docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized
 docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # then restart the app. Or destroy the volume: make docker-down && make dev
+# The same mismatch met at RECONNECT (not startup) is a WARN plus skip-until-restart
+# as of v0.65.0 — see "AMQP Topology Re-declared on Reconnect" below.
 # Related: the management API reports a quorum queue's `messages` on the ~5s
 # stats emission tick — scripts/seal-event-demo.sh polls for DLQ growth instead
 # of reading the depth once for exactly this reason.
@@ -1285,6 +1548,171 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # MessagingClientFactory product carries no byte door, so every publish fails
 # with messaging.ErrPublishDoorUnavailable — publish through a framework-built
 # client instead.
+```
+
+### Sealed Dedup Key Is Typed and Bound to Its Delivery (go-bricks v0.65.0 / v0.66.0)
+
+```bash
+# Symptom (compile): cannot use key (variable of struct type messaging.DedupKey)
+# as string value. As of go-bricks v0.65.0 (#1630) Metadata.DedupKey() returns,
+# and InboxProcessor.ProcessOnce takes, a messaging.DedupKey. Render it with
+# key.String(): the persisted gobricks_inbox spelling is unchanged (the wire id,
+# or "<sign family>:<jti>" for a sealed key), so no ledger migration.
+# messaging.IsSealedDedupKey is gone — use key.Sealed().
+# Symptom (runtime, v0.66.0 #1700): a sealed delivery is refused with an error
+# wrapping messaging.ErrInvalidEventID —
+#   sealed dedup key outside a sealed delivery     (ctx lost the delivery marker)
+#   sealed dedup key belongs to another delivery   (a key kept from another delivery)
+# — no ledger row is written, the handler's work does not run, and the message
+# takes the poison path to the DLQ. The inbox admits a sealed key only under the
+# ctx of the delivery that produced it. Rules (payments/module.go follows both):
+#   - take the key from THIS delivery's meta.DedupKey(); never cache it
+#   - call ProcessOnce with the handler's ctx (or one derived from it), never
+#     context.Background() or a detached goroutine
+# A replay of the same envelope composes an equal key, so seal-event-demo's
+# "same bytes twice" proof is still admitted and then deduplicated by the ledger.
+# The payments handler logs dedupKey at INFO on purpose (the framework never
+# renders a sealed key itself): it is an identifier, never the PAN or a secret.
+```
+
+### JOSE Relay Refuses a Plaintext 2xx (go-bricks v0.65.0)
+
+```bash
+# Symptom: POST /api/v1/tokens/relay or /api/v1/tokens/mle-relay fails with an
+# error wrapping
+#   httpclient: successful response was not JOSE-protected (peer: "...", status: 200)
+# and the transport logs one WARN (never the body).
+# As of go-bricks v0.65.0 (#1637, ADR-107 amendment) a JOSETransport with an
+# Inbound policy refuses a 2xx it did not unwrap: nested mode needs Content-Type
+# application/jose; envelope mode (VisaMLEEnvelope) needs a non-empty top-level
+# encData member. Non-2xx replies (plaintext error bodies), 204, 304 and HEAD
+# still pass through, and the refusal is not retried by WithRetries. Match it
+# with errors.Is(err, httpclient.ErrJOSEPlaintextResponse).
+# The relays set WithPeerName (#1648), so peer reads "tokens-peer-sim",
+# "visa-mle-peer-sim" or (for /tokens/vts-issuer-relay, same rule as nested
+# mode) "visa-vts-issuer-peer-sim" — the label their outbound metrics carry.
+# The in-process simulators seal every 2xx, so the demo's behavior is unchanged
+# — dropping WithRawResponse from the MLE simulator is what would trip it.
+# Decision: AllowPlaintextSuccess stays UNSET on every relay; setting it hands
+# the caller a body nothing authenticated. A real partner must protect every
+# 2xx it answers — fix the partner route, don't set the flag.
+```
+
+### AMQP Topology Re-declared on Reconnect (go-bricks v0.65.0)
+
+```bash
+# What changed (go-bricks v0.65.0, #1676/#1675, ADR-113): after an AMQP reconnect
+# the registry re-runs every exchange/queue/binding declaration once per new
+# channel before the consumer re-subscribes, so a broker that lost its topology
+# no longer leaves payments.authorized in a silent 404 loop. On success:
+#   INFO  Messaging topology redeclared on new channel
+# Symptom 1: at reconnect,
+#   WARN  Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart ...
+# A surviving entity whose arguments no longer match (the classic-vs-quorum DLQ
+# pair above, an old unbounded payments.authorized.tap) is skipped for the life
+# of the process. Fix the server-side definition and restart. At STARTUP the same
+# mismatch still aborts boot.
+# Symptom 2: during a broker outage,
+#   WARN  Consumer re-subscribe attempt failed, will retry
+# from the 5th consecutive failed attempt (attempts 1-4 stay at Debug), with
+# amqp_reply_code / amqp_reply_text when the broker refused it. The retry cadence
+# is unchanged; the Error Analysis dashboard's log-level panel will show them.
+# Not covered: the native streams lane. product-activity (port 5552) is declared
+# at startup only, so after a broker wipe the super stream does not come back
+# until the app restarts. Fix: once the broker is back, stop `make run` and start
+# it again.
+```
+
+### `/ready` Key `active_consumers` Renamed (go-bricks v0.65.0)
+
+```bash
+# Symptom: a Grafana panel saved in the UI, a New Relic NRQL query or an alert
+# reading messaging_stats.active_consumers from GET /api/v1/ready goes flat.
+# As of go-bricks v0.65.0 (#1684) that key is gone: it counted tenant consumer
+# REGISTRIES, and is now spelled consumer_registries. New beside it:
+# declared_consumers, subscribed_consumers, consumer_resubscribes and
+# consumer_max_fail_streak.
+curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats
+# Fix: repoint readers to consumer_registries (the old meaning) or to
+# declared_consumers / subscribed_consumers (what the old name suggested).
+# Nothing in this repo reads the key. messaging_stats appear only in the 200
+# body; a 503 carries the blocking kind's status and a fixed error.
+```
+
+### Topology Repair Driven by Publishers (go-bricks v0.67.0)
+
+```bash
+# What changed (go-bricks v0.67.0, #1776/#1779, ADR-113 amendment): every pooled
+# publisher's new channel now also drives the redeclare pass, not only the
+# consumer's. Two visible effects:
+# 1. "Messaging topology redeclared on new channel" (INFO) now also appears when
+#    the PUBLISHER's channel is replaced: a publish into a deleted exchange, or a
+#    dropped publisher connection. It does not appear at the first publish, and
+#    usually not at boot: the "" publisher is leased at startup pre-init, before
+#    the consumer registry exists, so a first channel that comes up that early
+#    finds no topology to replay. It CAN appear once at boot, with
+#    channel_generation 1, when that first channel comes up after consumer setup
+#    has begun (a slow broker connect); that line is benign. After startup, or
+#    with a higher generation, it means a publisher channel was replaced. A
+#    publisher the pool creates later (after messaging.publisher.idlettl evicts
+#    it) does run one idempotent pass on its first channel.
+# 2. An exchange deleted under a live app now heals itself. Before, every later
+#    publish to it failed with ErrPublishRetriesExhausted until a restart.
+# Caveat, money path: the repair is NOT atomic. The pass runs exchanges, then
+# queues, then bindings. A publish that lands after payment-events is back but
+# before payments.authorized / payments.authorized.tap are re-bound is
+# broker-acked yet unroutable: the typed publisher sets no Mandatory flag, so
+# the broker drops it silently. The caller still gets 202 Accepted and that
+# payment.authorized event is lost. Treat a deleted exchange as an incident and
+# reconcile the payments authorized during the repair window.
+# See it: make redeclare-demo. Measure the window under load:
+# make loadtest-topology-repair ("Lost in repair window" is reported, not a
+# threshold). See "Topology Self-Repair" under Important Patterns.
+```
+
+### Multi-Tenant Migrate CLI Exit Codes and Summary (go-bricks v0.67.0)
+
+```bash
+# Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
+# failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
+# (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.67.0)
+# Exit codes: 0 clean; 1 fleet split (something was attempted and something
+# failed or was never attempted); 2 nothing attempted, no schema touched (empty
+# or failed tenant listing, unreadable tenant store, credential provider that
+# could not be built, half-set migrator identity, or any misuse such as an
+# unknown flag or a stray argument).
+# Every run prints exactly one summary line, even one that stopped early:
+#   Migrate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
+# --json adds verdict / listed / attempted / failed / not_attempted to the
+# summary record. make stops on any non-zero exit, so the migrate-multitenant-*
+# targets cannot tell 1 from 2 — read the summary line.
+make migrate-multitenant-verdict   # all three exit codes side by side, validate only
+# Operator rule: NEVER export GOBRICKS_MIGRATE_MIGRATOR_USER or
+# GOBRICKS_MIGRATE_MIGRATOR_PASSWORD. One alone makes every run exit 2. Both
+# together make one role run every tenant's DDL, which collapses the per-role
+# search_path tenant isolation (wiki/MULTI_TENANT_MIGRATION_DEMO.md).
+```
+
+### PostgreSQL and Cache Config Refusals (go-bricks v0.65.0 / v0.66.0)
+
+```bash
+# None of these fire on this repo's configs (TCP localhost hosts, no
+# connectionstring, no cache). They bite when an environment changes that.
+# Symptom: startup (or go-bricks-migrate) refuses a database section for:
+# - a PostgreSQL connectionstring that carries service= (even an empty one), or
+#   names none while PGSERVICE is set (v0.66.0, #1715). A libpq service file
+#   would supply host and TLS out of the config's sight; inline its keys instead.
+# - TLS claimed on a unix-socket (absolute-path) host: a database.tls block
+#   (v0.65.0, #1613), sslmode/ssl* keys in the connectionstring (#1642), or PGSSL*
+#   environment variables beside one (v0.66.0, #1699). pgx skips TLS on a socket,
+#   so the claim would be dropped silently. Use a TCP host or drop the claim.
+# - a connectionstring or host list that names no host, including an empty
+#   comma-separated entry (pgx would fall back to an implicit unix socket).
+# Cache (v0.66.0, #1740): with cache.enabled and NO cache.redis.keyprefix, every
+# key is namespaced under app.name, so the cache re-keys once on upgrade and
+# app.name must be a valid key namespace. Decide keyprefix before enabling a
+# cache; an explicit "" opts out of the prefix.
 ```
 
 ### Port Conflicts

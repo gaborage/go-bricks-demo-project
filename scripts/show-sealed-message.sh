@@ -17,6 +17,12 @@
 #     by a compact JWE (5 segments)
 #   * the PAN appears NOWHERE in the body — asserted here, not just claimed
 #
+# Then it opens those same bytes the way the payments consumer does, with the
+# framework's `open-event` CLI (go-bricks v0.65.0, #1640) and the consumer half
+# of the keys: the signature verifies, the card decrypts, and the verified
+# envelope and document are printed with the card rendered as "<redacted>" —
+# the CLI's default. -print-subject, which would print the card, is never used.
+#
 # Why a second queue? 'payments.authorized' has a live consumer that acks and
 # removes each delivery within milliseconds, so there is nothing left to look
 # at. 'payments.authorized.tap' is bound to the same exchange + routing key and
@@ -31,19 +37,28 @@
 #   make migrate     # inbox ledger table (gobricks_inbox) — created by
 #                    # migrations/V4__create_inbox_ledger.sql; the demo owns the
 #                    # DDL, inbox.autocreatetable is false
-#   make generate-keys
+#   make generate-keys # certs/payments_{sign,encrypt}_v1_*.der — the consumer
+#                      # half is what open-event reads
 #   make run         # app must be running — it declares exchange + both queues
 #
 # Overrides (env): API_BASE, RABBIT_MGMT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST,
-#                  TAP_QUEUE, TAP_ATTEMPTS, PAYMENT_PAYLOAD
+#                  TAP_QUEUE, TAP_ATTEMPTS, PAYMENT_PAYLOAD, SEAL_EVENT_VERSION,
+#                  OPEN_SIGN_KID, OPEN_ENCRYPT_KID
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Repo root, so the certs/ paths below resolve however the script is invoked.
+cd "$SCRIPT_DIR/.."
 
 # Endpoint guard + credential-file writer, shared with seal-event-demo.sh.
+# Resolved from SCRIPT_DIR, so the cd above cannot move it.
 # shellcheck source-path=SCRIPTDIR source=lib/rabbitmq-mgmt.sh
 source "$SCRIPT_DIR/lib/rabbitmq-mgmt.sh"
+
+# open-event installer + runner (refuses -print-subject), shared the same way.
+# shellcheck source-path=SCRIPTDIR source=lib/open-event.sh
+source "$SCRIPT_DIR/lib/open-event.sh"
 
 API_BASE="${API_BASE:-http://localhost:8080/api/v1}"
 RABBIT_MGMT="${RABBIT_MGMT:-http://localhost:15672}"
@@ -57,6 +72,25 @@ EXPECTED_TYP="vnd.gobricks.sealed.v1+json"
 SIGN_FAMILY="payments-sign"       # Logical kid from the seal tag; the wire kid
                                   # is a GENERATION of it (payments-sign-v<N>)
 ENCRYPT_FAMILY="payments-encrypt"
+
+# What the payments consumer declares — must match internal/modules/payments.
+EVENT_TYPE="payment.authorized"
+SUBJECT="card"                    # the one member carrying seal:"subject"
+
+# open-event runs at the tag this demo pins the framework to — the same variable
+# seal-event-demo.sh reads for both sealing CLIs, so one override moves both.
+# Empty means "the version in go.mod", resolved once go is known to exist.
+SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-}"
+
+# The generations open-event expects. They are DECLARED, never lifted from the
+# header section 3 decodes: that header is unauthenticated until the signature
+# verifies, which is why the CLI takes both kids as required flags. Override
+# them after a rotation. The consumer-half key files follow the keystore's DER
+# naming (payments-sign-v1 -> certs/payments_sign_v1_public.der).
+OPEN_SIGN_KID="${OPEN_SIGN_KID:-payments-sign-v1}"
+OPEN_ENCRYPT_KID="${OPEN_ENCRYPT_KID:-payments-encrypt-v1}"
+OPEN_SIGN_KEY_FILE="certs/${OPEN_SIGN_KID//-/_}_public.der"          # consumer half: PUBLIC
+OPEN_ENCRYPT_KEY_FILE="certs/${OPEN_ENCRYPT_KID//-/_}_private.der"   # consumer half: PRIVATE
 
 # The order id is NOT an input: the service mints it and returns it, and this
 # script uses that value to prove the message on the broker is the one it just
@@ -91,9 +125,20 @@ fail() {
     exit 1
 }
 
-for tool in curl jq; do
+for tool in curl jq go; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required but not installed"
 done
+
+# SEAL_EVENT_VERSION defaults to the go-bricks version go.mod pins, read the way
+# scripts/seal-payload.sh reads it, so no second pin can drift from go.mod. The
+# workspace is off for the lookup: an untracked go.work would make go list report
+# the workspace module, which has no version.
+if [[ -z "$SEAL_EVENT_VERSION" ]]; then
+    SEAL_EVENT_VERSION="$(GOWORK=off go list -m -f '{{.Version}}' github.com/gaborage/go-bricks)" \
+        || fail "could not read the github.com/gaborage/go-bricks version from go.mod"
+fi
+[[ -n "$SEAL_EVENT_VERSION" ]] || fail "go.mod reports no version for github.com/gaborage/go-bricks"
+OPEN_EVENT_PKG="github.com/gaborage/go-bricks/cmd/open-event@${SEAL_EVENT_VERSION}"
 
 # GNU coreutils spells it --decode, older BSD/macOS base64 only knows -D.
 # Probe once so the decode helper stays a plain pipeline.
@@ -125,10 +170,14 @@ guard_mgmt_endpoint "$RABBIT_MGMT"
 
 # --- credentials ----------------------------------------------------------
 
-# Both scratch files are created here so one trap owns the cleanup.
+# All scratch files (and the directory open-event is installed into) are
+# created here so one trap owns the cleanup.
 CURL_CFG="$(mktemp)"
 AUTH_RESPONSE_FILE="$(mktemp)"
-trap 'rm -f "$CURL_CFG" "$AUTH_RESPONSE_FILE"' EXIT INT TERM HUP
+OPEN_OUT="$(mktemp)"
+OPEN_ERR="$(mktemp)"
+TOOL_DIR="$(mktemp -d)"
+trap 'rm -f "$CURL_CFG" "$AUTH_RESPONSE_FILE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT INT TERM HUP
 
 write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 
@@ -140,12 +189,25 @@ curl -fsS -o /dev/null "$API_BASE/health" 2>/dev/null \
 curl -fsS -o /dev/null -K "$CURL_CFG" "$RABBIT_MGMT/api/overview" 2>/dev/null \
     || fail "RabbitMQ management API not reachable at $RABBIT_MGMT — run 'make docker-up'"
 
+# The kid shapes are checked before they become file paths.
+[[ "$OPEN_SIGN_KID" =~ ^${SIGN_FAMILY}-v[0-9]+$ ]] \
+    || fail "OPEN_SIGN_KID='$OPEN_SIGN_KID' is not a generation of the '$SIGN_FAMILY' family"
+[[ "$OPEN_ENCRYPT_KID" =~ ^${ENCRYPT_FAMILY}-v[0-9]+$ ]] \
+    || fail "OPEN_ENCRYPT_KID='$OPEN_ENCRYPT_KID' is not a generation of the '$ENCRYPT_FAMILY' family"
+for f in "$OPEN_SIGN_KEY_FILE" "$OPEN_ENCRYPT_KEY_FILE"; do
+    [[ -r "$f" ]] || fail "missing consumer key '$f' — run 'make generate-keys'"
+done
+
+# Installed before anything is published, so a missing toolchain or module
+# proxy fails here rather than after the payment went out.
+install_open_event "$SEAL_EVENT_VERSION" "$TOOL_DIR"
+
 # --- 1. publish -----------------------------------------------------------
 
 PAN="$(jq -r '.card.pan' <<<"$PAYLOAD")"
 [[ -n "$PAN" && "$PAN" != "null" ]] || fail "payload has no .card.pan to assert against"
 
-section "1/4  POST $API_BASE/payments/authorize"
+section "1/5  POST $API_BASE/payments/authorize"
 
 # Nothing consumes the tap queue, so sealed copies accumulate across runs.
 # Purge first and the message fetched below is unambiguously the one this run
@@ -182,7 +244,7 @@ ORDER_ID="$(jq -r '.data.orderId // .orderId // empty' "$AUTH_RESPONSE_FILE")"
 
 # --- 2. fetch the untouched copy from the tap queue -----------------------
 
-section "2/4  GET one message from '$TAP_QUEUE' (no consumer)"
+section "2/5  GET one message from '$TAP_QUEUE' (no consumer)"
 
 GET_BODY='{"count":1,"ackmode":"ack_requeue_false","encoding":"auto"}'
 RAW_BODY=""
@@ -221,7 +283,7 @@ echo "$RAW_BODY"
 
 # --- 3. anatomy -----------------------------------------------------------
 
-section "3/4  Anatomy: one compact JWS, three segments"
+section "3/5  Anatomy: one compact JWS, three segments"
 
 IFS='.' read -r -a SEGMENTS <<<"$RAW_BODY"
 [[ "${#SEGMENTS[@]}" -eq 3 ]] \
@@ -306,7 +368,7 @@ echo "  enc = $JWE_ENC                ← AEAD over the card itself"
 
 # --- 4. the assertion that matters ---------------------------------------
 
-section "4/4  The PAN is nowhere on the wire"
+section "4/5  The PAN is nowhere on the wire"
 
 if grep -qF -- "$PAN" <<<"$RAW_BODY"; then
     fail "PAN FOUND IN THE RAW BODY — the Subject was not sealed"
@@ -324,6 +386,91 @@ echo
 echo "What an operator with full broker access still learns: order id, amount,"
 echo "currency, event type, the producing key family — and the Subject's size class."
 echo "That is the ADR-097 trade: routable + triageable, never readable."
+
+# --- 5. the verified consumer view ---------------------------------------
+
+section "5/5  Verified consumer view — open-event with the consumer's keys"
+
+echo "Sections 2-4 read what the BROKER holds: the headers above were decoded, not"
+echo "verified. open-event opens the same bytes the way the payments consumer does"
+echo "— sealed.OpenDocument, the consume door's rules in order, same SEAL_* codes —"
+echo "holding the consumer half of the keys:"
+echo
+echo "open-event \\"
+echo "  -sign-key-file $OPEN_SIGN_KEY_FILE \\"
+echo "  -encrypt-key-file $OPEN_ENCRYPT_KEY_FILE \\"
+echo "  -sign-kid $OPEN_SIGN_KID -encrypt-kid $OPEN_ENCRYPT_KID \\"
+echo "  -subject $SUBJECT -event-type $EVENT_TYPE -tenancy disabled -json"
+echo
+echo "(open-event = $OPEN_EVENT_PKG,"
+echo " installed to a scratch GOBIN: go run would turn its refusal exit 3 into a"
+echo " generic 1)"
+echo
+
+# -tenancy disabled: multitenant.enabled is false here, so the signed tid carries
+# no rule. -json puts the envelope and the document on stdout for jq.
+# NEVER add -print-subject: it prints the decrypted card, PAN included, and
+# open_event refuses it. Both outputs are checked for the PAN before either is
+# printed.
+OPEN_RC=0
+open_event \
+    -sign-key-file "$OPEN_SIGN_KEY_FILE" \
+    -encrypt-key-file "$OPEN_ENCRYPT_KEY_FILE" \
+    -sign-kid "$OPEN_SIGN_KID" \
+    -encrypt-kid "$OPEN_ENCRYPT_KID" \
+    -subject "$SUBJECT" \
+    -event-type "$EVENT_TYPE" \
+    -tenancy disabled \
+    -json <<<"$RAW_BODY" >"$OPEN_OUT" 2>"$OPEN_ERR" || OPEN_RC=$?
+assert_redacted "$PAN" "open-event output" "$OPEN_OUT" "$OPEN_ERR"
+
+case "$OPEN_RC" in
+    0) ;;
+    3)
+        # A refusal is {code, details}: presence/length facts, never a subject byte.
+        echo "open-event refused the body:" >&2
+        cat "$OPEN_OUT" >&2
+        if [[ "$KID" != "$OPEN_SIGN_KID" || "$JWE_KID" != "$OPEN_ENCRYPT_KID" ]]; then
+            echo "the wire carries $KID / $JWE_KID; if that generation is provisioned," >&2
+            echo "re-run with OPEN_SIGN_KID=$KID OPEN_ENCRYPT_KID=$JWE_KID" >&2
+        fi
+        fail "the consumer's open rules refused the message this app just published"
+        ;;
+    *)
+        cat "$OPEN_ERR" >&2
+        fail "open-event could not run (exit $OPEN_RC: 1 is a tool error, 2 a usage error)"
+        ;;
+esac
+
+# Everything open-event proved must agree with what section 3 only decoded.
+# -json keeps Go's HTML escaping, so the placeholder travels as
+# "\u003credacted\u003e", which jq decodes to <redacted>: jq compares the
+# DECODED value, never the raw bytes.
+HEADER_JTI="$(jq -r '.jti // empty' <<<"$HEADER_JSON")"
+jq -e '.document.card == "<redacted>"' "$OPEN_OUT" >/dev/null \
+    || fail "open-event did not render the card as \"<redacted>\""
+jq -e --arg etyp "$EVENT_TYPE" --arg kid "$KID" --arg fam "$SIGN_FAMILY" \
+    --arg enc "$JWE_KID" --arg jti "$HEADER_JTI" \
+    '.envelope | .eventType == $etyp and .signKid == $kid and .signFamily == $fam
+                 and .encKid == $enc and .jti == $jti' "$OPEN_OUT" >/dev/null \
+    || fail "the verified envelope disagrees with the header decoded in section 3"
+jq -e --argjson wire "$PAYLOAD_JSON" \
+    '(.document | del(.card)) == ($wire | del(.card))' "$OPEN_OUT" >/dev/null \
+    || fail "the verified document's clear fields differ from the signed payload decoded in section 3"
+
+echo "Verified envelope — read from the header only after the signature over it"
+echo "checked out:"
+jq '.envelope' "$OPEN_OUT"
+echo
+echo "Verified document — the card was decrypted with the '$ENCRYPT_FAMILY' PRIVATE"
+echo "key and then withheld: its member keeps its place, and its value is the fixed"
+echo "literal \"<redacted>\" (no plaintext, no length hint):"
+jq '.document' "$OPEN_OUT"
+echo
+echo "✅ exit $OPEN_RC: the signature verified and the card decrypted; the envelope"
+echo "   matches the header decoded in section 3 and the clear fields match the"
+echo "   signed payload — with the card still redacted, because -print-subject was"
+echo "   never passed."
 echo
 echo "Next:"
 echo "  * consumer side: after the open the handler holds the card in memory only —"
@@ -331,4 +478,8 @@ echo "    the app log line for the 'payments.authorized' delivery carries cardLa
 echo "    never the plaintext card, and the delivery is deduped through the inbox."
 echo "  * rotation: provision payments-sign-v2, then pin it with the commented-out"
 echo "    'messaging.seal.active' selector in config.development.yaml, and re-run"
-echo "    this script — the kid above moves, the seal tag never changes."
+echo "    this script with OPEN_SIGN_KID=payments-sign-v2 — the kid above moves, the"
+echo "    seal tag never changes, and open-event has to be told the new generation"
+echo "    because it never trusts the header's."
+echo "  * refusals: 'make seal-event-demo' parks a wrong-event-type body on the DLQ"
+echo "    and reads the SEAL_* code back off it with the same CLI."

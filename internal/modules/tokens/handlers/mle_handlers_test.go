@@ -88,9 +88,10 @@ func serveMLE(t *testing.T, method, path, body string) *httptest.ResponseRecorde
 // peer route is registered with. httpclient.VisaMLEEnvelope().Unwrap recognizes
 // a reply BY SHAPE — a non-empty top-level encData member. Wrapped in the
 // standard APIResponse envelope the ciphertext would sit under "data", the
-// unwrapper would find nothing to open, and the client would hand the caller
-// ciphertext instead of the plaintext token. Drop WithRawResponse from
-// RegisterRoutes and this test fails.
+// unwrapper would find nothing to open, and the relay client would refuse the
+// 200 as httpclient.ErrJOSEPlaintextResponse (go-bricks v0.65.0, #1637) instead
+// of returning the plaintext token. Drop WithRawResponse from RegisterRoutes and
+// this test fails.
 func TestMLEPeerRouteAnswersWithTopLevelEncData(t *testing.T) {
 	rec := serveMLE(t, http.MethodPost, mlePeerPath, `{"encData":"eyJhbGciOiJSU0EtT0FFUC0yNTYifQ.request"}`)
 

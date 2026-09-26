@@ -12,6 +12,7 @@ Production-ready demonstration of the [go-bricks framework](https://github.com/g
 - **KeyStore** - Named RSA key pair management for signing/verification
 - **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls
 - **RabbitMQ Streams** - Partitioned super stream on the native stream protocol, projected by a typed consumer
+- **External Exchanges** - Opt-in consumer of an exchange another service owns: verified passively, never created, with a bounded startup wait
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
 - **Load Testing** - Comprehensive k6 test suite
 - **Multi-tenant Ready** - Framework supports multi-tenancy (currently disabled)
@@ -96,12 +97,27 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
 - `POST /api/v1/__sim/peer/mle` — the MLE counterparty. It opens and seals by
   hand (`jose.Open`/`jose.Seal`): the `jose:` tag grammar has no `mode` key, so
   an inbound server route cannot select bare mode. Demo-only.
+- `POST /api/v1/tokens/vts-issuer-relay` — plaintext entry for the Visa **Token
+  Service Issuer** shape, `jose.SealModeJWSofJWE`: encrypt first (inner JWE,
+  `A256GCM`, `typ: JOSE`, millisecond `iat`), then sign the compact JWE (outer
+  JWS, `PS256`, `cty: JWE`), sent as `application/jose` both ways. The peer
+  verifies before it decrypts. Its counterparty has no `/__sim/` route: it is
+  plugged in as the relay client's base transport (`WithTransport`), the slot a
+  production integration fills with its mTLS transport.
 
 > **Bare-JWE authenticates nothing about the sender.** A successful open proves
 > only that the payload was encrypted to your public key — which any holder of
 > that public key can do. Visa closes that gap out of band with mTLS and
 > `X-Pay-Token`; a production wiring pairs this policy pair with
 > `WithTransport(mTLS)`. See go-bricks ADR-107.
+
+> **JWS-of-JWE: set `SigAlg: PS256` explicitly.** Visa requires PS256 and the
+> package default is RS256; `httpclient.Builder.Build` fills an unset `SigAlg`
+> with RS256, so the mistake only shows when the partner rejects the signature.
+> The inbound policy pins the outer `alg` to exactly what it declares. The demo
+> reuses `tokens-our`/`tokens-peer` across all three modes; production gives each
+> mode its own kids, because the inner JWE lifted out of a signed body would
+> decrypt on a bare-JWE route that shares its decrypt kid. See go-bricks ADR-111.
 
 #### Walkthrough
 
@@ -113,11 +129,14 @@ make generate-keys
 make run
 
 # 3. Seal a payload as the peer would and POST it to /tokens.
-echo '{"pan":"4111111111111111"}' | go run ./cmd/seal-payload | \
+#    DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
+#    `make seal-payload` runs the framework's seal-payload CLI at the go-bricks
+#    version in go.mod: it signs with tokens-peer and encrypts to tokens-our.
+printf '%s' '{"pan":"4111111111111111"}' | make seal-payload | \
   curl -s -X POST http://localhost:8080/api/v1/tokens \
        -H 'Content-Type: application/jose' --data-binary @-
-# Response is a compact JWE — decode it back to plaintext via seal-payload's
-# inverse logic, or hit the relay endpoint instead which unwraps for you.
+# The reply is a compact JWE sealed back to tokens-peer. The CLI only seals,
+# so use the relay endpoint (step 4) to see a plaintext token.
 
 # 4. Drive the outbound JOSETransport via the relay endpoint.
 curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
@@ -129,7 +148,30 @@ curl -s -X POST http://localhost:8080/api/v1/tokens/relay \
 curl -s -X POST http://localhost:8080/api/v1/tokens/mle-relay \
      -H 'Content-Type: application/json' \
      -d '{"pan":"4111111111111111"}'
+
+# 6. Mint the MLE body yourself and POST it straight to the MLE peer simulator.
+#    `make seal-mle` runs the same CLI in bare mode (-mode bare -enc A128GCM
+#    -typ JOSE -iat-ms -envelope visa-mle) and encrypts to tokens-peer, the key
+#    the simulator opens with. Nothing is signed.
+printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
+  curl -s -X POST http://localhost:8080/api/v1/__sim/peer/mle \
+       -H 'Content-Type: application/json' --data-binary @-
+# {"encData":"eyJ..."}: sealed back to tokens-our. This is the envelope the
+# step 5 relay unwraps for you.
+
+# 7. Drive the VTS Issuer (JWS-of-JWE) path.
+curl -s -X POST http://localhost:8080/api/v1/tokens/vts-issuer-relay \
+     -H 'Content-Type: application/json' \
+     -d '{"pan":"4111111111111111"}'
+# {"data":{"token":{"token":"tok_...","masked_pan":"************1111", ...}}}
 ```
+
+The demo's own `cmd/seal-payload` is gone. Both targets run
+[scripts/seal-payload.sh](scripts/seal-payload.sh), which reads the CLI version
+from `go.mod`, so the tool always matches the framework the app links. See the
+framework's
+[jose.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli)
+for every flag.
 
 The keystore exercises both source styles for a single keypair: `tokens-our` is
 file-backed (production pattern for Kubernetes secret mounts), and
@@ -164,7 +206,9 @@ curl -s -X POST http://localhost:8080/api/v1/payments/authorize \
 
 # 3. Read the published message off the broker and see what an operator with
 #    full queue access actually gets: a compact JWS whose `card` member is a
-#    JWE, with the PAN nowhere on the wire.
+#    JWE, with the PAN nowhere on the wire. Then open the same bytes with the
+#    consumer's keys (open-event CLI): signature verified, card decrypted and
+#    still printed as "<redacted>".
 make show-sealed-message
 ```
 
@@ -179,7 +223,7 @@ shell from the demo's own DER keys, and it is published straight to the exchange
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.63.0 \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -200,15 +244,58 @@ Three things the in-app `POST /payments/authorize` flow cannot show:
 | 2 | **The same bytes twice trip inbox dedup.** | The `jti` is minted once per **seal**, so republishing one `body.txt` gives two deliveries with the same `payments-sign:<jti>` dedup key and the second is skipped. Every HTTP call seals afresh, so two `POST`s never collide — and re-running the CLI is a new seal, not a replay. |
 | 3 | **A wrong `-event-type` lands on the DLQ.** | Re-seal the same document with `-event-type payment.captured`: signature, kids and manifest all still valid, only the signed `etyp` disagrees. Open-rule 7 refuses it with `SEAL_EVENT_TYPE_MISMATCH` and the delivery is nacked without requeue onto `payments.authorized.dlq`. This is the cross-type reroute class the ledger cannot close. |
 
-The broker records only `x-death` on the parked message — the `SEAL_*` code is in
-the **app log**, as a `*messaging.PayloadError` at stage `open`. The script prints
+The broker records only `x-death` on the parked message. The `SEAL_*` code is in
+the **app log**, as a `*messaging.PayloadError` at stage `open` — and the script
+then reads the same code back off the parked bytes with `open-event` (below),
+asserting exit `3` and `SEAL_EVENT_TYPE_MISMATCH`. The script prints
 the neighboring codes the CLI can actually reach: one `-sign-kid` change each for
 `SEAL_KID_UNKNOWN_GENERATION` and `SEAL_KID_FAMILY_MISMATCH`, plus the rule class a
 flipped byte lands on (rule 5 `SEAL_SIGNATURE_INVALID` for a payload or signature
 byte, an earlier header rule otherwise). `SEAL_MANIFEST_MISMATCH` is deliberately
 not on that list — no flag mints it. See
 [scripts/seal-event-demo.sh](scripts/seal-event-demo.sh) and the
-framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.63.0/wiki/sealing.md).
+framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md).
+
+#### Opening events outside the app (`open-event` CLI)
+
+`open-event` (go-bricks v0.65.0) is the mirror of `seal-event`. It verifies and
+decrypts one sealed body through the framework's `sealed.OpenDocument`, running
+the consume door's open rules in the same order with the same `SEAL_*` codes. It
+holds the **consumer** half of both families: sign PUBLIC to verify, encrypt
+PRIVATE to decrypt. Both demo scripts use it:
+
+- `make show-sealed-message` opens the tapped body and prints the verified
+  envelope and document, asserting that they match the raw-wire view.
+- `make seal-event-demo` reads the DLQ-parked body back and gets
+  `SEAL_EVENT_TYPE_MISMATCH` without the app log.
+
+```bash
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.67.0
+
+# The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
+open-event \
+  -sign-key-file certs/payments_sign_v1_public.der \
+  -encrypt-key-file certs/payments_encrypt_v1_private.der \
+  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -subject card -event-type payment.authorized -tenancy disabled -json < body.txt | jq -c .
+# {"envelope":{"jti":"…","eventType":"payment.authorized",…},
+#  "document":{"orderId":"ext-1","amount":4599,"currency":"USD","card":"<redacted>"}}
+```
+
+- **The card is never printed.** The subject member keeps its place, but its
+  value is the fixed literal `"<redacted>"`, with no plaintext and no length
+  hint. `-print-subject` would print the decrypted card, PAN included. It is a
+  fixture-only escape hatch, and the scripts' shared runner
+  ([scripts/lib/open-event.sh](scripts/lib/open-event.sh)) refuses it.
+- **Exit codes:** `0` opened, `1` tool error, `2` usage, `3` refused. A refusal
+  is `{"code":…,"details":{…}}` on stdout. Its details carry only presence and
+  length facts.
+- **The scripts install the CLI, never `go run` it.** They use
+  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.67.0`, because `go run`
+  reports any non-zero exit as its own `1` and would hide the refusal's `3`.
+- **Both kids are required flags.** The CLI never reads them from the
+  unauthenticated header, so after a rotation you pass the new generation
+  (`OPEN_SIGN_KID=payments-sign-v2 make show-sealed-message`).
 
 ### Activity (RabbitMQ Super-Stream Example)
 The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the
@@ -328,10 +415,89 @@ offset. `countbeforestorage` is lowered to 10 in
 [config.development.yaml](config.development.yaml) so the count-driven commit is
 reachable at demo volume; the 5s flush interval would commit either way.
 
+### Partner Feed (External Exchange Example)
+Every other exchange in this demo is declared by the module that uses it.
+`partner-events` belongs to a partner service outside this repository, so the
+partnerfeed module only **references** it with `DeclareExternalExchange` (go-bricks
+v0.67.0, ADR-119). Each declare pass checks the exchange with a passive
+`exchange.declare` and never creates it. The module owns the queue
+(`partnerfeed.stock.updated`), its quorum DLQ pair, the binding (exact key
+`partner.stock.updated`) and a typed consumer that validates the partner's
+`StockUpdated` contract before its handler runs. The module has no HTTP routes.
+
+**Off by default.** No partner service runs locally, and a consumer-declaring
+service aborts startup when the broker answers 404 for a missing exchange. Plain
+`make run` therefore leaves the module switched off. Turn it on with
+`CUSTOM_PARTNERFEED_ENABLED=true`, but only where something owns `partner-events`.
+`messaging.declare.externalwait` (env `MESSAGING_DECLARE_EXTERNALWAIT`, default
+`0`) turns that abort into a bounded wait for the owner to deploy. The HTTP
+listener stays down during the wait, so a `startupProbe` must cover the first
+attempt, plus `externalwait`, plus one final attempt.
+
+#### Walkthrough
+
+```bash
+# Infra, migrations and keys as for `make run`, but NOT the app itself: the
+# script starts its own instance (twice) and refuses to run if the port is taken.
+make docker-up
+make migrate
+make generate-keys   # first time only
+make external-exchange-demo
+```
+
+The script plays the partner through the RabbitMQ management API and runs three
+steps:
+
+1. **Fails fast.** The exchange is absent and `externalwait` is 0, so startup
+   aborts with the broker's own
+   `NOT_FOUND - no exchange 'partner-events' in vhost '/'`.
+2. **Waits.** With `externalwait` at 60s, the app logs one WARN
+   (`Broker answered 404, re-running the startup declare pass …`) and `/health`
+   stays down. The script then creates the exchange, the app logs
+   `External exchange verified`, and startup completes without a restart.
+3. **Consumes.** A `partner.stock.updated` event published to `partner-events`
+   is logged as `Partner stock update consumed`.
+
+On exit, the script deletes the exchange, plus the queue, DLQ and DLX when this
+run created them. It honors `APP_URL` and `RABBIT_MGMT`. See
+[scripts/external-exchange-demo.sh](scripts/external-exchange-demo.sh) and the
+framework's [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md#external-exchanges).
+
 ### System
 - `GET /api/v1/health` - Liveness probe
 - `GET /api/v1/ready` - Readiness probe (checks DB + messaging)
-- `GET /debug/*` - Debug endpoints (goroutines, gc, info)
+- `GET /_sys/*` - Debug endpoints (goroutines, gc, info, health-debug). They are off by default (`debug.enabled`), served at the URL root rather than under `/api/v1`, and access-controlled.
+
+#### Readiness that fails closed on a stalled consumer
+
+Since go-bricks v0.65.0 the `/ready` 200 body counts the AMQP consumers (#1684):
+
+```bash
+curl -s http://localhost:8080/api/v1/ready | jq -c '.messaging_stats
+  | {declared_consumers, subscribed_consumers, consumer_max_fail_streak, consumer_resubscribes}'
+# {"declared_consumers":1,"subscribed_consumers":1,"consumer_max_fail_streak":0,"consumer_resubscribes":0}
+```
+
+The opt-in key `messaging.consumers.critical: true` (#1686, ADR-114) makes `/ready`
+answer **503** once a declared consumer (here `payments.authorized`) is unsubscribed
+and has failed 5 re-subscribes in a row. With the key on, the publisher check is
+critical too, so a broker outage also answers 503, and immediately. That is why
+[config.development.yaml](config.development.yaml) only carries a commented example.
+
+```bash
+# Stop any `make run` first: the script boots its own app with
+# MESSAGING_CONSUMERS_CRITICAL=true and refuses a busy port.
+make demo-consumer-readiness
+```
+
+[scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh) runs these steps:
+
+1. It revokes the app user's broker **read** permission on `payments.authorized`, and nothing else.
+2. It closes the consumer's connection, so the consumer has to re-subscribe and the broker refuses it with `403 ACCESS_REFUSED`.
+3. It polls `/ready` while `consumer_max_fail_streak` climbs toward the threshold and the verdict turns 503. `/_sys/health-debug`, enabled on loopback for that run, names the failing arm.
+4. It restores the exact recorded permissions and shows the recovery: `consumer_resubscribes` +1 and `/ready` 200.
+
+The permissions are restored on every exit. The broker is never stopped, because that would flip `/ready` through the publisher check and hide the consumer check.
 
 ## Observability
 
@@ -376,9 +542,29 @@ make loadtest-smoke      # Quick validation (30s)
 make loadtest-crud       # Realistic mix (~15 min)
 make loadtest-ramp       # Find breaking points (~17 min)
 make loadtest-spike      # Test resilience (~6 min)
+make loadtest-topology-repair  # Delete both AMQP exchanges under load (~2.5 min, destructive)
 ```
 
-See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for detailed guide and performance tuning.
+See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the
+scenarios that need more than their script header. Each products scenario above
+is described in its script's header under `loadtests/`; CLAUDE.md's Load Testing
+section lists the pool, rate-limit and slow-query tuning keys.
+
+### Exchange Loss Self-Repair
+As of go-bricks v0.67.0 an AMQP exchange deleted under the running app comes back
+on the next publish, with no restart: the publisher's replacement channel drives
+a full redeclare of every exchange, queue and binding.
+
+```bash
+make redeclare-demo              # Delete payment-events, publish into the hole, watch it heal
+make loadtest-topology-repair    # The same under load; reports "Lost in repair window"
+```
+
+`make redeclare-demo` also lets the outbox relay repair `product-events`. The
+repair is not atomic: a payment published after `payment-events` is back but
+before its bindings are can get `202 Accepted` and still be dropped as
+unroutable, which is the number the load test reports. The streams lane
+(`product-activity`) does not self-repair; restart the app.
 
 ## Configuration
 
@@ -409,8 +595,12 @@ make build          # Build binary
 make run            # Build + run
 make check          # fmt + lint + test (pre-commit)
 
-make show-sealed-message   # Publish a sealed payment, dump the raw broker body
-make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject
+make advisory-lock-demo    # Two replicas race for the report job's advisory lock: one runs per tick
+make show-sealed-message   # Publish a sealed payment, dump the raw broker body, open it (card redacted)
+make seal-event-demo       # Mint sealed events outside the app: open, dedup, DLQ reject + open-event verdict
+make demo-consumer-readiness  # /ready fails closed on a stalled consumer (boots its own app)
+make seal-payload          # JSON on stdin -> nested JWE-of-JWS body for POST /api/v1/tokens
+make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for the MLE simulator
 ```
 
 ### Adding a Module
@@ -522,7 +712,7 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 - **[CLAUDE.md](CLAUDE.md)** - Complete developer guide
 - **[FLYWAY_MIGRATIONS.md](FLYWAY_MIGRATIONS.md)** - Single-tenant Flyway walkthrough (Postgres + Oracle)
 - **[wiki/MULTI_TENANT_MIGRATION_DEMO.md](wiki/MULTI_TENANT_MIGRATION_DEMO.md)** - Schema-per-tenant migrations via `go-bricks-migrate`
-- **[wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)** - Load testing guide
+- **[wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)** - Running the k6 scripts, plus per-scenario notes
 - **[wiki/PROMETHEUS_GRAFANA_SETUP.md](wiki/PROMETHEUS_GRAFANA_SETUP.md)** - Observability setup
 - **[etc/docker/README.md](etc/docker/README.md)** - Docker infrastructure
 

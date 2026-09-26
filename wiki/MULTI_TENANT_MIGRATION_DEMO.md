@@ -80,8 +80,10 @@ migrations-multitenant/
 scripts/
     flyway-docker.sh                          Wrapper: flyway-in-Docker as --flyway-path
     capture-flyway-samples.sh                 Captures samples/ JSON fixtures
+    migrate-verdict-demo.sh                   Runs the CLI three ways: exit codes 0/2/1
     multitenant-reset.sh                      Drops + recreates every tenant schema
 etc/docker/postgres/multitenant-init.sql      Roles + schemas bootstrap
+cmd/check-tenant-roles/                       CheckPGRoleFloor for every tenant role
 samples/flyway-output/                        JSON fixtures for go-bricks#376
 ```
 
@@ -93,6 +95,8 @@ make migrate-multitenant-init      # Bootstrap roles + schemas (idempotent)
 make migrate-multitenant-up        # Apply migrations to every tenant
 make migrate-multitenant-info      # Show status for every tenant
 make migrate-multitenant-validate  # Validate (no apply) for every tenant
+make migrate-multitenant-verdict   # Exit codes 0/2/1 + summary records (validate only)
+make migrate-multitenant-check-roles # Every tenant role at the privilege floor (read-only)
 make migrate-multitenant-reset     # Drop + recreate every tenant schema
 make migrate-multitenant-samples   # Capture JSON fixtures (feeds go-bricks#376)
 ```
@@ -160,8 +164,31 @@ Expected progress (text mode — add `--json` for NDJSON):
   globex (postgresql) ... ok (1.17s)
   initech (postgresql) ... ok (1.16s)
 
-Migrate summary: 3 tenants total, 0 failed
+Migrate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
+
+As of go-bricks v0.67.0 (ADR-115, #1770/#1771) every `migrate`/`info`/`validate`
+run prints exactly one summary record — even a run that stopped before the
+first tenant — and the process exit code carries the same verdict:
+
+| Exit | `verdict=` | Meaning |
+|------|------------|---------|
+| `0` | `clean` | Every listed tenant was attempted and none failed. |
+| `1` | `fleet_split` | At least one tenant was attempted and at least one failed or was never attempted — the fleet is split across versions. |
+| `2` | `nothing_attempted` | No tenant was attempted, so no schema changed and a re-run is safe: an empty or failed tenant listing, an unreadable tenant store, a credential provider that could not be built, a half-set migrator identity (below), or a misuse (unknown flag, stray argument, unresolvable flag combination). |
+
+The verdict names the **fleet** and the exit code names the **run**, so a
+parallel run cancelled after its last tenant finished can report
+`verdict=clean` and still exit 1. `make` stops on any non-zero exit, so the
+`migrate-multitenant-*` targets cannot tell 1 from 2 — read the summary line.
+[Run verdicts, three ways](#run-verdicts-three-ways) produces all three.
+
+> **Never export `GOBRICKS_MIGRATE_MIGRATOR_USER` or
+> `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` in a shell or CI job that runs these
+> targets.** One without the other makes every run exit 2 before any tenant
+> is attempted. Both together overlay one credential onto every tenant, so a
+> single role runs every tenant's DDL — which collapses the per-role
+> `search_path` isolation this demo depends on.
 
 Inspect the result:
 
@@ -193,7 +220,7 @@ failures).
 
 ```bash
 make migrate-multitenant-info
-# Info summary: 3 tenants total, 0 failed
+# Info summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
 
 `validate` checks that on-disk migrations match what's been applied — no
@@ -201,7 +228,7 @@ SQL is executed:
 
 ```bash
 make migrate-multitenant-validate
-# Validate summary: 3 tenants total, 0 failed
+# Validate summary: verdict=clean, 3 listed, 3 attempted, 0 failed, 0 not attempted
 ```
 
 ### 5. Reset between runs
@@ -213,6 +240,123 @@ make migrate-multitenant-reset
 Drops and recreates every tenant's schema. The role + search_path stay
 intact, so the next `make migrate-multitenant-up` will succeed without
 re-running `migrate-multitenant-init`.
+
+## Run verdicts, three ways
+
+`make` stops on any non-zero exit, so the `migrate-multitenant-*` targets
+cannot show you exit 1 and exit 2 side by side. `make migrate-multitenant-verdict`
+runs [`scripts/migrate-verdict-demo.sh`](../scripts/migrate-verdict-demo.sh),
+which calls `go-bricks-migrate validate --json` three times with the same flags
+as the targets above, and prints each run's exit code and summary record:
+
+| Case | Fleet config | Exit | `verdict` |
+|------|--------------|------|-----------|
+| 1 | `config.multitenant.yaml`, as-is | `0` | `clean` |
+| 2 | a throwaway fleet with `tenants: {}` | `2` | `nothing_attempted` |
+| 3 | the real fleet plus a tenant `unreachable` whose role and database do not exist | `1` | `fleet_split` |
+
+```bash
+make migrate-multitenant-up        # validate needs an applied fleet
+make migrate-multitenant-verdict
+```
+
+The third case, abridged:
+
+```text
+── 3/3 a split fleet: the real 3 plus 'unreachable' (no such role or database) ──
+  acme: ok
+  globex: ok
+  initech: ok
+  unreachable: fail (flyway command failed: exit status 1)
+  summary:   {"action":"validate","attempted":4,"event":"summary","failed":1,"listed":4,"not_attempted":0,"total":4,"verdict":"fleet_split"}
+  stderr:    Error: migration: fleet split
+  exit code: 1  ✅ expected 1 (fleet_split, 1 failed)
+```
+
+* **Read-only.** The action is `validate`, or `info` with
+  `VERDICT_ACTION=info`, which needs only `make migrate-multitenant-init`
+  because Flyway `validate` fails on a pending migration. The script refuses
+  `migrate`. The throwaway configs live in a private temp directory removed on
+  exit, and `config.multitenant.yaml` is never edited.
+* **No credential, real or fake.** The `unreachable` tenant has no password. It
+  uses the same host and port as the real tenants, so it takes the same Flyway
+  path and fails only at the Postgres login. For a failed tenant the script also
+  prints Flyway's own `ERROR`/`FATAL` lines, which the framework has already
+  password-redacted.
+* **Asserted, not just printed.** The script exits 1 unless all three runs
+  match the table, including exactly one failed tenant in case 3. It stops
+  early when the installed CLI prints no `verdict` (older than v0.67.0: run
+  `make migrate-multitenant-install`), and when either
+  `GOBRICKS_MIGRATE_MIGRATOR_*` variable is set.
+* **Postgres on another host port.** `scripts/flyway-docker.sh` dials the
+  container port inside the compose network, so a remapped host port needs no
+  override. With a host Flyway (`make migrate-multitenant-verdict
+  MULTITENANT_FLYWAY_PATH=flyway`) the script honours `PG_PORT` and rewrites
+  each tenant's `port:` in its temp copy.
+
+## Tenant roles at the privilege floor
+
+The schema-per-tenant isolation above assumes each tenant role is an ordinary
+LOGIN role. A tenant role holding `SUPERUSER` skips every permission check,
+and `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` each give it a power
+a per-tenant role has no use for. go-bricks v0.66.0 (#1718) added
+`migration.CheckPGRoleFloor(ctx, db, role)`. It reads `pg_catalog.pg_roles`
+and reports whether a role still sits at the floor the framework's
+`ProvisionPGRoles` creates roles with: none of those five attributes. The demo's
+roles come from hand-written SQL (`multitenant-init.sql`), not from
+`ProvisionPGRoles`, so nothing re-asserts that floor. A later
+`ALTER ROLE globex CREATEDB` would go unnoticed.
+
+`make migrate-multitenant-check-roles` runs
+[`cmd/check-tenant-roles`](../cmd/check-tenant-roles/main.go), which calls
+`CheckPGRoleFloor` once per tenant in `config.multitenant.yaml`:
+
+```bash
+make migrate-multitenant-init          # the roles must exist
+make migrate-multitenant-check-roles
+```
+
+```text
+Tenant roles in config.multitenant.yaml vs the PostgreSQL privilege floor (go-bricks migration.CheckPGRoleFloor)
+Each tenant logs in as itself, read-only, and reads only pg_catalog.pg_roles.
+  acme     role acme     OK  at the floor
+  globex   role globex   OK  at the floor
+  initech  role initech  OK  at the floor
+3 tenants: 3 at the floor, 0 above it or missing, 0 not checked
+```
+
+A role that has drifted is named with the attributes it holds, and the
+command exits 1:
+
+```text
+  acme     role acme     OK           at the floor
+  globex   role globex   ABOVE FLOOR  holds CREATEDB
+  initech  role initech  OK           at the floor
+3 tenants: 2 at the floor, 1 above it or missing, 0 not checked
+```
+
+* **Read-only, as the tenant.** Each tenant logs in with its own credential
+  from the fleet config, the one `go-bricks-migrate` uses, in a session opened
+  with `default_transaction_read_only=on` and
+  `application_name=check-tenant-roles`. Any role can read `pg_roles`, so LOGIN
+  is all it needs and no superuser credential is involved.
+* **The same tenants as the CLI.** The fleet config is decoded into
+  `config.TenantStore` and listed with `migration/source/static`, the pieces
+  `go-bricks-migrate --source-config` uses, so both tools see the same tenants
+  in the same order.
+* **Exit codes follow the CLI's.** `0` every role is at the floor. `1` at least
+  one role is above it, missing, or could not be checked. `2` nothing was
+  checked: a bad flag, an unreadable config or an empty fleet.
+* **Never prints a credential.** A row names the role. A driver error is printed
+  with the tenant's password removed. A tenant described by
+  `database.connectionstring` is refused rather than quoted.
+* **Postgres on another host port.** The check dials from the host, not through
+  `docker exec` like `migrate-multitenant-init`. When `PG_HOST` / `PG_PORT` are
+  set they replace every tenant's host and port
+  (`make migrate-multitenant-check-roles PG_PORT=55432`). That is also why it is
+  a target of its own and not the last step of `migrate-multitenant-init`:
+  chained there, `migrate-multitenant-up` would start to depend on the host
+  port mapping, which it does not today.
 
 ## Adding a tenant
 
@@ -268,7 +412,11 @@ re-running `migrate-multitenant-init`.
   concurrently (framework caps internally at 32). Watch for Postgres
   connection-storm risk on real fleets.
 * **`--json`**: NDJSON progress events for CI/CD pipelines. Useful for
-  driving the next step (`go-bricks#376` parser) once it lands.
+  driving the next step (`go-bricks#376` parser) once it lands. The final
+  `"event":"summary"` record carries `verdict` (`clean` | `fleet_split` |
+  `nothing_attempted`), `listed`, `attempted`, `failed` and `not_attempted`
+  (v0.67.0); `total` is kept for older readers and still means the attempted
+  count — prefer `attempted` or `listed` in new code.
 * **AWS Secrets Manager**: swap `--credentials-from=config-file` for
   `--credentials-from=aws-secrets-manager` and supply `--secrets-prefix`.
   Per-tenant secrets are looked up at `<prefix><tenant_id>`. The CLI also

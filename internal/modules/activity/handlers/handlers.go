@@ -122,7 +122,10 @@ func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegis
 
 // RegisterSimulatorRoute attaches the poison simulator at /__sim/streams/poison,
 // mirroring the tokens module's peer simulator: same base group, a /__sim/ prefix
-// that makes the demo-only intent obvious in every access log.
+// that makes the demo-only intent obvious in every access log, and the
+// "simulator" tag cmd/api requires on every /__sim/ route before it starts.
 func (h *Handler) RegisterSimulatorRoute(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.POST(hr, r, "/__sim/streams/poison", h.PublishPoison)
+	server.POST(hr, r, "/__sim/streams/poison", h.PublishPoison,
+		server.WithTags("simulator"),
+	)
 }

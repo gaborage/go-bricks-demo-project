@@ -194,7 +194,10 @@ func (m *Module) onPaymentAuthorized(ctx context.Context, evt domain.PaymentAuth
 			Str("jti", envelope.JTI).
 			Str("signKid", envelope.SignKid).
 			Str("envelopeEventType", envelope.EventType).
-			Str("dedupKey", key).
+			// The framework never renders a sealed dedup key itself; the demo
+			// logs it on purpose so seal-event-demo can correlate inbox dedup.
+			// It spells "<sign family>:<jti>" — neither the PAN nor a secret.
+			Str("dedupKey", key.String()).
 			Msg("Payment authorization consumed exactly once")
 		// The demo persists nothing: the ledger row committed by ProcessOnce is
 		// the whole point — a redelivery short-circuits and never runs this again.

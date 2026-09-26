@@ -32,6 +32,31 @@ type CardRequest struct {
 	Holder   string `json:"holder" validate:"required"`
 }
 
+// CardRequest is safe to hand to a filtered logger whole; see RedactedForLog.
+var _ logger.Redactor = CardRequest{}
+
+// cardDetails maps the HTTP card onto the sealed Subject the service publishes.
+func (c CardRequest) cardDetails() domain.CardDetails {
+	return domain.CardDetails{
+		PAN:      c.PAN,
+		ExpMonth: c.ExpMonth,
+		ExpYear:  c.ExpYear,
+		Holder:   c.Holder,
+	}
+}
+
+// RedactedForLog implements logger.Redactor (go-bricks v0.65.0, ADR-110) with
+// the domain card's view, {last4}: a decoded card, or the
+// AuthorizePaymentRequest that holds it, handed whole to a filtered logger's
+// Interface or WithFields never renders the PAN, the expiry or the holder's
+// name. The `pan` needle alone would mask the PAN but leave the rest in clear.
+//
+// A backstop, not a licence to log bodies: the hook is not consulted at Err,
+// through Msgf or by an unfiltered logger. VALUE receiver on purpose: a
+// pointer-receiver method would leave a bare CardRequest unrecognized, and the
+// filter would walk it field by field.
+func (c CardRequest) RedactedForLog() any { return c.cardDetails().RedactedForLog() }
+
 // AuthorizePaymentRequest is the POST /payments/authorize body. Amount is in
 // minor units (cents) — an integer, so no float rounding ever reaches money.
 type AuthorizePaymentRequest struct {
@@ -79,12 +104,7 @@ func (h *PaymentHandler) AuthorizePayment(req AuthorizePaymentRequest, ctx serve
 	evt, err := h.service.Authorize(ctx.RequestContext(), service.AuthorizeRequest{
 		Amount:   req.Amount,
 		Currency: req.Currency,
-		Card: domain.CardDetails{
-			PAN:      req.Card.PAN,
-			ExpMonth: req.Card.ExpMonth,
-			ExpYear:  req.Card.ExpYear,
-			Holder:   req.Card.Holder,
-		},
+		Card:     req.Card.cardDetails(),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {

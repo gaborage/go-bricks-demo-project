@@ -28,7 +28,7 @@ import {
   summaryOutputs,
   maybeSleep,
 } from './config.ts';
-import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput } from './types/index.ts';
+import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput, ReadyResponse } from './types/index.ts';
 
 // Custom metrics
 const listProductsRate = new Rate('list_products_success');
@@ -292,6 +292,33 @@ export function setup(): void {
   }
 
   console.log('✅ Health check passed');
+
+  // Readiness snapshot, informational only. The /ready 200 body carries the
+  // per-consumer messaging counters (go-bricks v0.65.0, #1684), recorded so a
+  // run shows whether the AMQP consumer was attached before load started. A
+  // 503 is reported, not fatal — this test measures CRUD, not the probe — and
+  // expectedStatuses keeps it out of http_req_failed.
+  const readyURL = `${config.baseURL}${config.apiPrefix}/ready`;
+  const ready = http.get(readyURL, {
+    tags: { endpoint: 'ready' },
+    responseCallback: http.expectedStatuses(200, 503),
+  });
+  if (ready.status === 200) {
+    // Informational means it must never abort the run: an unparseable body is
+    // reported like a missing counter.
+    let stats: ReadyResponse['messaging_stats'];
+    try {
+      stats = (JSON.parse(ready.body as string) as ReadyResponse).messaging_stats;
+    } catch (e) {
+      stats = undefined;
+    }
+    console.log(
+      `🩺 /ready 200 — messaging consumers subscribed ${stats?.subscribed_consumers ?? '?'}/${stats?.declared_consumers ?? '?'}, ` +
+        `max fail streak ${stats?.consumer_max_fail_streak ?? '?'}, resubscribes ${stats?.consumer_resubscribes ?? '?'}`,
+    );
+  } else {
+    console.warn(`⚠️  /ready answered ${ready.status} — the service is out of rotation; CRUD results may not reflect a healthy instance`);
+  }
   console.log('');
 }
 

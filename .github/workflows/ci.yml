@@ -60,4 +60,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
-        run: go build -o /dev/null ./cmd/api/main.go
+        run: go build -o /dev/null ./cmd/api

@@ -5,6 +5,7 @@ import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/activity"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/partnerfeed"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens"
@@ -19,7 +20,7 @@ import (
 
 func main() {
 	// Create application instance with environment-based configuration
-	application, log, err := app.New()
+	application, log, err := app.NewWithOptions(newAppOptions())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize application")
 	}
@@ -57,6 +58,16 @@ func main() {
 
 	if err := application.Run(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to start application")
+	}
+}
+
+// newAppOptions returns the framework overrides main boots with. Config loading and
+// every dependency still come from configuration (a nil ConfigLoader means
+// config.Load); the only addition is the route-table veto, which refuses startup
+// when a simulator route and its tag disagree (see route_policy.go).
+func newAppOptions() *app.Options {
+	return &app.Options{
+		PostRegisterRoutes: requireTaggedSimulators,
 	}
 }
 
@@ -155,6 +166,19 @@ func getModulesToLoad(productsModule *products.Module, activityModule *activity.
 			Name:    "payments",
 			Enabled: true,
 			Module:  payments.NewModule(),
+		},
+		{
+			// Partner feed module demonstrates consuming from an exchange another
+			// service owns (DeclareExternalExchange, ADR-119). It is always
+			// registered but OFF by default: its switch is config
+			// (custom.partnerfeed.enabled, env CUSTOM_PARTNERFEED_ENABLED), and
+			// main never sees the loaded config (app.App exposes no accessor), so
+			// the module reads it in Init and declares nothing while it is off.
+			// On with no partner exchange on the broker, startup fails on the
+			// 404 — see make external-exchange-demo.
+			Name:    "partnerfeed",
+			Enabled: true,
+			Module:  partnerfeed.NewModule(),
 		},
 	}
 }

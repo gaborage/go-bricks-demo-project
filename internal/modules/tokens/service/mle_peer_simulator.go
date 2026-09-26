@@ -2,12 +2,9 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/gaborage/go-bricks/app"
-	"github.com/gaborage/go-bricks/jose"
 )
 
 // MLEPeerSimulator stands in for a Visa MLE counterparty inside this same
@@ -22,10 +19,7 @@ import (
 // In production you would never own both halves of an integration; this pair
 // only coexists because the simulator shares the demo's keystore.
 type MLEPeerSimulator struct {
-	inbound  *jose.Policy
-	outbound *jose.Policy
-	resolver jose.KeyResolver
-	tokenSvc *TokenizationService
+	peer *manualPeer
 }
 
 // MLEPeerConfig captures the inverse key identities the simulator plays with:
@@ -49,23 +43,12 @@ func NewMLEPeerSimulator(cfg *MLEPeerConfig) (*MLEPeerSimulator, error) {
 		return nil, errors.New("MLE peer simulator requires a configured keystore")
 	}
 
-	inbound := NewMLEInboundPolicy(cfg.DecryptKid)
-	outbound := NewMLEOutboundPolicy(cfg.EncryptKid)
-	// Seal/Open validate per call; validating here turns a misconfiguration into
-	// a startup failure, which is what the rest of the module does.
-	if err := inbound.Validate(); err != nil {
-		return nil, fmt.Errorf("MLE peer inbound policy: %w", err)
+	peer, err := newManualPeer("MLE", cfg.KeyStore,
+		NewMLEInboundPolicy(cfg.DecryptKid), NewMLEOutboundPolicy(cfg.EncryptKid))
+	if err != nil {
+		return nil, err
 	}
-	if err := outbound.Validate(); err != nil {
-		return nil, fmt.Errorf("MLE peer outbound policy: %w", err)
-	}
-
-	return &MLEPeerSimulator{
-		inbound:  inbound,
-		outbound: outbound,
-		resolver: jose.NewKeyStoreResolver(cfg.KeyStore),
-		tokenSvc: NewTokenizationService(),
-	}, nil
+	return &MLEPeerSimulator{peer: peer}, nil
 }
 
 // Process opens one compact JWE lifted out of an {"encData":...} envelope,
@@ -80,32 +63,5 @@ func (s *MLEPeerSimulator) Process(ctx context.Context, encData string) (string,
 	if encData == "" {
 		return "", errors.New("MLE envelope carries no encData")
 	}
-
-	plaintext, _, _, err := jose.Open(encData, s.inbound, s.resolver)
-	if err != nil {
-		return "", fmt.Errorf("open MLE request: %w", err)
-	}
-
-	var req struct {
-		PAN string `json:"pan"`
-	}
-	if err := json.Unmarshal(plaintext, &req); err != nil {
-		return "", fmt.Errorf("decode MLE request payload: %w", err)
-	}
-
-	tok, err := s.tokenSvc.Tokenize(ctx, req.PAN)
-	if err != nil {
-		return "", err
-	}
-
-	raw, err := json.Marshal(map[string]any{"token": tok})
-	if err != nil {
-		return "", fmt.Errorf("marshal MLE response payload: %w", err)
-	}
-
-	compact, err := jose.Seal(raw, s.outbound, s.resolver)
-	if err != nil {
-		return "", fmt.Errorf("seal MLE response: %w", err)
-	}
-	return compact, nil
+	return s.peer.process(ctx, encData)
 }

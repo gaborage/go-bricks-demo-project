@@ -44,6 +44,9 @@ type MLERelayConfig struct {
 	// DecryptKid is our private-key kid — the only key identity the inbound bare
 	// policy may declare.
 	DecryptKid string
+	// PeerName is the low-cardinality logical name of the partner; see
+	// RelayConfig.PeerName.
+	PeerName string
 	// Logger receives request/response telemetry.
 	Logger logger.Logger
 }
@@ -105,14 +108,19 @@ func NewMLERelayService(cfg *MLERelayConfig) (*MLERelayService, error) {
 	// Bare mode authenticates nobody — production pairs this client with mTLS
 	// (WithTransport) or X-Pay-Token; see the policy note above.
 	client, err := httpclient.NewBuilder(cfg.Logger).
+		WithPeerName(cfg.PeerName).
 		WithJOSE(httpclient.JOSEConfig{
 			Outbound: NewMLEOutboundPolicy(cfg.EncryptKid),
 			Inbound:  NewMLEInboundPolicy(cfg.DecryptKid),
 			Resolver: jose.NewKeyStoreResolver(cfg.KeyStore),
 			// VisaMLEEnvelope wraps the outbound compact as
 			// {"encData":"<compact>"} application/json, and recognizes the reply by
-			// SHAPE rather than Content-Type — anything without a non-empty string
-			// encData member (a plaintext error envelope, say) passes through.
+			// SHAPE rather than Content-Type. A reply without a non-empty string
+			// encData member passes through only on a failure status (a plaintext
+			// error envelope, say); on a 2xx the transport refuses it with
+			// httpclient.ErrJOSEPlaintextResponse (go-bricks v0.65.0, #1637).
+			// AllowPlaintextSuccess stays unset: a real partner must protect every
+			// 2xx it answers.
 			Envelope: httpclient.VisaMLEEnvelope(),
 		}).
 		Build()

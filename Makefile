@@ -35,6 +35,8 @@ help:
 	@echo "  migrate-multitenant-up        Boot postgres + apply migrations to every tenant"
 	@echo "  migrate-multitenant-info      Show migration status for every tenant"
 	@echo "  migrate-multitenant-validate  Validate (no apply) for every tenant"
+	@echo "  migrate-multitenant-verdict   Show run verdicts + exit codes 0/2/1 (validate only)"
+	@echo "  migrate-multitenant-check-roles Check tenant roles sit at the privilege floor (read-only)"
 	@echo "  migrate-multitenant-reset     Drop and recreate every tenant's schema"
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
@@ -47,8 +49,15 @@ help:
 	@echo ""
 	@echo "API Testing:"
 	@echo "  test-products-api Test products API endpoints"
-	@echo "  show-sealed-message Publish a sealed payment and dump the raw broker body"
-	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject"
+	@echo "  advisory-lock-demo Race two app replicas for the report job's advisory lock (one runs per tick)"
+	@echo "  show-sealed-message Publish a sealed payment, dump the raw broker body, open it (open-event, card redacted)"
+	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
+	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
+	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
+	@echo ""
+	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
+	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
+	@echo "  seal-mle          Seal a Visa MLE {\"encData\":...} body for POST /api/v1/__sim/peer/mle (bare JWE)"
 	@echo ""
 	@echo "Load Testing:"
 	@echo "  loadtest-install          Install k6 load testing tool"
@@ -57,12 +66,20 @@ help:
 	@echo "  loadtest-ramp             Run ramp-up test (find limits)"
 	@echo "  loadtest-spike            Run spike test (traffic bursts)"
 	@echo "  loadtest-sustained        Run sustained load test (15min)"
+	@echo "  loadtest-topology-repair  Delete both AMQP exchanges under load; report repair + lost 202s (~2.5min)"
 	@echo "  loadtest-tokens           Run tokens relay (JOSE) load test (~12min)"
 	@echo "  loadtest-tokens-smoke     Run tokens relay smoke test (30s)"
+	@echo "  loadtest-tokens-mle       Run tokens MLE relay (bare JWE + encData) load test (~12min)"
+	@echo "  loadtest-tokens-mle-smoke Run tokens MLE relay smoke test (30s)"
+	@echo "  loadtest-tokens-vts       Run tokens VTS Issuer relay (JWS-of-JWE) load test (~12min)"
+	@echo "  loadtest-tokens-vts-smoke Run tokens VTS Issuer relay smoke test (30s)"
 	@echo "  loadtest-all              Run all load tests in sequence"
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
 	@echo "  loadtest-analyze FILE=... Analyze metrics file"
+	@echo ""
+	@echo "Messaging resilience:"
+	@echo "  redeclare-demo            Delete payment-events/product-events under the live app; watch them self-repair"
 
 # Check if required dependencies are installed
 check-deps:
@@ -204,7 +221,7 @@ GO_BRICKS_MIGRATE           := go-bricks-migrate
 # go-bricks version in go.mod: the `-url=` argv rewrite in
 # scripts/flyway-docker.sh only fires against an ADR-085 CLI (go-bricks v0.61.0+),
 # so a v0.60.0 pin here silently defeats it.
-GO_BRICKS_REF               ?= v0.63.0
+GO_BRICKS_REF               ?= v0.67.0
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
@@ -275,6 +292,46 @@ migrate-multitenant-validate: migrate-multitenant-check
 	@echo "🔍 Validating multi-tenant migrations..."
 	$(GO_BRICKS_MIGRATE) validate $(MULTITENANT_FLAGS)
 
+# ----------------------------------------------------------------------------
+# Run verdicts and exit codes (go-bricks v0.67.0, ADR-115, #1770/#1771)
+# ----------------------------------------------------------------------------
+# make stops on ANY non-zero exit, so the targets above cannot tell exit 1
+# (fleet split) from exit 2 (nothing attempted). This runs the CLI three ways
+# with --json and prints each exit code and summary record: the real fleet
+# (0, clean), an empty fleet (2, nothing_attempted) and the fleet plus one
+# unreachable tenant (1, fleet_split). validate only: nothing is migrated.
+# VERDICT_ACTION=info needs only migrate-multitenant-init. PG_PORT is honoured
+# for a host Flyway only (MULTITENANT_FLYWAY_PATH=flyway); see the script header.
+.PHONY: migrate-multitenant-verdict
+migrate-multitenant-verdict: migrate-multitenant-check
+	@echo "⚖️  Showing go-bricks-migrate run verdicts and exit codes..."
+	@GO_BRICKS_MIGRATE=$(GO_BRICKS_MIGRATE) \
+	MULTITENANT_CONFIG=$(MULTITENANT_CONFIG) \
+	MULTITENANT_FLYWAY_CONF=$(MULTITENANT_FLYWAY_CONF) \
+	MULTITENANT_MIGRATIONS_DIR=$(MULTITENANT_MIGRATIONS_DIR) \
+	MULTITENANT_FLYWAY_PATH=$(MULTITENANT_FLYWAY_PATH) \
+	./scripts/migrate-verdict-demo.sh
+
+# ----------------------------------------------------------------------------
+# Tenant roles at the privilege floor (go-bricks v0.66.0, #1718)
+# ----------------------------------------------------------------------------
+# cmd/check-tenant-roles logs in as each tenant of $(MULTITENANT_CONFIG) in a
+# read-only session and asks migration.CheckPGRoleFloor about its role: OK, or
+# the attributes it holds above the floor (SUPERUSER, CREATEDB, CREATEROLE,
+# REPLICATION, BYPASSRLS). Exit 0 all at the floor, 1 not, 2 nothing checked.
+# Unlike migrate-multitenant-init (docker exec) it dials from the HOST, so it is
+# not chained into init: PG_HOST / PG_PORT, when set, replace every tenant's
+# host / port for a postgres published somewhere other than localhost:5432.
+# Built, not `go run`, because go run turns every non-zero exit into 1.
+.PHONY: migrate-multitenant-check-roles
+migrate-multitenant-check-roles:
+	@echo "🔐 Checking tenant roles against the PostgreSQL privilege floor..."
+	@go build -o bin/check-tenant-roles ./cmd/check-tenant-roles
+	@set -- -config "$(MULTITENANT_CONFIG)"; \
+	if [ -n "$$PG_HOST" ]; then set -- "$$@" -host "$$PG_HOST"; fi; \
+	if [ -n "$$PG_PORT" ]; then set -- "$$@" -port "$$PG_PORT"; fi; \
+	./bin/check-tenant-roles "$$@"
+
 # Drop and recreate every tenant's schema. Useful between demo runs or when
 # experimenting with broken migrations.
 migrate-multitenant-reset:
@@ -317,10 +374,26 @@ test-products-api:
 	@echo "🧪 Testing products API..."
 	@./scripts/test-products-api.sh
 
+# --- Advisory-lock demo (products report job) --------------------------------
+# Two-replica proof for the report job's PostgreSQL advisory lock, taken on a
+# pinned database Session (go-bricks v0.65.0, ADR-112). Starts two extra app
+# replicas on REPLICA_PORTS (default 8081 8082) with a lock hold, triggers the
+# job on both at once, then waits for their own scheduled tick — exactly one
+# replica runs the report each time. Requires infra up (make docker-up),
+# migrations (make migrate) and keys (make generate-keys); the app on :8080 does
+# not need to be running.
+.PHONY: advisory-lock-demo
+advisory-lock-demo: build
+	@echo "🔒 Racing two replicas for the report job's advisory lock..."
+	@./scripts/advisory-lock-demo.sh
+
 # Broker-visibility proof for the sealed-messages demo: publish one
 # PaymentAuthorized event, then read it off the consumerless tap queue via the
-# RabbitMQ management API and assert the PAN never reaches the wire.
-# Requires the app running (make run) and infra up (make docker-up).
+# RabbitMQ management API and assert the PAN never reaches the wire. Then open
+# the same bytes with the framework's open-event CLI (go-bricks v0.65.0, #1640)
+# and the consumer half of the keys — the card stays "<redacted>".
+# Requires the app running (make run), infra up (make docker-up) and keys
+# present (make generate-keys).
 show-sealed-message:
 	@echo "🔐 Inspecting a sealed message on the broker..."
 	@./scripts/show-sealed-message.sh
@@ -331,12 +404,65 @@ show-sealed-message:
 # Shows three things the in-app POST flow cannot: an externally-minted event is
 # opened, the SAME bytes published twice trip inbox dedup (the jti is stable per
 # seal, while every HTTP call mints a fresh one), and a wrong -event-type is
-# refused at open-rule 7 (SEAL_EVENT_TYPE_MISMATCH) and parks on the DLQ.
+# refused at open-rule 7 (SEAL_EVENT_TYPE_MISMATCH) and parks on the DLQ, where
+# open-event reads the same code back off the parked bytes.
 # Requires the app running (make run), infra up (make docker-up), the inbox
 # ledger migrated (make migrate) and keys present (make generate-keys).
 seal-event-demo:
 	@echo "🔐 Minting sealed events outside the app with the seal-event CLI..."
 	@./scripts/seal-event-demo.sh
+
+# --- JOSE request bodies (framework seal-payload CLI) -------------------------
+# Mint curl bodies for the tokens demo with the framework's seal-payload CLI
+# (go-bricks v0.65.0, #1615/#1620), which replaced the demo-owned cmd/seal-payload.
+# Both read a JSON payload on stdin and print ONLY the sealed body on stdout, so
+# they pipe straight into `curl --data-binary @-` (README, Tokens walkthrough):
+#   seal-payload  nested JWE-of-JWS for POST /api/v1/tokens: signs as tokens-peer,
+#                 encrypts to tokens-our
+#   seal-mle      Visa MLE {"encData":...} for POST /api/v1/__sim/peer/mle: bare
+#                 A128GCM JWE (typ JOSE, ms iat) to tokens-peer, nothing signed
+# scripts/seal-payload.sh reads the CLI version from go.mod, so there is no second
+# pin to drift. Needs keys (make generate-keys); minting does not need the app.
+.PHONY: seal-payload seal-mle
+seal-payload:
+	@./scripts/seal-payload.sh nested
+
+seal-mle:
+	@./scripts/seal-payload.sh mle
+
+# --- Consumer-aware readiness (go-bricks v0.65.0, #1686/#1684, ADR-114) -------
+# /ready fails closed once the payments.authorized consumer gives up
+# re-subscribing. The script builds and boots its OWN app with
+# MESSAGING_CONSUMERS_CRITICAL=true (config.development.yaml keeps the key off),
+# so stop any `make run` first — it refuses a busy port. It revokes the app
+# user's broker READ on payments.authorized only, closes the consumer's
+# connection, and polls /ready while consumer_max_fail_streak climbs to 5 and
+# the verdict turns 503. The recorded permissions are restored on every exit,
+# then recovery is shown. The broker is never stopped: that would flip /ready
+# through the publisher arm and hide the consumer arm.
+# Requires infra up (make docker-up), migrations (make migrate) and keys
+# (make generate-keys). Honors RABBIT_MGMT, RABBIT_CONTAINER, APP_URL and the
+# app's own env overrides (DATABASE_PORT, MESSAGING_BROKER_URL, ...).
+.PHONY: demo-consumer-readiness
+demo-consumer-readiness:
+	@echo "🩺 Demonstrating readiness that fails closed on a stalled consumer..."
+	@./scripts/consumer-readiness-demo.sh
+
+# --- External exchange demo (go-bricks v0.67.0, #1773/#1774, ADR-119) --------
+# The partnerfeed module consumes partner-events, an exchange ANOTHER service
+# owns: DeclareExternalExchange verifies it with a passive declare and never
+# creates it. The script starts its OWN app instance, twice, with the module
+# on (CUSTOM_PARTNERFEED_ENABLED=true) and plays the owning partner through the
+# RabbitMQ management API: the exchange absent with externalwait 0 aborts startup
+# on the broker's 404; with MESSAGING_DECLARE_EXTERNALWAIT=60s the app waits, the
+# script creates the exchange, and startup completes; a published event is then
+# consumed. Cleanup deletes what the run created. Requires infra up
+# (make docker-up), migrations and keys — and NOT `make run`: it refuses when the
+# app port is already taken. Honors APP_URL and RABBIT_MGMT overrides.
+.PHONY: external-exchange-demo
+external-exchange-demo: build
+	@echo "🔌 Consuming from an exchange another service owns..."
+	@./scripts/external-exchange-demo.sh
 
 # Update dependencies to latest versions
 update:
@@ -466,6 +592,41 @@ loadtest-spike: check-k6
 	@echo ""
 	@echo "✅ Spike load test completed"
 
+# ----------------------------------------------------------------------------
+# Topology self-repair (go-bricks v0.67.0, #1776/#1779, ADR-113 amendment)
+# ----------------------------------------------------------------------------
+# An exchange deleted under the live app now heals on the next publish: the
+# publisher's replacement channel drives a redeclare pass of every exchange,
+# queue and binding. Both targets delete exchanges through the RabbitMQ
+# management API, so point them at a demo broker only, and both require the app
+# running (make run) and infra up (make docker-up). Payment bodies carry
+# documented test PANs and are never echoed or logged.
+# Env: APP_URL (K6_BASE_URL for k6), RABBIT_MGMT, RABBIT_USER, RABBIT_PASS;
+# see each script's header for the rest.
+#
+# redeclare-demo: delete payment-events, publish into the hole, show the
+# exchange and both bindings back and a post-repair payment on
+# payments.authorized.tap; then product-events, repaired by the outbox relay.
+#
+# loadtest-topology-repair: constant-arrival POST /products + POST
+# /payments/authorize, both exchanges deleted at t=60s. Reports the repair
+# times and the 202s that never reached the tap ("Lost in repair window", the
+# documented ack-and-drop window: reported, never a failed threshold).
+# Thresholds cover HTTP error rate and latency only. Destructive, so it is not
+# part of loadtest-all.
+.PHONY: redeclare-demo loadtest-topology-repair
+redeclare-demo:
+	@echo "🔧 Deleting exchanges under the live app and watching them self-repair..."
+	@./scripts/topology-repair-demo.sh
+
+loadtest-topology-repair: check-k6
+	@echo "🧪 Running topology repair load test (exchange loss under load)..."
+	@echo "⚠️  Duration: ~2.5 minutes; deletes product-events and payment-events midway"
+	@echo ""
+	@K6_BASE_URL="$${K6_BASE_URL:-$${APP_URL:-http://localhost:8080}}" k6 run loadtests/topology-repair.ts
+	@echo ""
+	@echo "✅ Topology repair load test completed"
+
 # Run sustained load test to detect leaks
 loadtest-sustained: check-k6
 	@echo "🧪 Running sustained load test..."
@@ -497,7 +658,7 @@ loadtest-all: check-k6
 	@k6 run loadtests/sustained-load.ts
 	@echo ""
 	@echo "✅ All load tests completed!"
-	@echo "📊 Review results and see wiki/LOAD_TESTING.md for analysis guidance"
+	@echo "📊 Review results; each script's header under loadtests/ says what its scenario measures"
 
 # Run a quick smoke test
 loadtest-smoke: check-k6
@@ -522,6 +683,47 @@ loadtest-tokens-smoke: check-k6
 	@k6 run --vus 1 --duration 30s loadtests/tokens-relay.ts
 	@echo ""
 	@echo "✅ Tokens relay smoke test completed"
+
+# --- Tokens MLE relay (Visa Message Level Encryption) -------------------------
+# POST /api/v1/tokens/mle-relay: bare JWE (A128GCM, no signature) inside the
+# {"encData": ...} envelope, against the in-process /__sim/peer/mle simulator.
+# K6_BASE_URL overrides the target (default http://localhost:8080).
+.PHONY: loadtest-tokens-mle loadtest-tokens-mle-smoke
+
+loadtest-tokens-mle: check-k6
+	@echo "🧪 Running tokens MLE relay load test (bare JWE + encData envelope)..."
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-mle-relay.ts
+	@echo ""
+	@echo "✅ Tokens MLE relay load test completed"
+
+loadtest-tokens-mle-smoke: check-k6
+	@echo "🧪 Running tokens MLE relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-mle-relay.ts
+	@echo ""
+	@echo "✅ Tokens MLE relay smoke test completed"
+
+# --- Tokens VTS Issuer relay (Visa Token Service Issuer, JWS-of-JWE) ----------
+# POST /api/v1/tokens/vts-issuer-relay: encrypt (inner JWE, A256GCM), then sign
+# (outer JWS, PS256), as application/jose both ways. The peer is the relay
+# client's in-process base transport, so there is no /__sim/ route and no
+# loopback hop. K6_BASE_URL overrides the target (default http://localhost:8080).
+.PHONY: loadtest-tokens-vts loadtest-tokens-vts-smoke
+
+loadtest-tokens-vts: check-k6
+	@echo "🧪 Running tokens VTS Issuer relay load test (JWS-of-JWE)..."
+	@echo "⚠️  Duration: ~12 minutes (sustained profile, 50 VUs)"
+	@echo ""
+	@k6 run loadtests/tokens-vts-issuer-relay.ts
+	@echo ""
+	@echo "✅ Tokens VTS Issuer relay load test completed"
+
+loadtest-tokens-vts-smoke: check-k6
+	@echo "🧪 Running tokens VTS Issuer relay smoke test (quick validation)..."
+	@k6 run --vus 1 --duration 30s loadtests/tokens-vts-issuer-relay.ts
+	@echo ""
+	@echo "✅ Tokens VTS Issuer relay smoke test completed"
 
 # Type check load test TypeScript files
 loadtest-type-check:
