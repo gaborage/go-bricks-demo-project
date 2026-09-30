@@ -71,29 +71,12 @@ export interface UpdateProductInput {
 }
 
 /**
- * Consumer counters in the messaging_stats block of a GET /api/v1/ready 200.
- * The four consumer keys arrived in go-bricks v0.65.0 (#1684/#1686); the
- * block carries publisher counters too, which the smoke does not read.
- */
-export interface MessagingReadyStats {
-  status?: string;
-  declared_consumers?: number;
-  subscribed_consumers?: number;
-  consumer_max_fail_streak?: number;
-  consumer_resubscribes?: number;
-  [key: string]: any;
-}
-
-/**
- * GET /api/v1/ready body. A 200 renders every kind's status plus its
- * <kind>_stats; a 503 renders only {status, <blocking kind>, error}.
- * Unwrapped: /ready is not an APIResponse route.
+ * GET /api/v1/ready body (go-bricks v0.69.0): exactly {"status":"ready"} on
+ * 200 or {"status":"not ready"} on 503. Unwrapped: /ready is not an
+ * APIResponse route.
  */
 export interface ReadyResponse {
-  status: string;
-  messaging?: string;
-  messaging_stats?: MessagingReadyStats;
-  [key: string]: any;
+  status: 'ready' | 'not ready';
 }
 
 /**
