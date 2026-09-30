@@ -6,13 +6,13 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.0
-	github.com/gaborage/go-bricks v0.67.0
+	github.com/gaborage/go-bricks v0.69.0
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
