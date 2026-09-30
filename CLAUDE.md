@@ -469,7 +469,7 @@ make test                                        # Run all tests (uses race dete
 [cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
 
 - **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `payments-sign-v1` and `payments-encrypt-v1`, and restores the previous runtime in `t.Cleanup`.
-- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.67.0, and their `Init` needs a validated config, a database or DER files.
+- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.69.0, and their `Init` needs a validated config, a database or DER files.
 - **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
 - **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
 
@@ -571,11 +571,12 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` is pinned to go-bricks `v0.67.0`. There is no
+**go-bricks version:** `go.mod` is pinned to go-bricks `v0.69.0`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
 like any other dependency. The per-environment operator decisions for the
-v0.64.0 → v0.67.0 upgrade live in
-[wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
+v0.67.0 → v0.69.0 upgrade live in
+[wiki/GOBRICKS_V069_UPGRADE.md](wiki/GOBRICKS_V069_UPGRADE.md), and those for
+v0.64.0 → v0.67.0 in [wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
 
 **Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
 file. It stays untracked — `.gitignore` is a deny-all allowlist, so `go.work` is
@@ -922,7 +923,7 @@ back off the parked bytes with `open-event` (below): exit `3` plus
 under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 
 ```bash
-printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
   -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -974,15 +975,16 @@ open-event \
 
 **Reference:** framework [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/sealing.md) (its "Minting test events" and "Inspecting sealed events" sections cover the two CLIs) and [ADR-097](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_097_sealed_amqp_messages.md) for the envelope table, the opener's rule order and error codes, the tenancy rules, and the rotation runbooks.
 
-### Topology Self-Repair (exchange loss, go-bricks v0.67.0)
+### Topology Self-Repair (exchange loss, go-bricks v0.67.0 / v0.69.0)
 
 As of go-bricks v0.67.0 (#1776/#1779, ADR-113 amendment) an AMQP exchange deleted under a live app **heals itself**. Every pooled publisher drives the topology redeclare pass, not only the consumer: the first publish into the hole takes the broker's 404 on the publisher's channel, the client opens a replacement channel, and that channel wakes the registry, which re-declares every exchange, queue and binding over its own connection (INFO `Messaging topology redeclared on new channel`). The publish retries on the new channel. Before v0.67.0 nothing triggered that pass, and every later publish failed with `ErrPublishRetriesExhausted` until a restart. Both publishing paths here share the single-tenant pooled publisher, so a payment or an outbox drain of a product write repairs `payment-events` and `product-events` alike.
 
-- **The streams lane does not self-repair.** `product-activity` (port 5552) is declared at startup only; a deleted stream, or a broker wipe, needs an app restart.
-- **The repair has an ack-and-drop window.** The pass declares exchanges, then queues, then bindings, and the typed payments publisher sets no `Mandatory` flag (the framework has no returned-message handler). A publish landing after `payment-events` is back but before `payments.authorized` / `payments.authorized.tap` are re-bound is broker-acked and dropped as unroutable, while the caller already got **202**. Treat a deleted exchange as an incident and reconcile the payments authorized during the repair.
-- **`product-events` has no bound queue** in this demo, so its repair proves the relay's publishes are confirmed again, not delivered.
+- **The repair is not atomic, and payments now say so.** The pass declares exchanges, then queues, then bindings. The payments publisher is `Mandatory` (go-bricks v0.69.0, #1835, ADR-122). A payment published after `payment-events` is back but before a queue is re-bound is returned by the broker and retried on a 100ms backoff within `messaging.reconnect.maxpublishattempts` (default 5, about 0.4s). If its last attempt is returned too, it fails with `ErrPublishRetriesExhausted` wrapping `messaging.ErrPublishUnroutable`, and the handler answers **500** `INTERNAL_ERROR`. Before v0.69.0 the same publish was broker-acked and dropped while the caller got **202**.
+- **What `Mandatory` does not close.** It means "routed to at least one queue", and bindings replay in declaration order (`payments.authorized`, then the tap), so a publish landing between the two reaches the consumer but not the tap. A redeclare slower than the retry budget turns would-be losses into 500s. amqp091 drops a return if its 256-slot buffer stays full for 5s, and that publish reads as routed. A return that arrives after a 30s confirm timeout can fail a publish that was delivered (ADR-122). There is no idempotency key, so a client that retries a 500 mints a new `orderId`. Still treat a deleted exchange as an incident and reconcile the payments authorized during the repair.
+- **`product-events` has no bound queue** in this demo, so every product event is unroutable by design and must never be `Mandatory`; the outbox relay cannot publish `Mandatory` anyway (upstream #1819). Its repair proves the relay's publishes are confirmed again, not delivered.
+- **The streams lane does not self-repair.** `product-activity` (port 5552) is declared at startup only; a deleted stream, or a broker wipe, needs an app restart. As of v0.69.0 (#1830, ADR-123) a lost stream is reported once per consumer and publisher at ERROR (`Stream consumer closed unexpectedly and will not reconnect ...`), the `streams` kind stays unhealthy on `/_sys/health-debug` until the restart (it is non-critical, so `/ready` stays 200), and the lost consumer's shutdown offset flush is skipped, so the restart replays from the last commit.
 
-**See it:** `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) publishes a payment, deletes `payment-events` through the management API, publishes into the hole, and shows the exchange and both bindings back and a post-repair payment on the tap; then it deletes `product-events` and lets the outbox relay repair it. The payment body carries a documented test PAN and is never echoed. **Measure it:** `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts), see [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)) deletes both exchanges under constant-arrival traffic and reports "Lost in repair window" (202s that never reached the tap) as a number, never a failed threshold. Both honour `APP_URL` and `RABBIT_MGMT` / `RABBIT_USER` / `RABBIT_PASS`.
+**See it:** `make redeclare-demo` ([scripts/topology-repair-demo.sh](scripts/topology-repair-demo.sh)) publishes a payment, deletes `payment-events` through the management API, publishes into the hole, and shows the exchange and both bindings back and a post-repair payment on the tap; then it deletes `product-events` and lets the outbox relay repair it. It asserts the publish into the hole told the truth: a 202 reaches the tap, a 500 does not. The payment body carries a documented test PAN and is never echoed. **Measure it:** `make loadtest-topology-repair` ([loadtests/topology-repair.ts](loadtests/topology-repair.ts), see [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md)) deletes both exchanges under constant-arrival traffic and reports "Lost in repair window" (202s that never reached the tap) and the payments 5xx answered in the window, as numbers. Neither is a threshold, but the 500s count toward the payments error-rate threshold, which a slow redeclare can trip. Both honour `APP_URL` and `RABBIT_MGMT` / `RABBIT_USER` / `RABBIT_PASS`.
 
 ### Streams & Super-Streams (native RabbitMQ stream protocol)
 
@@ -1061,24 +1063,25 @@ Where to watch it:
 
 | View | What it shows |
 |------|---------------|
-| `GET /api/v1/ready` → 200 | `messaging_stats.declared_consumers`, `subscribed_consumers`, `consumer_max_fail_streak` (worst current streak, `0` when healthy), `consumer_resubscribes` (cumulative successes) and `consumer_registries`. Bare numbers only: never which consumer. |
-| `GET /api/v1/ready` → 503 | The fixed body `{"status":"not ready","messaging":"unhealthy","error":"messaging unavailable"}`. It carries no stats and no queue name (ADR-048), so the streak is not visible here once the verdict flips. |
-| `GET /_sys/health-debug` | This view is off by default. It is served at the URL root, not under `/api/v1`, and is access-controlled (`debug.allowedips` defaults to loopback). `data.components.messaging` shows `critical`, the same counters under `details`, and the arm that failed: `error` is `consumer re-subscribe exhausted` or `publisher not ready`. |
+| `GET /api/v1/ready` → 200 | Exactly `{"status":"ready"}` (go-bricks v0.69.0, #1832, ADR-120). No counters, no kind names. |
+| `GET /api/v1/ready` → 503 | Exactly `{"status":"not ready"}`. The blocking kind and its full error are only on the app's `Readiness check failed` log line (`component=messaging`). |
+| `GET /_sys/health-debug` | The only view with the counters. It is off by default (`DEBUG_ENABLED=true` turns it on), served at the URL root, not under `/api/v1`, and access-controlled (`debug.allowedips` defaults to loopback). `data.components.messaging` shows `status`, `critical`, the arm that failed (`error` is `consumer re-subscribe exhausted` or `publisher not ready`) and, under `details`, `declared_consumers`, `subscribed_consumers`, `consumer_max_fail_streak` (worst current streak, `0` when healthy), `consumer_resubscribes` (cumulative successes) and `consumer_registries`. Bare numbers only: never which consumer. |
+| OTLP gauges (v0.69.0, #1820) | `app.readiness.status` (`1`/`0` per `readiness.kind` and `readiness.critical`), `messaging.consumer.{registries,declared,subscribed,resubscribes,max_fail_streak}` and `messaging.streams.{consumers,publishers}`. No-ops unless the OTLP export is on, which `config.development.yaml` leaves off. `app.readiness.status` is the last verdict, refreshed only when `/ready` or the debug view is called. |
 
 **Proof:** `make demo-consumer-readiness` runs [scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh). The script:
 
-1. Builds and boots its **own** app with `MESSAGING_CONSUMERS_CRITICAL=true`, plus `/_sys/health-debug` on loopback only. Stop `make run` first: the script refuses a busy port.
+1. Builds and boots its **own** app with `MESSAGING_CONSUMERS_CRITICAL=true`, plus `/_sys/health-debug` on loopback only. The debug view is required: since v0.69.0 it is the only place the counters are, and the script fails rather than fall back to `/ready`. Stop `make run` first: the script refuses a busy port.
 2. Records the app user's vhost permissions with `rabbitmqctl list_user_permissions`.
 3. Revokes **read on `payments.authorized` only**, with the read regex `^(?!payments\.authorized$).*`. Configure and write are unchanged, and every other queue and stream stays readable.
 4. Closes the consumer's own AMQP connection through the management API. The broker checks permissions at subscribe time, not per delivery.
-5. Polls `/ready` while `consumer_max_fail_streak` climbs. Once it hits 5, `/ready` answers 503 and the debug view names the consumer arm.
-6. Restores the **exact** recorded permissions and shows the recovery: `subscribed_consumers` back to `declared_consumers`, `consumer_resubscribes` +1, `/ready` 200.
+5. Polls the debug view while `consumer_max_fail_streak` climbs, and `/ready` for its status. Once the streak hits 5, `/ready` answers 503 with exactly `{"status":"not ready"}`, the debug view names the consumer arm, and the `Readiness check failed` log line names the kind (`component=messaging`).
+6. Restores the **exact** recorded permissions and shows the recovery: `subscribed_consumers` back to `declared_consumers`, `consumer_resubscribes` +1, `/ready` 200 with `{"status":"ready"}`.
 
 A trap restores the permissions on every exit, including Ctrl-C. The exact restore command is printed before anything changes, in case of a SIGKILL. The demo never stops the broker: the publisher arm would flip `/ready` at once and hide the consumer arm, and every product write would stall on its streams publish for up to 2s.
 
 **Operating it:** gate **liveness** on `/health` (static), never on `/ready`, or a broker incident becomes a restart loop. Read ADR-114's threat note before enabling the key. Anyone who can make a consumer's re-subscribe fail five times running can take every replica out of the load balancer at once, for example by revoking consume, deleting the queue, or causing a `PRECONDITION_FAILED` that is skipped until restart.
 
-**Reference:** framework [ADR-114](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_114_critical_consumer_readiness.md) and [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md).
+**Reference:** framework [ADR-114](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_114_critical_consumer_readiness.md), [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md), and [ADR-120](https://github.com/gaborage/go-bricks/blob/v0.69.0/wiki/adr_120_internal_probe_listener_and_minimal_ready_body.md) for the status-only `/ready` body.
 
 ### External Exchanges (consuming from an exchange another service owns)
 
@@ -1641,11 +1644,13 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # REGISTRIES, and is now spelled consumer_registries. New beside it:
 # declared_consumers, subscribed_consumers, consumer_resubscribes and
 # consumer_max_fail_streak.
-curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats
+# As of go-bricks v0.69.0 the whole messaging_stats object has left the /ready
+# body (see "/ready Body Is Status Only" below). Read the keys from the debug
+# view instead, off by default (DEBUG_ENABLED=true make run, loopback only):
+curl -s http://localhost:8080/_sys/health-debug | jq .data.components.messaging.details
 # Fix: repoint readers to consumer_registries (the old meaning) or to
-# declared_consumers / subscribed_consumers (what the old name suggested).
-# Nothing in this repo reads the key. messaging_stats appear only in the 200
-# body; a 503 carries the blocking kind's status and a fixed error.
+# declared_consumers / subscribed_consumers (what the old name suggested), read
+# from /_sys/health-debug or from the messaging.consumer.* gauges.
 ```
 
 ### Topology Repair Driven by Publishers (go-bricks v0.67.0)
@@ -1668,15 +1673,18 @@ curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats
 # 2. An exchange deleted under a live app now heals itself. Before, every later
 #    publish to it failed with ErrPublishRetriesExhausted until a restart.
 # Caveat, money path: the repair is NOT atomic. The pass runs exchanges, then
-# queues, then bindings. A publish that lands after payment-events is back but
-# before payments.authorized / payments.authorized.tap are re-bound is
-# broker-acked yet unroutable: the typed publisher sets no Mandatory flag, so
-# the broker drops it silently. The caller still gets 202 Accepted and that
-# payment.authorized event is lost. Treat a deleted exchange as an incident and
-# reconcile the payments authorized during the repair window.
+# queues, then bindings. Under v0.67.0 a payment that landed after payment-events
+# was back but before its queues were re-bound was broker-acked, dropped, and
+# answered 202. As of v0.69.0 the payments publisher is Mandatory, so that
+# publish is retried for about 0.4s and then answered 500 (see "Payment
+# Authorize Returns 500 During a Topology Repair" below). A publish routed to
+# payments.authorized before the tap is re-bound still misses the tap. Product
+# events (outbox relay, product-events) are not Mandatory and must never be.
+# Treat a deleted exchange as an incident and reconcile the payments authorized
+# during the repair window.
 # See it: make redeclare-demo. Measure the window under load:
-# make loadtest-topology-repair ("Lost in repair window" is reported, not a
-# threshold). See "Topology Self-Repair" under Important Patterns.
+# make loadtest-topology-repair ("Lost in repair window" and the payments 5xx are
+# reported, not thresholds). See "Topology Self-Repair" under Important Patterns.
 ```
 
 ### Multi-Tenant Migrate CLI Exit Codes and Summary (go-bricks v0.67.0)
@@ -1722,6 +1730,101 @@ make migrate-multitenant-verdict   # all three exit codes side by side, validate
 # key is namespaced under app.name, so the cache re-keys once on upgrade and
 # app.name must be a valid key namespace. Decide keyprefix before enabling a
 # cache; an explicit "" opts out of the prefix.
+```
+
+### Startup Refused for an Empty `SERVER_PROBES_HOST` (go-bricks v0.68.0)
+
+```bash
+# Symptom: startup fails with
+#   config_invalid: server.probes.host delivered empty — an empty value here falls
+#   back to a wider default rather than meaning none ...
+# even though server.probes.port is 0 and the probe listener is off.
+# go-bricks v0.68.0 (#1802, ADR-120) added an opt-in probe listener:
+# server.probes.port (default 0 = off, env SERVER_PROBES_PORT) and
+# server.probes.host (unset = server.host, env SERVER_PROBES_HOST). A
+# delivered-empty host (SERVER_PROBES_HOST=, `host: ""` or a bare `host:`) is
+# refused whatever the port, because falling back to server.host would widen a
+# loopback-only bind to every interface. An exported empty variable, or a
+# container env entry or Helm value that renders empty, is the usual cause.
+# Fix: remove the key or unset the variable to take the default, or give it a
+# real address (127.0.0.1 for a sidecar-only probe).
+unset SERVER_PROBES_HOST
+# The demo sets neither key: the probes stay at /api/v1/health and /api/v1/ready
+# on the app listener.
+```
+
+### `/ready` Body Is Status Only (go-bricks v0.69.0)
+
+```bash
+# Symptom: `curl -s http://localhost:8080/api/v1/ready | jq .messaging_stats`
+# prints null. A dashboard, NRQL query or alert that read time, app, a per-kind
+# key (database, messaging, streams) or any <kind>_stats object from the /ready
+# body goes flat, and a 503 no longer names the blocking kind or carries error.
+# As of go-bricks v0.69.0 (#1832, ADR-120) /ready answers exactly
+# {"status":"ready"} (200) or {"status":"not ready"} (503). The status codes and
+# the rules that decide them are unchanged, so a probe that reads only the code
+# needs nothing.
+curl -s http://localhost:8080/api/v1/ready        # {"status":"ready"}
+# Fix: judge by the status code. Read each kind's status, critical, error and
+# counters from /_sys/health-debug (.data.components.<kind>, needs
+# DEBUG_ENABLED=true, loopback only), or from the app.readiness.status,
+# messaging.consumer.* and messaging.streams.* gauges with the OTLP export on.
+# The kind behind a 503 is on the app log:
+#   ERROR  Readiness check failed  component=<kind>
+# Nothing in this repo reads the body any more: make demo-consumer-readiness
+# reads the debug view, and the k6 products-crud setup logs the status only.
+```
+
+### Payment Authorize Returns 500 During a Topology Repair (go-bricks v0.69.0)
+
+```bash
+# Symptom: POST /api/v1/payments/authorize answers 500 INTERNAL_ERROR, and the
+# app logs, for one request:
+#   WARN   Message returned by broker as unroutable, retrying...   (up to 4 times)
+#   WARN   Publish failed after its last attempt, giving up
+#   ERROR  Failed to authorize payment   (error ends "publish returned by broker as unroutable")
+# As of go-bricks v0.69.0 (#1835, ADR-122) the payments publisher is Mandatory.
+# A publish that no queue bound to payment-events / payment.authorized receives
+# is retried on a 100ms backoff within messaging.reconnect.maxpublishattempts
+# (default 5, about 0.4s), then fails with ErrPublishRetriesExhausted wrapping
+# messaging.ErrPublishUnroutable (match with errors.Is). Before, it was
+# broker-acked, dropped, and answered 202.
+# Cause 1: a topology repair is running (see "Topology Self-Repair"). Bindings
+# are re-declared last; the 500s stop once they are back. If the measured
+# redeclare outlasts the budget, raise messaging.reconnect.maxpublishattempts.
+# Cause 2: a binding is gone while its exchange is still there. A return does not
+# replace the channel, so nothing re-declares it. Check, then restart the app:
+docker exec go-bricks-rabbitmq rabbitmqctl list_bindings source_name destination_name routing_key | grep payment-events
+# A 500 is unconfirmed, not refused: a deadline, shutdown or lost confirm can
+# end in a 500 after the event reached a queue. Reconcile on the orderId in the
+# ERROR "Failed to authorize payment" line before re-submitting.
+# A caller that retries a 500 mints a new orderId: the endpoint has no
+# idempotency key. Metrics side effect for EVERY publish, Mandatory or not: an
+# exhausted publish records maxpublishattempts - 1 retries (was
+# maxpublishattempts), and the existing retry.reason attribute on
+# messaging.client.publish.retries gains the value "returned" (beside
+# publish_error | nack | timeout).
+```
+
+### Stream Consumer Closed Unexpectedly (go-bricks v0.69.0)
+
+```bash
+# Symptom: one ERROR per consumer and per publisher on a lost stream:
+#   ERROR  Stream consumer closed unexpectedly and will not reconnect - its stream
+#          was likely deleted; it stays down until the service restarts
+#   ERROR  Stream publisher closed unexpectedly and will not reconnect - ...
+# As of go-bricks v0.69.0 (#1830/#1829, ADR-123) a stream or super stream the
+# broker lost under a live app (deleted, or a broker wipe) is reported once at
+# ERROR. Nothing is re-declared. The streams kind stays unhealthy on
+# /_sys/health-debug until a restart; it is non-critical, so /ready stays 200.
+# The activity projection stops moving and each product write logs a WARN for
+# its failed activity publish. A single lost super-stream partition can go
+# unreported (ADR-123).
+# Fix: restart every replica that logged it (stop `make run`, start it again).
+# The startup pass re-declares product-activity. A lost consumer skips its
+# shutdown offset flush (one WARN), so the restart replays from the last commit,
+# which the idempotent projection absorbs. Move any alert keyed on the stream
+# client's own "won't be reconnected" line to this ERROR.
 ```
 
 ### Port Conflicts

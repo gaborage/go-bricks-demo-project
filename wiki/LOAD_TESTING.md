@@ -163,7 +163,9 @@ a deleted exchange takes the broker's 404, the client opens a replacement
 channel, and that channel wakes the registry, which re-declares every exchange,
 queue and binding over its own connection. The publish retries on the new
 channel. Before v0.67.0 nothing triggered that pass, and every later publish
-failed with `ErrPublishRetriesExhausted` until the app restarted.
+failed with `ErrPublishRetriesExhausted` until the app restarted. Since v0.69.0
+(#1835, ADR-122) the payments publisher is `Mandatory`, so the test also shows
+what a payment that lands before its bindings are back gets: a 500, not a 202.
 
 The test is **destructive**: it deletes `product-events` and `payment-events`
 on the broker it points at, so it is not part of `make loadtest-all`. For the
@@ -196,7 +198,12 @@ failed product requests and under 2% failed payment requests (the publish that
 takes the 404 retries, so a short burst is tolerated but a lasting outage is
 not), products p95 < 500ms and p99 < 1s, payments p95 < 800ms and p99 < 2s.
 Whether the topology came back is a check plus the `topology_final_ok` gauge,
-and the loss below is a reported number. Neither fails the run.
+and the loss below is a reported number. Neither fails the run. The payments
+500s from the `Mandatory` publisher do count toward the 2% payments error-rate
+threshold. At the defaults the retry budget is about 0.4s, so a redeclare slower
+than that can trip it. The threshold is unchanged. If it trips, compare the
+repair time in the summary with that budget before raising either
+`messaging.reconnect.maxpublishattempts` or the threshold.
 
 **Reading the summary.**
 
@@ -209,17 +216,32 @@ and the loss below is a reported number. Neither fails the run.
 - *End-to-end delivery* compares the 202s with the distinct orders that reached
   the tap. The difference is **Lost in repair window**. It is exact when every
   request got a 202. Otherwise it is a range, because a request that failed may
-  still have been published. The same numbers land under `topology_repair` in
-  the `PERF_SUMMARY_FILE` JSON.
+  still have been published. Next to it, *5xx in repair window* (the first
+  `TOPO_DISRUPTION` seconds after the delete) and *5xx over the whole run* count
+  the payments answered 500. The caller was told, so they are never part of the
+  loss. The same numbers land under `topology_repair` in the `PERF_SUMMARY_FILE`
+  JSON (`payments_5xx`, `payments_5xx_repair_window`).
 
 **Why a loss is not a failure.** The pass is not atomic: exchanges first, then
-queues, then bindings. The typed payments publisher sets no `Mandatory` flag,
-and the framework has no returned-message handler. So a publish that lands after
-`payment-events` is back but before `payments.authorized` and the tap are
-re-bound is acked by the broker and dropped as unroutable, while the caller
-already got 202. That is the documented ack-and-drop window. The test measures it
-instead of hiding it; operationally, treat a deleted exchange as an incident and
-reconcile the payments authorized while it was repaired.
+queues, then bindings. The payments publisher is `Mandatory` (go-bricks v0.69.0),
+so a publish that lands after `payment-events` is back but before a queue is
+re-bound is returned by the broker, retried on a 100ms backoff within
+`messaging.reconnect.maxpublishattempts` (default 5), and answered 500 if its last
+attempt is returned too. Before v0.69.0 it was acked, dropped, and answered 202.
+A tap-side loss can still appear, for three reasons:
+
+- `Mandatory` means routed to at least one queue. Bindings replay in declaration
+  order, `payments.authorized` before the tap, so a publish landing between the
+  two reaches the consumer but not the tap. *Routed to the queue* above *Routed
+  to the tap* in the stats is that gap.
+- amqp091 drops a return if its 256-slot buffer stays full for 5s, and that
+  publish reads as routed.
+- A non-202 whose outcome is unknown (an HTTP timeout, a confirm lost with its
+  channel) widens the upper bound.
+
+The test measures what is left instead of hiding it; operationally, treat a
+deleted exchange as an incident and reconcile the payments authorized while it
+was repaired.
 
 **Why count the tap by draining it.** The tap is capped at `x-max-length` 100
 (drop-head), so its depth stops counting at 100. The management API also reports
@@ -230,15 +252,20 @@ once, and the pass re-binds both queues one declare apart. As a cross-check,
 teardown reads the broker's `message_stats.publish` for both queues after the
 drain tail, which is longer than two statistics ticks. Those deltas count
 duplicates too (a publish retried after its first confirm died with the old
-channel arrives twice under one order id), so they should equal distinct plus
-duplicates. The report warns if the tap ever reached its cap.
+channel arrives twice under one order id), so the tap's delta should equal
+distinct plus duplicates. The queue's delta can exceed it by the publishes routed
+between the two binding declares. The report warns if the tap ever reached its
+cap.
 
 **What it does not cover.** `product-events` has no bound queue in this demo,
-so outbox product events are unroutable by design. Its repair proves the relay's
-publishes are confirmed again, not delivered. Any source's new channel replays
+so outbox product events are unroutable by design, and the outbox relay never
+publishes `Mandatory`. Its repair proves the relay's publishes are confirmed
+again, not delivered. Any source's new channel replays
 the whole topology, so whichever publish trips the 404 first repairs both
 exchanges. The native streams lane (`product-activity` on port 5552) is declared
 at startup only and does not self-repair: a deleted stream needs an app restart.
+Since v0.69.0 the app reports it with one ERROR per consumer and publisher,
+`Stream consumer closed unexpectedly and will not reconnect ...`.
 
 **What gets logged.** Payment bodies carry the published network test PANs the
 tokens load tests use (`TEST_PANS`) and are never printed. App responses are

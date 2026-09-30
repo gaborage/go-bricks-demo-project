@@ -635,8 +635,11 @@ loadtest-spike: check-k6
 #
 # loadtest-topology-repair: constant-arrival POST /products + POST
 # /payments/authorize, both exchanges deleted at t=60s. Reports the repair
-# times and the 202s that never reached the tap ("Lost in repair window", the
-# documented ack-and-drop window: reported, never a failed threshold).
+# times, the 202s that never reached the tap ("Lost in repair window") and the
+# payments 5xx answered in the window. Payments are Mandatory, so an unroutable
+# publish answers 500 instead of a silent 202; the residual loss is a publish
+# landing between the two binding declares or a return amqp091 dropped.
+# Loss is reported, never a failed threshold.
 # Thresholds cover HTTP error rate and latency only. Destructive, so it is not
 # part of loadtest-all.
 .PHONY: redeclare-demo loadtest-topology-repair

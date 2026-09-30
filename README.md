@@ -223,7 +223,7 @@ shell from the demo's own DER keys, and it is published straight to the exchange
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.67.0 \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
@@ -270,7 +270,7 @@ PRIVATE to decrypt. Both demo scripts use it:
   `SEAL_EVENT_TYPE_MISMATCH` without the app log.
 
 ```bash
-go install github.com/gaborage/go-bricks/cmd/open-event@v0.67.0
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.69.0
 
 # The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
 open-event \
@@ -291,7 +291,7 @@ open-event \
   is `{"code":…,"details":{…}}` on stdout. Its details carry only presence and
   length facts.
 - **The scripts install the CLI, never `go run` it.** They use
-  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.67.0`, because `go run`
+  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.69.0`, because `go run`
   reports any non-zero exit as its own `1` and would hide the refusal's `3`.
 - **Both kids are required flags.** The CLI never reads them from the
   unauthenticated header, so after a rotation you pass the new generation
@@ -470,13 +470,23 @@ framework's [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67
 
 #### Readiness that fails closed on a stalled consumer
 
-Since go-bricks v0.65.0 the `/ready` 200 body counts the AMQP consumers (#1684):
+Since go-bricks v0.65.0 the framework counts the AMQP consumers (#1684). Since
+v0.69.0 (#1832, ADR-120) `/ready` answers exactly `{"status":"ready"}` (200) or
+`{"status":"not ready"}` (503), so the counters are read from the
+access-controlled `/_sys/health-debug` view, which is off by default:
 
 ```bash
-curl -s http://localhost:8080/api/v1/ready | jq -c '.messaging_stats
+curl -s http://localhost:8080/api/v1/ready
+# {"status":"ready"}
+
+# Start the app with DEBUG_ENABLED=true (the view answers loopback only):
+curl -s http://localhost:8080/_sys/health-debug | jq -c '.data.components.messaging.details
   | {declared_consumers, subscribed_consumers, consumer_max_fail_streak, consumer_resubscribes}'
 # {"declared_consumers":1,"subscribed_consumers":1,"consumer_max_fail_streak":0,"consumer_resubscribes":0}
 ```
+
+With the OTLP export on, the same counters are also the `messaging.consumer.*`
+gauges, and `app.readiness.status` carries each kind's last verdict.
 
 The opt-in key `messaging.consumers.critical: true` (#1686, ADR-114) makes `/ready`
 answer **503** once a declared consumer (here `payments.authorized`) is unsubscribed
@@ -494,8 +504,8 @@ make demo-consumer-readiness
 
 1. It revokes the app user's broker **read** permission on `payments.authorized`, and nothing else.
 2. It closes the consumer's connection, so the consumer has to re-subscribe and the broker refuses it with `403 ACCESS_REFUSED`.
-3. It polls `/ready` while `consumer_max_fail_streak` climbs toward the threshold and the verdict turns 503. `/_sys/health-debug`, enabled on loopback for that run, names the failing arm.
-4. It restores the exact recorded permissions and shows the recovery: `consumer_resubscribes` +1 and `/ready` 200.
+3. It polls `/_sys/health-debug`, enabled on loopback for that run, while `consumer_max_fail_streak` climbs toward the threshold, and `/ready` until it answers 503 with `{"status":"not ready"}`. The debug view names the failing arm, and the app's `Readiness check failed` log line names the blocking kind.
+4. It restores the exact recorded permissions and shows the recovery: `consumer_resubscribes` +1 and `/ready` 200 with `{"status":"ready"}`.
 
 The permissions are restored on every exit. The broker is never stopped, because that would flip `/ready` through the publisher check and hide the consumer check.
 
@@ -557,14 +567,20 @@ a full redeclare of every exchange, queue and binding.
 
 ```bash
 make redeclare-demo              # Delete payment-events, publish into the hole, watch it heal
-make loadtest-topology-repair    # The same under load; reports "Lost in repair window"
+make loadtest-topology-repair    # The same under load; reports "Lost in repair window" and the 5xx
 ```
 
 `make redeclare-demo` also lets the outbox relay repair `product-events`. The
-repair is not atomic: a payment published after `payment-events` is back but
-before its bindings are can get `202 Accepted` and still be dropped as
-unroutable, which is the number the load test reports. The streams lane
-(`product-activity`) does not self-repair; restart the app.
+repair is not atomic: bindings come back after the exchange. Since go-bricks
+v0.69.0 the payments publisher is `Mandatory`, so a payment published before its
+queues are re-bound is retried for about 0.4s and then answered
+`500 Internal Server Error`, where it used to get `202 Accepted` and be dropped.
+The load test reports those 500s next to "Lost in repair window", which can
+still be non-zero: `payments.authorized` is re-bound before the tap, so a payment
+routed between the two reaches the consumer but not the tap it is counted on.
+Product events are not `Mandatory`. The streams lane (`product-activity`) does
+not self-repair: since v0.69.0 a lost stream is logged at ERROR, and the fix is
+still an app restart.
 
 ## Configuration
 
