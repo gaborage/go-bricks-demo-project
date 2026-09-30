@@ -1,14 +1,17 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments/domain"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	msgtesting "github.com/gaborage/go-bricks/messaging/testing"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,6 +134,62 @@ func TestAuthorizePropagatesPublishFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 	assert.Nil(t, evt)
+}
+
+// The two shapes a Mandatory publish the broker returned as unroutable takes
+// (go-bricks v0.69.0, ADR-122), spelled as messaging/amqp_client.go builds
+// them: publishExhausted once every attempt was returned, and wrapCause when a
+// deadline or shutdown cut the retries short after a return.
+func unroutablePublishErrors() map[string]error {
+	return map[string]error{
+		"attempts exhausted": fmt.Errorf("%w after %d attempts: %w",
+			messaging.ErrPublishRetriesExhausted, 5, messaging.ErrPublishUnroutable),
+		"deadline during the retries": fmt.Errorf("%w; last attempt: %w",
+			context.DeadlineExceeded, messaging.ErrPublishUnroutable),
+	}
+}
+
+// A payment no queue received is a failed authorization: Authorize returns no
+// event, the caller can still match the cause, and the success line is never
+// written. The error adds the order id to the framework's text and nothing
+// else, so no card data reaches whoever logs it.
+func TestAuthorizeFailsWhenTheBrokerReturnsThePublish(t *testing.T) {
+	for name, publishErr := range unroutablePublishErrors() {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			log := logger.New("info", false).WithContext(zerolog.New(&logs).WithContext(t.Context()))
+			capture := msgtesting.NewCapturePublisher[domain.PaymentAuthorized]()
+			svc := NewPaymentService(noMessagingClient, log)
+			svc.SetPublisher(capture)
+
+			// Control: this sink does record the success line, so its absence
+			// below is not a deaf logger.
+			_, err := svc.Authorize(t.Context(), validRequest())
+			require.NoError(t, err)
+			require.Contains(t, logs.String(), "published as a sealed event")
+			logs.Reset()
+			capture.Reset()
+
+			capture.Fail(publishErr)
+			evt, err := svc.Authorize(t.Context(), validRequest())
+			require.Error(t, err)
+			assert.Nil(t, evt, "a returned publish must not be reported as authorized")
+			assert.ErrorIs(t, err, messaging.ErrPublishUnroutable)
+			assert.True(t, errors.Is(err, messaging.ErrPublishRetriesExhausted) || errors.Is(err, context.DeadlineExceeded),
+				"the framework's terminal error stays in the chain")
+
+			attempted, ok := capture.Last()
+			require.True(t, ok)
+			assert.Len(t, capture.Events(), 1, "one Publish call: the retries are the framework's, inside it")
+			assert.Equal(t, "publish "+attempted.OrderID+": "+publishErr.Error(), err.Error(),
+				"the service adds the order id and nothing else")
+			assert.NotContains(t, err.Error(), testPAN)
+			assert.NotContains(t, err.Error(), attempted.Card.Holder)
+
+			assert.NotContains(t, logs.String(), "published as a sealed event", "no success line for a failed publish")
+			assert.NotContains(t, logs.String(), testPAN)
+		})
+	}
 }
 
 func TestAuthorizePropagatesMessagingResolutionFailure(t *testing.T) {

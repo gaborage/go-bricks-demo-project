@@ -23,12 +23,25 @@
 //
 // The report compares the 202s from /payments/authorize with the distinct orders
 // that reached the tap. The difference is "lost in repair window". The pass is
-// not atomic (exchanges, then queues, then bindings) and the typed publisher sets
-// no Mandatory flag, so a publish that lands after payment-events is back but
-// before its bindings are is broker-acked, unroutable and dropped, while the
-// caller already got 202. That is the documented ack-and-drop window, so it is a
-// REPORTED number, never a failed threshold. Thresholds cover HTTP error rate and
-// latency only.
+// not atomic (exchanges, then queues, then bindings). The payments publisher is
+// Mandatory (go-bricks v0.69.0, ADR-122), so a publish that lands after
+// payment-events is back but before a queue is re-bound is returned by the
+// broker, retried on a 100ms backoff within messaging.reconnect.maxpublishattempts
+// (default 5), and answered 500 if its last attempt is returned too. Before, it
+// was broker-acked and dropped while the caller got 202. Those 500s are counted
+// apart ("5xx in repair window"): the caller was told, so they are not a loss.
+// The loss stays a REPORTED number, never a failed threshold, because three
+// caveats remain:
+//   - Mandatory means routed to at least one queue. Bindings replay in
+//     declaration order, payments.authorized before the tap, so a publish landing
+//     between the two reaches the consumer but not the tap, and a tap-based count
+//     can still show a small loss. queue_routed_stats above tap_routed_stats is
+//     that gap.
+//   - The retry budget is about 0.4s, so a slower redeclare turns would-be losses
+//     into 500s, which count toward http_req_failed.
+//   - amqp091 drops a return if its 256-slot return buffer stays full for 5s;
+//     that publish reads as routed, and its 202 can still be lost.
+// Thresholds cover HTTP error rate and latency only.
 //
 // Why drain the tap instead of reading its depth: the tap is capped at
 // x-max-length 100 (drop-head), so its depth stops counting at 100, and the
@@ -219,6 +232,10 @@ const productsCreated = new Counter('products_created');
 const productsNotCreated = new Counter('products_not_created');
 const paymentsAccepted = new Counter('payments_accepted');
 const paymentsNotAccepted = new Counter('payments_not_accepted');
+// 5xx answers: the Mandatory publisher's unroutable (or 404-NACKed) publish that
+// exhausted its retries. Told to the caller, so never part of the loss.
+const payments5xx = new Counter('payments_5xx');
+const payments5xxDisruption = new Counter('payments_5xx_disruption');
 // Success rate per phase, so the report shows the error burst is confined to
 // the disruption window rather than smeared over the run.
 const paymentOkBaseline = new Rate('payment_ok_baseline');
@@ -289,6 +306,8 @@ export const options: Options = {
     'http_req_failed{scenario:products}': ['rate<0.01'],
     // The publish that takes the 404 retries on the new channel; a small burst of
     // failures inside the repair window is tolerated, a lasting outage is not.
+    // With the Mandatory publisher, a publish still returned as unroutable after
+    // its ~0.4s retry budget is a 500 inside that burst too.
     'http_req_failed{scenario:payments}': ['rate<0.02'],
     'http_req_duration{scenario:products}': ['p(95)<500', 'p(99)<1000'],
     'http_req_duration{scenario:payments}': ['p(95)<800', 'p(99)<2000'],
@@ -408,6 +427,10 @@ export function authorizePayment(data: SetupData): void {
     paymentOkDisruption.add(accepted);
   } else {
     paymentOkBaseline.add(accepted);
+  }
+  if (res.status >= 500) {
+    payments5xx.add(1);
+    if (phase === 'disruption') payments5xxDisruption.add(1);
   }
 
   // Status and phase only, once per VU: the body holds a card number.
@@ -590,10 +613,13 @@ export function handleSummary(data: any): Record<string, string> {
   const notAccepted = count('payments_not_accepted');
   const arrived = count('tap_arrived');
 
-  // A 202 whose order never reached the tap is lost. A request that did NOT get a
-  // 202 may still have been published (its outcome is unknown), and if so its
-  // order is among `arrived`. So the loss is exact when every request got a 202,
-  // and bounded above by the non-202 count otherwise.
+  // A 202 whose order never reached the tap is lost, or reached only
+  // payments.authorized (the between-bindings gap). A request that did NOT get a
+  // 202 may still have been published: a 500 from a returned Mandatory publish was
+  // never queued, but an HTTP timeout or a confirm lost with its channel leaves the
+  // outcome unknown, and if it landed its order is among `arrived`. So the loss is
+  // exact when every request got a 202, and bounded above by the non-202 count
+  // otherwise.
   const lostMin = Math.max(0, accepted - arrived);
   const lostMax = Math.max(0, accepted - arrived + notAccepted);
   const lostText = lostMin === lostMax
@@ -604,12 +630,15 @@ export function handleSummary(data: any): Record<string, string> {
   const finalOk = gauge('topology_final_ok');
 
   const lossNote = lostMax > 0
-    ? `  A loss is the documented ack-and-drop window, not a test failure: the
-  redeclare pass runs exchanges, then queues, then bindings, and the typed
-  publisher sets no Mandatory flag. A publish that lands between the two is
-  acked by the broker and dropped as unroutable, after the caller got 202.`
-    : `  No 202 was lost this run. The ack-and-drop window still exists (exchanges
-  are re-declared before bindings); no publish happened to land inside it.`;
+    ? `  A tap-side loss is reported, not a test failure. The Mandatory publisher
+  answers 500 for a publish no queue received, so what remains is: a publish
+  routed between the two binding declares (payments.authorized is re-bound
+  first, so it reached the consumer, not the tap: queue stats above tap stats),
+  a return amqp091 dropped after its 256-slot buffer stayed full for 5s, or a
+  non-202 whose outcome is unknown (the upper bound).`
+    : `  No 202 was lost this run. An unroutable publish in the window answers 500
+  (Mandatory publisher); the gap between the two binding declares still exists,
+  and no publish happened to land inside it.`;
 
   const warnings: string[] = [];
   if (count('tap_overflow_risk') > 0) warnings.push(`⚠️  The tap reached x-max-length ${TAP_MAX_LENGTH}: dropped messages inflate the loss. Lower TOPO_PAYMENT_RATE.`);
@@ -637,12 +666,15 @@ END-TO-END DELIVERY (${TAP_QUEUE})
   202 Accepted                    ${accepted}
   Distinct orders on the tap      ${arrived}
   Lost in repair window           ${lostText}
+  5xx in repair window            ${count('payments_5xx_disruption')}   (first ${DISRUPTION_S}s after the delete; the caller was told, not a loss)
+  5xx over the whole run          ${count('payments_5xx')}
   Duplicates on the tap           ${count('tap_duplicates')}   (a retried publish whose first confirm died with the old channel)
   Foreign bodies skipped          ${count('tap_foreign')}
   Routed to the tap (stats)       ${tapRouted === undefined ? 'n/a' : tapRouted}
   Routed to the queue (stats)     ${queueRouted === undefined ? 'n/a' : queueRouted}   (${PAYMENT_QUEUE})
     message_stats.publish deltas on the ~5s stats tick. They count duplicates and
-    any payment published outside this run, and the two should match.
+    any payment published outside this run. The queue above the tap is a publish
+    routed between the two binding declares (${PAYMENT_QUEUE} is re-bound first).
 
 ${lossNote}
 ${warnings.length > 0 ? `\n${warnings.join('\n')}\n` : ''}═══════════════════════════════════════════════════════════
@@ -657,6 +689,8 @@ ${warnings.length > 0 ? `\n${warnings.join('\n')}\n` : ''}═══════�
     topology_repair: {
       payments_accepted: accepted,
       payments_not_accepted: notAccepted,
+      payments_5xx: count('payments_5xx'),
+      payments_5xx_repair_window: count('payments_5xx_disruption'),
       tap_distinct_orders: arrived,
       lost_in_repair_window_min: lostMin,
       lost_in_repair_window_max: lostMax,

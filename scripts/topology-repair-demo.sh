@@ -18,19 +18,33 @@
 #
 #   1. payment-events (sealed payments): publish one payment and see it on the
 #      consumerless payments.authorized.tap queue; delete the exchange; publish
-#      again; see the exchange and both of its bindings come back, and a payment
-#      published after the repair reach the tap.
+#      again; see the exchange and both of its bindings come back; check that the
+#      publish into the hole told the truth (a 202 is on the tap, a 500 is not);
+#      and see a payment published after the repair reach the tap.
 #   2. product-events (outbox relay): delete it, create a product, and see the
 #      exchange come back once the relay's next poll publishes into the hole.
 #
 # What it does NOT promise:
 #
 #   * The repair is not atomic. The pass declares exchanges, then queues, then
-#     bindings, and the typed publisher sets no Mandatory flag. A publish that
-#     lands after payment-events is back but before it is re-bound is acked by the
-#     broker and dropped as unroutable, while the caller already got 202. If the
-#     payment published into the hole never reaches the tap, that is this window,
-#     reported as such. `make loadtest-topology-repair` measures it under load.
+#     bindings. The payments publisher is Mandatory (go-bricks v0.69.0, ADR-122),
+#     so a publish that lands after payment-events is back but before a queue is
+#     re-bound is returned by the broker, retried on a 100ms backoff within
+#     messaging.reconnect.maxpublishattempts (default 5), and answered 500 if the
+#     last attempt is returned too. It is no longer acked and dropped behind a
+#     202. Step 3 asserts that: a 202 reaches the tap, a 500 does not. Residual
+#     caveats:
+#       - Mandatory means routed to at least one queue. Bindings replay in
+#         declaration order, payments.authorized before payments.authorized.tap,
+#         so a publish landing between the two reaches the consumer but not the
+#         tap. For one publish that gap is one declare round trip; should it trip
+#         step 3, the app log's "Payment authorization consumed exactly once"
+#         line carries the order id.
+#       - The retry budget is about 0.4s. A slower redeclare turns what used to
+#         be a silent loss into a 500 the caller sees.
+#       - amqp091 drops a return if its 256-slot return buffer stays full for 5s,
+#         and that publish reads as routed. One demo publish cannot fill it.
+#     `make loadtest-topology-repair` measures the window under load.
 #   * product-events has no bound queue in this demo, so outbox product events
 #     are unroutable by design. Its repair proves the relay's publishes are
 #     confirmed again, not that anyone received them.
@@ -48,7 +62,8 @@
 #   make docker-up      # RabbitMQ (management plugin on :15672) + postgres
 #   make migrate        # outbox + inbox ledgers
 #   make generate-keys  # payments sealing keys
-#   make run            # app must be running, on go-bricks >= v0.67.0
+#   make run            # app must be running, on go-bricks >= v0.69.0 (v0.67.0
+#                         repairs; v0.69.0 fails a returned Mandatory publish)
 #
 # Overrides (env): APP_URL (app root, default http://localhost:8080), API_BASE
 #                  (default $APP_URL/api/v1), RABBIT_MGMT, RABBIT_USER,
@@ -82,11 +97,18 @@ QUEUE="payments.authorized"
 TAP_QUEUE="payments.authorized.tap"
 
 # See handlers.AuthorizePaymentRequest for the accepted shape. Built with a
-# heredoc so the PAN never appears in any process's argv.
+# heredoc so the PAN never appears in any process's argv. __AMOUNT__ is filled
+# per publish by bash parameter expansion (a builtin, so still no argv).
 PAYMENT_PAYLOAD="$(cat <<'JSON'
-{"amount": 4599, "currency": "USD", "card": {"pan": "4111111111111111", "expMonth": 12, "expYear": 2030, "holder": "ADA LOVELACE"}}
+{"amount": __AMOUNT__, "currency": "USD", "card": {"pan": "4111111111111111", "expMonth": 12, "expYear": 2030, "holder": "ADA LOVELACE"}}
 JSON
 )"
+DEFAULT_AMOUNT=4599
+# The payment published into the hole carries its own amount, a 5-digit marker
+# no other publish of this run uses. A 500 answers with no order id, and the
+# amount sits in the clear part of the signed payload, so step 3 can still look
+# for that payment on the tap.
+TRIP_AMOUNT=$((10000 + RANDOM % 90000))
 
 # --- helpers --------------------------------------------------------------
 
@@ -194,11 +216,12 @@ wait_for() {
     echo "$((SECONDS - start))"
 }
 
-# tap_has_order ORDER_ID — drain what is on the tap (nothing consumes it) and
-# report whether ORDER_ID is among it. The order id sits in the CLEAR part of
-# the signed payload, so no key is needed to read it; the card stays sealed.
-tap_has_order() {
-    local want="$1" attempt response count i body order
+# tap_has FIELD VALUE — drain what is on the tap (nothing consumes it) and
+# report whether a body whose clear FIELD (orderId, amount) equals VALUE is
+# among it. Both sit in the CLEAR part of the signed payload, so no key is
+# needed to read them; the card stays sealed.
+tap_has() {
+    local field="$1" want="$2" attempt response count i body got
     for ((attempt = 1; attempt <= TAP_ATTEMPTS; attempt++)); do
         response="$(curl -sS -K "$CURL_CFG" -H 'content-type: application/json' \
             -X POST "$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$TAP_QUEUE/get" \
@@ -213,9 +236,9 @@ tap_has_order() {
             else
                 body="$(jq -r ".[$i].payload" <<<"$response")"
             fi
-            order="$(b64url_decode "$(cut -d. -f2 <<<"$body")" 2>/dev/null \
-                | jq -r '.orderId // empty' 2>/dev/null || true)"
-            [[ -n "$order" && "$order" == "$want" ]] && return 0
+            got="$(b64url_decode "$(cut -d. -f2 <<<"$body")" 2>/dev/null \
+                | jq -r --arg f "$field" '.[$f] // empty' 2>/dev/null || true)"
+            [[ -n "$got" && "$got" == "$want" ]] && return 0
         done
         sleep 0.5
     done
@@ -224,11 +247,12 @@ tap_has_order() {
 
 # --- app helpers ----------------------------------------------------------
 
-# authorize — POST one payment. Sets AUTH_STATUS, AUTH_SECONDS and ORDER_ID.
-# The body reaches curl on stdin, so it is neither echoed nor in argv.
+# authorize [AMOUNT] — POST one payment (amount in minor units, default
+# DEFAULT_AMOUNT). Sets AUTH_STATUS, AUTH_SECONDS and ORDER_ID. The body reaches
+# curl on stdin, so it is neither echoed nor in argv.
 authorize() {
-    local out
-    out="$(printf '%s' "$PAYMENT_PAYLOAD" | curl -sS -o "$RESPONSE_FILE" -w '%{http_code} %{time_total}' \
+    local amount="${1:-$DEFAULT_AMOUNT}" out
+    out="$(printf '%s' "${PAYMENT_PAYLOAD/__AMOUNT__/$amount}" | curl -sS -o "$RESPONSE_FILE" -w '%{http_code} %{time_total}' \
         -H 'content-type: application/json' \
         -X POST "$API_BASE/payments/authorize" --data-binary @- || true)"
     AUTH_STATUS="${out%% *}"
@@ -287,7 +311,7 @@ esac
 authorize
 report_authorize
 [[ "$AUTH_STATUS" == 2* && -n "$ORDER_ID" ]] || fail "the baseline payment failed — check the app log"
-tap_has_order "$ORDER_ID" \
+tap_has orderId "$ORDER_ID" \
     || fail "order $ORDER_ID never reached '$TAP_QUEUE' with the topology intact — check the app log for a publish error"
 echo "✅ order $ORDER_ID is on '$TAP_QUEUE'"
 
@@ -308,10 +332,13 @@ for q in "$QUEUE" "$TAP_QUEUE"; do
 done
 
 echo
-echo "Publishing into the hole. This publish takes the broker's 404, which closes"
-echo "the publisher's channel. Its replacement wakes the registry, which re-declares"
-echo "the whole topology; the publish retries on the new channel."
-authorize
+echo "Publishing into the hole (marker amount $TRIP_AMOUNT). This publish takes the"
+echo "broker's 404, which closes the publisher's channel. Its replacement wakes the"
+echo "registry, which re-declares the whole topology; the publish retries on the new"
+echo "channel. The publisher is Mandatory, so a retry that lands before a queue is"
+echo "re-bound is returned by the broker and retried again, and one still returned on"
+echo "its last attempt answers 500 instead of 202."
+authorize "$TRIP_AMOUNT"
 report_authorize
 TRIP_STATUS="$AUTH_STATUS"
 TRIP_ORDER="$ORDER_ID"
@@ -328,28 +355,38 @@ echo "   No restart. The app log has 'Messaging topology redeclared on new chann
 
 section "3/4  Delivery after the repair"
 
-if [[ "$TRIP_STATUS" == 2* && -n "$TRIP_ORDER" ]]; then
-    if tap_has_order "$TRIP_ORDER"; then
-        echo "✅ the payment published into the hole (order $TRIP_ORDER) reached the tap:"
+# The invariant the Mandatory publisher buys: the answer tells the truth. A 202
+# was routed to a queue, and a 500 reached none. Never "202 and absent".
+case "$TRIP_STATUS" in
+    2*)
+        [[ -n "$TRIP_ORDER" ]] || fail "the payment published into the hole got HTTP $TRIP_STATUS but no order id"
+        tap_has orderId "$TRIP_ORDER" \
+            || fail "order $TRIP_ORDER got HTTP $TRIP_STATUS but never reached '$TAP_QUEUE'. The publisher is Mandatory, so a 202 means the broker routed it to at least one queue. Either it landed in the one declare between the two bindings ('$QUEUE' is re-bound first: look for orderId=$TRIP_ORDER on 'Payment authorization consumed exactly once' in the app log), or a return was not handled: check that the app runs go-bricks >= v0.69.0 with the payments publisher still Mandatory."
+        echo "✅ the payment published into the hole (order $TRIP_ORDER) got HTTP $TRIP_STATUS and reached the tap:"
         echo "   its retry ran on the new channel after the pass had re-bound the queues."
-    else
-        echo "⚠️  order $TRIP_ORDER got HTTP $TRIP_STATUS but never reached the tap."
-        echo "   That is the ack-and-drop window: its retry landed after '$PAYMENT_EXCHANGE' was"
-        echo "   re-declared but before the bindings were, so the broker acked it and dropped"
-        echo "   it as unroutable. The typed publisher sets no Mandatory flag, so nothing"
-        echo "   told the caller. Reconcile payments authorized during a repair."
-    fi
-else
-    echo "ℹ️  the payment published into the hole failed loudly (HTTP ${TRIP_STATUS:-<no response>}). Its outcome"
-    echo "   is unknown to the caller, which is the honest answer; nothing claimed success."
-fi
+        ;;
+    5*)
+        if tap_has amount "$TRIP_AMOUNT"; then
+            fail "the payment published into the hole got HTTP $TRIP_STATUS, yet a body carrying its marker amount $TRIP_AMOUNT reached '$TAP_QUEUE': the caller was told it failed while the event went out"
+        fi
+        echo "✅ the payment published into the hole got HTTP $TRIP_STATUS, and nothing carrying its"
+        echo "   marker amount ($TRIP_AMOUNT) reached the tap. Every attempt landed before the"
+        echo "   queues were re-bound (returned by the broker) or before the exchange was back"
+        echo "   (404), all within the ~0.4s retry budget. The caller was told the authorization"
+        echo "   failed, instead of getting 202 for an event no queue received."
+        ;;
+    *)
+        echo "ℹ️  the payment published into the hole got no answer from the app (HTTP ${TRIP_STATUS:-<no response>})."
+        echo "   Its outcome is unknown to the caller; nothing claimed success."
+        ;;
+esac
 
 echo
 echo "One more payment, now that the topology is whole:"
 authorize
 report_authorize
 [[ "$AUTH_STATUS" == 2* && -n "$ORDER_ID" ]] || fail "the post-repair payment failed — the repair did not restore publishing"
-tap_has_order "$ORDER_ID" \
+tap_has orderId "$ORDER_ID" \
     || fail "order $ORDER_ID did not reach '$TAP_QUEUE' after the repair"
 echo "✅ order $ORDER_ID is on '$TAP_QUEUE': steady state restored."
 
@@ -390,5 +427,7 @@ echo "What heals: any AMQP exchange this app declares. The first publish to hit 
 echo "hole drives one redeclare pass that replays EVERY exchange, queue and binding."
 echo "What does not: the native streams lane (product-activity, port 5552) is"
 echo "declared at startup only; a deleted stream needs an app restart."
-echo "The window: payments published mid-repair can get 202 and still be lost."
+echo "The window: a payment published mid-repair is returned by the broker until its"
+echo "queues are re-bound. The Mandatory publisher retries it for about 0.4s, then"
+echo "answers 500, so a 202 means a queue received it."
 echo "Measure it under load: make loadtest-topology-repair"

@@ -114,11 +114,23 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 	// Producer side. The handle is bound to this destination once; Publish seals
 	// from the seal tags on PaymentAuthorized without being asked.
+	//
+	// Mandatory: a publish no queue is bound to receive must FAIL, not vanish.
+	// Without it the broker drops an unroutable publish and still ACKs it, so the
+	// caller got 202 for an authorization nobody received: the ack-and-drop window
+	// of a topology repair, which re-binds the queues after the exchange is back.
+	// As of go-bricks v0.69.0 (ADR-122) a returned publish is retried on a 100ms
+	// backoff within messaging.reconnect.maxpublishattempts, then fails with
+	// ErrPublishRetriesExhausted wrapping ErrPublishUnroutable, which the handler
+	// answers 500. Money path only: the outbox relay cannot publish Mandatory, and
+	// product-events has no bound queue here, so every product event is
+	// unroutable by design and Mandatory must never be set there.
 	m.authorized = messaging.DeclareTypedPublisher[domain.PaymentAuthorized](decls, &messaging.PublisherOptions{
 		Exchange:    exchangeName,
 		RoutingKey:  routingKey,
 		EventType:   eventType,
 		Description: "Sealed payment authorization events (JWE-of-JWS)",
+		Mandatory:   true,
 	})
 	m.service.SetPublisher(m.authorized)
 
