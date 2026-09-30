@@ -458,10 +458,13 @@ seal-mle:
 # MESSAGING_CONSUMERS_CRITICAL=true (config.development.yaml keeps the key off),
 # so stop any `make run` first — it refuses a busy port. It revokes the app
 # user's broker READ on payments.authorized only, closes the consumer's
-# connection, and polls /ready while consumer_max_fail_streak climbs to 5 and
-# the verdict turns 503. The recorded permissions are restored on every exit,
-# then recovery is shown. The broker is never stopped: that would flip /ready
-# through the publisher arm and hide the consumer arm.
+# connection, and polls until /ready turns 503 at a streak of 5. Since go-bricks
+# v0.69.0 (ADR-120) /ready answers only {"status":"ready"|"not ready"}, so the
+# streak, the other consumer counters and the per-kind verdict are read from
+# /_sys/health-debug, which the script enables on loopback and requires. The
+# recorded permissions are restored on every exit, then recovery is shown. The
+# broker is never stopped: that would flip /ready through the publisher arm and
+# hide the consumer arm.
 # Requires infra up (make docker-up), migrations (make migrate) and keys
 # (make generate-keys). Honors RABBIT_MGMT, RABBIT_CONTAINER, APP_URL and the
 # app's own env overrides (DATABASE_PORT, MESSAGING_BROKER_URL, ...).
