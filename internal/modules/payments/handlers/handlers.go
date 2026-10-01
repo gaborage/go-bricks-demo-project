@@ -110,6 +110,11 @@ func (h *PaymentHandler) AuthorizePayment(req AuthorizePaymentRequest, ctx serve
 		if errors.Is(err, service.ErrValidation) {
 			return server.Result[*AuthorizePaymentResponse]{}, server.NewBadRequestError(err.Error())
 		}
+		// A publish the broker returned as unroutable (messaging.ErrPublishUnroutable,
+		// the publisher is Mandatory) lands here too, on purpose: the caller is told
+		// the authorization failed instead of getting 202 for an event no queue
+		// received.
+		//
 		// No card fragment in the error path either: log the currency and amount,
 		// never the request struct.
 		h.logger.Error().Err(err).

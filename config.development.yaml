@@ -42,14 +42,19 @@ messaging:
   # Absent (the default), /ready judges the messaging kind by its publisher alone
   # and never critically. `consumers.critical: true` makes the kind critical, and
   # BOTH of its arms with it:
-  #   - consumer arm: GET /api/v1/ready answers 503 with the fixed body
-  #     {"status":"not ready","messaging":"unhealthy","error":"messaging unavailable"}
-  #     once a declared AMQP consumer (here: payments.authorized) is unsubscribed
-  #     AND has failed 5 re-subscribes in a row — the streak at which the
-  #     "Consumer re-subscribe attempt failed" log turns WARN. A reconnect that
-  #     recovers inside the streak never reaches the verdict. Watch it climb on
-  #     the 200 body: messaging_stats.subscribed_consumers vs declared_consumers,
-  #     consumer_max_fail_streak, consumer_resubscribes.
+  #   - consumer arm: GET /api/v1/ready answers 503 once a declared AMQP
+  #     consumer (here: payments.authorized) is unsubscribed AND has failed 5
+  #     re-subscribes in a row — the streak at which the "Consumer re-subscribe
+  #     attempt failed" log turns WARN. A reconnect that recovers inside the
+  #     streak never reaches the verdict. Since go-bricks v0.69.0 (ADR-120) the
+  #     /ready body is only {"status":"ready"} or {"status":"not ready"}. Watch
+  #     the streak climb on GET /_sys/health-debug (debug.enabled, loopback-only),
+  #     under data.components.messaging: details.subscribed_consumers vs
+  #     declared_consumers, consumer_max_fail_streak, consumer_resubscribes, and
+  #     error "consumer re-subscribe exhausted" once the arm fails. The
+  #     `Readiness check failed` log line names the blocking kind
+  #     (component=messaging). With the OTLP export on, the
+  #     messaging.consumer.* and app.readiness.status gauges carry the same.
   #   - publisher arm: the existing "is the leased publisher ready?" check is now
   #     judged critically too, so a broker outage (any publisher not-ready moment)
   #     answers 503 at once, with no streak.

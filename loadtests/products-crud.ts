@@ -309,11 +309,11 @@ export function setup(): void {
 
   console.log('✅ Health check passed');
 
-  // Readiness snapshot, informational only. The /ready 200 body carries the
-  // per-consumer messaging counters (go-bricks v0.65.0, #1684), recorded so a
-  // run shows whether the AMQP consumer was attached before load started. A
-  // 503 is reported, not fatal — this test measures CRUD, not the probe — and
-  // expectedStatuses keeps it out of http_req_failed.
+  // Readiness snapshot, informational only. Since go-bricks v0.69.0 /ready
+  // answers exactly {"status":"ready"} (200) or {"status":"not ready"} (503),
+  // so the run records just the status. A 503 is reported, not fatal — this
+  // test measures CRUD, not the probe — and expectedStatuses keeps it out of
+  // http_req_failed.
   const readyURL = `${config.baseURL}${config.apiPrefix}/ready`;
   const ready = http.get(readyURL, {
     tags: { endpoint: 'ready' },
@@ -321,17 +321,14 @@ export function setup(): void {
   });
   if (ready.status === 200) {
     // Informational means it must never abort the run: an unparseable body is
-    // reported like a missing counter.
-    let stats: ReadyResponse['messaging_stats'];
+    // reported like a missing field.
+    let readyStatus: ReadyResponse['status'] | undefined;
     try {
-      stats = (JSON.parse(ready.body as string) as ReadyResponse).messaging_stats;
+      readyStatus = (JSON.parse(ready.body as string) as ReadyResponse).status;
     } catch (e) {
-      stats = undefined;
+      readyStatus = undefined;
     }
-    console.log(
-      `🩺 /ready 200 — messaging consumers subscribed ${stats?.subscribed_consumers ?? '?'}/${stats?.declared_consumers ?? '?'}, ` +
-        `max fail streak ${stats?.consumer_max_fail_streak ?? '?'}, resubscribes ${stats?.consumer_resubscribes ?? '?'}`,
-    );
+    console.log(`🩺 /ready 200 — status ${readyStatus ?? '?'}`);
   } else {
     console.warn(`⚠️  /ready answered ${ready.status} — the service is out of rotation; CRUD results may not reflect a healthy instance`);
   }

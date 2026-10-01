@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments/domain"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments/service"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
+	msgtesting "github.com/gaborage/go-bricks/messaging/testing"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -184,4 +187,57 @@ func TestAuthorizePaymentInternalErrorIsOpaque(t *testing.T) {
 	_, apiErr := handler.AuthorizePayment(validBody(), newTestContext(newMockConfig()))
 	require.NotNil(t, apiErr)
 	assert.NotContains(t, apiErr.Message(), "secret")
+}
+
+// orderIDPattern matches the order id the service mints (a random UUID, which
+// can hold a run of five or more digits), so the digit-run check below judges
+// only what else reached the sink.
+var orderIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// With the real service behind the handler, a payment the broker returned as
+// unroutable is a 500, never a 202 (go-bricks v0.69.0, ADR-122: the publisher is
+// Mandatory). Both error shapes are spelled as messaging/amqp_client.go builds
+// them: every attempt returned (publishExhausted), and a deadline that cut the
+// retries short after a return (wrapCause). The response stays opaque and the
+// log line names the cause without any card data.
+func TestAuthorizePaymentUnroutablePublishIsAnInternalError(t *testing.T) {
+	tests := map[string]error{
+		"attempts exhausted": fmt.Errorf("%w after %d attempts: %w",
+			messaging.ErrPublishRetriesExhausted, 5, messaging.ErrPublishUnroutable),
+		"deadline during the retries": fmt.Errorf("%w; last attempt: %w",
+			context.DeadlineExceeded, messaging.ErrPublishUnroutable),
+	}
+
+	for name, publishErr := range tests {
+		t.Run(name, func(t *testing.T) {
+			log, logs := captureFilteredLogger(t, appFilterConfig())
+			capture := msgtesting.NewCapturePublisher[domain.PaymentAuthorized]()
+			capture.Fail(publishErr)
+			svc := service.NewPaymentService(func(context.Context) (messaging.AMQPClient, error) { return nil, nil }, log)
+			svc.SetPublisher(capture)
+			handler := NewPaymentHandler(svc, log)
+
+			result, apiErr := handler.AuthorizePayment(validBody(), newTestContext(newMockConfig()))
+			require.NotNil(t, apiErr, "a returned publish must never answer 202")
+			assert.Equal(t, http.StatusInternalServerError, apiErr.HTTPStatus())
+			assert.Equal(t, errCodeInternal, apiErr.ErrorCode())
+			status, _, _ := result.ResultMeta()
+			assert.NotEqual(t, http.StatusAccepted, status)
+			assert.Nil(t, result.Data, "no order is reported for a payment no queue received")
+			assert.Len(t, capture.Events(), 1, "the request reached the publisher")
+
+			assert.NotContains(t, apiErr.Message(), "unroutable", "the cause stays in the log, not the response")
+			assert.NotContains(t, apiErr.Message(), testPAN)
+
+			line := logs.String()
+			require.Contains(t, line, "Failed to authorize payment")
+			assert.Contains(t, line, messaging.ErrPublishUnroutable.Error(), "the operator can see why it failed")
+			assert.NotContains(t, line, testPAN)
+			assert.NotContains(t, line, redactFixtureHolder)
+			assert.NotContains(t, line, "expMonth")
+			assert.NotContains(t, line, "expYear")
+			assert.NotRegexp(t, longDigitRun, orderIDPattern.ReplaceAllString(line, "<orderId>"),
+				"no digit run longer than 4 may reach the sink")
+		})
+	}
 }

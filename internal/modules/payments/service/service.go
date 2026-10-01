@@ -92,6 +92,12 @@ func (s *PaymentService) Authorize(ctx context.Context, req AuthorizeRequest) (*
 
 	// One call. The seal tags on PaymentAuthorized make the plaintext publish of
 	// this type unrepresentable — there is no accept-unsealed door.
+	//
+	// A failure is wrapped with the order id and nothing else. The handle is
+	// declared Mandatory, so a publish no queue receives ends here as
+	// ErrPublishRetriesExhausted wrapping ErrPublishUnroutable (match with
+	// errors.Is). The framework's error text names the sentinels and the attempt
+	// count, never the sealed body, so no card data rides along.
 	if err := s.publisher.Publish(ctx, client, evt); err != nil {
 		return nil, fmt.Errorf("publish %s: %w", evt.OrderID, err)
 	}

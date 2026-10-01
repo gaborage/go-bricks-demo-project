@@ -2,7 +2,7 @@
 # scripts/consumer-readiness-demo.sh
 #
 # Readiness that fails closed on a stalled consumer (go-bricks v0.65.0, #1686 +
-# #1684, ADR-114).
+# #1684, ADR-114; read through the v0.69.0 /ready contract, #1832, ADR-120).
 #
 # `messaging.consumers.critical: true` makes GET /api/v1/ready answer 503 once a
 # declared AMQP consumer is unsubscribed AND its supervisor has failed 5
@@ -13,10 +13,20 @@
 # publisher not-ready moment answers 503 at once. This script turns it on for
 # the one app process it boots, and for nothing else.
 #
+# Where each fact is read (go-bricks v0.69.0): /ready answers exactly
+# {"status":"ready"} (200) or {"status":"not ready"} (503), so it is read for
+# its status code and that body only. The per-kind verdict (status, critical,
+# error) and every consumer counter live in the access-controlled
+# /_sys/health-debug view, under .data.components.messaging, which this script
+# therefore requires. The blocking kind of a 503 is named only on the app's
+# `Readiness check failed` log line (component=messaging). The v0.69.0 gauges
+# (app.readiness.status, messaging.consumer.*) are not used: they need the
+# OTLP export on, which this launch leaves off, and app.readiness.status only
+# moves when something judges readiness.
+#
 # What it does:
 #   1. builds and boots its OWN app with MESSAGING_CONSUMERS_CRITICAL=true, plus
-#      the access-controlled /_sys/health-debug view on loopback only — the 503
-#      body carries no statistics, so that is where the streak stays visible;
+#      the access-controlled /_sys/health-debug view on loopback only;
 #   2. finds the connection behind the payments.authorized consumer through the
 #      management API, and records the app user's permissions on the vhost with
 #      `rabbitmqctl list_user_permissions`;
@@ -24,8 +34,9 @@
 #      untouched, every other queue and stream stays readable — and closes that
 #      one connection, so the consumer must re-subscribe and the broker refuses
 #      its basic.consume with 403 ACCESS_REFUSED;
-#   4. polls /ready while messaging_stats.consumer_max_fail_streak climbs on the
-#      200 body, until the verdict turns 503 at the threshold;
+#   4. polls /ready and the debug view while consumer_max_fail_streak climbs,
+#      until /ready turns 503 at the threshold and the debug view names the
+#      consumer arm;
 #   5. restores the EXACT recorded permissions and polls until the consumer is
 #      subscribed again (consumer_resubscribes +1) and /ready is back to 200.
 #
@@ -88,7 +99,7 @@ QUEUE="payments.authorized"
 # Everything the default dev grant ('.*') allows, except that one queue. Erlang
 # `re` is PCRE, so the negative lookahead is honored.
 REVOKED_READ='^(?!payments\.authorized$).*'
-# Framework constants (messaging/registry.go, app/readiness.go at v0.67.0).
+# Framework constants (messaging/registry.go, app/readiness.go at v0.69.0).
 GIVEUP_STREAK=5
 CONSUMER_ARM_ERROR="consumer re-subscribe exhausted"
 
@@ -243,17 +254,66 @@ http_status() {
     curl -sS -o "$2" -w '%{http_code}' --max-time 5 "$1" 2>/dev/null || true
 }
 
-# debug_messaging — the messaging component of /_sys/health-debug on stdout,
-# or a non-zero return when the debug view does not answer.
-debug_messaging() {
-    [[ "$(http_status "$DEBUG_HEALTH_URL" "$DEBUG_BODY")" == 200 ]] || return 1
-    jq -e '.data.components.messaging' "$DEBUG_BODY" 2>/dev/null
+# ready_body_is VERDICT — the last /ready body is exactly {"status":VERDICT},
+# compared as JSON. Since go-bricks v0.69.0 (#1832, ADR-120) that one key is the
+# whole body: no per-kind status, no <kind>_stats, no error text.
+ready_body_is() {
+    jq -e --arg v "$1" '. == {status: $v}' "$READY_BODY" >/dev/null 2>&1
 }
 
-# app_log_lines JQ_FILTER — the app log's JSON lines matching the filter. The
-# app is started with log.output.format=json, so every framework line parses.
+# jq prelude for the debug view: `m` is its messaging component (status,
+# critical, error — absent while healthy — and details), `d` is m.details, the
+# counters /ready carried before v0.69.0 under messaging_stats.
+JQ_MESSAGING='def m: .data.components.messaging; def d: m.details;'
+
+# debug_jq FILTER [JQ_OPTS...] — FILTER, which may use `m` and `d`, over the
+# last debug body.
+debug_jq() {
+    jq "${@:2}" "$JQ_MESSAGING $1" "$DEBUG_BODY"
+}
+
+# fetch_debug — one GET of /_sys/health-debug into DEBUG_BODY. Sets DEBUG_CODE
+# ("000" when nothing answered) and fails unless the view answered 200 with a
+# messaging component. Run it in this shell, never inside $(...), or DEBUG_CODE
+# is lost.
+DEBUG_CODE=""
+fetch_debug() {
+    DEBUG_CODE="$(http_status "$DEBUG_HEALTH_URL" "$DEBUG_BODY")"
+    [[ "$DEBUG_CODE" == 200 ]] && debug_jq 'm | objects' -e >/dev/null 2>&1
+}
+
+# debug_unavailable — the debug view answered, but not with the messaging
+# component. Nothing can stand in for it: since v0.69.0 it is the only place
+# the consumer counters and the per-kind verdict are readable.
+debug_unavailable() {
+    fail "$DEBUG_HEALTH_URL answered HTTP $DEBUG_CODE, not 200 with a messaging component. Since go-bricks v0.69.0 /ready carries its verdict alone, so this demo reads every counter from that view. The app is booted with DEBUG_ENABLED=true and DEBUG_ALLOWEDIPS=127.0.0.1,::1, so APP_URL ($APP_URL) must reach it over loopback"
+}
+
+# poll_line CODE — one progress line: /ready's status code beside the last
+# debug body's messaging verdict and counters.
+poll_line() {
+    if [[ "$DEBUG_CODE" == 200 ]]; then
+        # shellcheck disable=SC2016 # $code is a jq variable
+        debug_jq '"/ready \($code)  messaging=\(m.status)  subscribed \(d.subscribed_consumers)/\(d.declared_consumers)  consumer_max_fail_streak=\(d.consumer_max_fail_streak)  consumer_resubscribes=\(d.consumer_resubscribes)"' \
+            -r --arg code "$1"
+    else
+        echo "/ready $1  health-debug HTTP $DEBUG_CODE"
+    fi
+}
+
+# messaging_json — the last debug body's messaging component: the verdict, and
+# the consumer counters (go-bricks v0.65.0, #1684).
+messaging_json() {
+    debug_jq 'm | {status, critical} + (if has("error") then {error} else {} end)
+        + {details: (.details | {declared_consumers, subscribed_consumers, consumer_max_fail_streak,
+                                 consumer_resubscribes, consumer_registries, active_publishers})}'
+}
+
+# app_log_lines JQ_FILTER [JQ_OPTS...] — the app log's JSON lines matching the
+# filter. The app is started with log.output.format=json, so every framework
+# line parses.
 app_log_lines() {
-    jq -Rr "fromjson? | $1" "$APP_LOG" 2>/dev/null || true
+    jq -Rr "${@:2}" "fromjson? | $1" "$APP_LOG" 2>/dev/null || true
 }
 
 # app_failed MESSAGE — surface the app's own warnings and errors (message and
@@ -263,14 +323,6 @@ app_failed() {
     app_log_lines 'select(.level == "warn" or .level == "error" or .level == "fatal" or .level == "panic")
         | "  [\(.level)] \(.message // "")\(if .error then " — \(.error)" else "" end)"' | tail -n 15 >&2
     fail "$1"
-}
-
-ready_line() {
-    jq -r '"/ready 200  messaging=\(.messaging)  subscribed \(.messaging_stats.subscribed_consumers)/\(.messaging_stats.declared_consumers)  consumer_max_fail_streak=\(.messaging_stats.consumer_max_fail_streak)  consumer_resubscribes=\(.messaging_stats.consumer_resubscribes)"' "$READY_BODY"
-}
-
-stats_json() {
-    jq '{status, messaging, messaging_stats: (.messaging_stats | {status, declared_consumers, subscribed_consumers, consumer_max_fail_streak, consumer_resubscribes, consumer_registries, active_publishers})}' "$READY_BODY"
 }
 
 # --- preflight ------------------------------------------------------------
@@ -300,7 +352,9 @@ go build -o "$APP_BIN" ./cmd/api/
 #   MESSAGING_CONSUMERS_CRITICAL  the key under demonstration (messaging.consumers.critical)
 #   LOG_OUTPUT_FORMAT=json        so this script can read the re-subscribe log lines
 #   DEBUG_*                       /_sys/health-debug only, loopback only; the
-#                                 goroutine, gc and info endpoints stay off
+#                                 goroutine, gc and info endpoints stay off.
+#                                 Required: since v0.69.0 it is the only view
+#                                 of the consumer counters and the verdict
 (
     unset DEBUG
     export APP_ENV=development CORS_DEV_WILDCARD=true SERVER_PORT
@@ -313,38 +367,41 @@ go build -o "$APP_BIN" ./cmd/api/
 APP_PID=$!
 echo "app PID $APP_PID on $APP_URL (log: $APP_LOG)"
 
+# The debug routes are registered before the listener opens, so once /ready
+# answers, a debug view that refuses (anything but a timeout) is final.
 deadline=$((SECONDS + BOOT_TIMEOUT))
 code="000"
 while :; do
     kill -0 "$APP_PID" 2>/dev/null || app_failed "the app exited during startup"
     code="$(http_status "$API_BASE/ready" "$READY_BODY")"
-    if [[ "$code" == 200 ]] && jq -e '.messaging_stats.declared_consumers >= 1
-            and .messaging_stats.subscribed_consumers == .messaging_stats.declared_consumers' \
-            "$READY_BODY" >/dev/null 2>&1; then
-        break
+    if [[ "$code" == 200 ]]; then
+        if fetch_debug; then
+            debug_jq 'd.declared_consumers >= 1 and d.subscribed_consumers == d.declared_consumers' -e \
+                >/dev/null 2>&1 && break
+        elif [[ "$DEBUG_CODE" != 000 ]]; then
+            debug_unavailable
+        fi
     fi
-    ((SECONDS < deadline)) || app_failed "no subscribed consumer on /ready after ${BOOT_TIMEOUT}s (last HTTP $code)"
+    ((SECONDS < deadline)) \
+        || app_failed "no subscribed consumer on $DEBUG_HEALTH_URL after ${BOOT_TIMEOUT}s (last /ready HTTP $code, last health-debug HTTP ${DEBUG_CODE:-not reached})"
     sleep 1
 done
 
 echo
-echo "GET $API_BASE/ready → 200 (the consumer counters are go-bricks v0.65.0, #1684):"
-stats_json
-BASE_RESUBSCRIBES="$(jq -r '.messaging_stats.consumer_resubscribes' "$READY_BODY")"
+echo "GET $API_BASE/ready → 200, the verdict alone (go-bricks v0.69.0, ADR-120):"
+jq -c . "$READY_BODY"
+ready_body_is ready \
+    || fail "/ready answered 200 with '$(head -c 200 "$READY_BODY")', not exactly {\"status\":\"ready\"}"
 
-DEBUG_OK=0
-if MESSAGING_DEBUG="$(debug_messaging)"; then
-    DEBUG_OK=1
-    echo
-    echo "GET $DEBUG_HEALTH_URL → messaging component:"
-    jq '{status, critical}' <<<"$MESSAGING_DEBUG"
-    [[ "$(jq -r '.critical' <<<"$MESSAGING_DEBUG")" == true ]] \
-        || fail "messaging is not critical — MESSAGING_CONSUMERS_CRITICAL did not reach the app"
-    echo "  critical=true ← the override took: this kind can now fail /ready"
-else
-    echo
-    echo "⚠️  $DEBUG_HEALTH_URL did not answer — continuing with /ready alone"
-fi
+echo
+echo "GET $DEBUG_HEALTH_URL → messaging component (the verdict and the counters):"
+messaging_json
+[[ "$(debug_jq 'm.critical' -r)" == true ]] \
+    || fail "messaging is not critical — MESSAGING_CONSUMERS_CRITICAL did not reach the app"
+echo "  critical=true ← the override took: this kind can now fail /ready"
+BASE_RESUBSCRIBES="$(debug_jq 'd.consumer_resubscribes' -r)"
+[[ "$BASE_RESUBSCRIBES" =~ ^[0-9]+$ ]] \
+    || fail "consumer_resubscribes is '$BASE_RESUBSCRIBES' on $DEBUG_HEALTH_URL, not a count"
 
 # --- 2. find the consumer and record permissions --------------------------
 
@@ -440,11 +497,12 @@ echo "is gone and its supervisor starts re-subscribing"
 
 # --- 4. watch the streak climb until /ready fails closed ------------------
 
-section "4/5  Poll /ready while the re-subscribe streak climbs to $GIVEUP_STREAK"
+section "4/5  Poll /ready and the debug view while the re-subscribe streak climbs to $GIVEUP_STREAK"
 
 echo "Give-up threshold: $GIVEUP_STREAK consecutive failed re-subscribes (framework constant,"
 echo "shared with the WARN escalation). Backoff is full jitter from a 5s floor, capped"
-echo "at 60s, so expect the verdict in roughly 30s to 2.5min."
+echo "at 60s, so expect the verdict in roughly 30s to 2.5min. /ready gives the status"
+echo "code; the counters on each line come from $DEBUG_HEALTH_URL."
 echo
 
 T0=$SECONDS
@@ -454,11 +512,9 @@ while :; do
     kill -0 "$APP_PID" 2>/dev/null || app_failed "the app exited while the consumer was refused"
     code="$(http_status "$API_BASE/ready" "$READY_BODY")"
     [[ "$code" == 503 ]] && break
-    if [[ "$code" == 200 ]]; then
-        line="$(ready_line)"
-    else
-        line="/ready $code"
-    fi
+    # A timeout (000) retries; any other refusal of the debug view is final.
+    fetch_debug || [[ "$DEBUG_CODE" == 000 ]] || debug_unavailable
+    line="$(poll_line "$code")"
     if [[ "$line" != "$last" ]]; then
         printf '  [+%3ds] %s\n' $((SECONDS - T0)) "$line"
         last="$line"
@@ -469,22 +525,49 @@ done
 printf '  [+%3ds] /ready 503\n' $((SECONDS - T0))
 
 echo
-echo "GET $API_BASE/ready → 503 (fixed body: no statistics, no queue name — ADR-048):"
-jq . "$READY_BODY"
-[[ "$(jq -r '.status' "$READY_BODY")" == "not ready" && "$(jq -r '.messaging // empty' "$READY_BODY")" == unhealthy ]] \
-    || fail "the 503 was not raised by the messaging kind"
+echo "GET $API_BASE/ready → 503, the verdict alone (no kind, no counters, no error text — ADR-120):"
+jq -c . "$READY_BODY"
+ready_body_is "not ready" \
+    || fail "/ready answered 503 with '$(head -c 200 "$READY_BODY")', not exactly {\"status\":\"not ready\"}"
 
-if [[ "$DEBUG_OK" == 1 ]]; then
-    MESSAGING_DEBUG="$(debug_messaging)" || fail "$DEBUG_HEALTH_URL stopped answering"
-    echo
-    echo "GET $DEBUG_HEALTH_URL → messaging component (where the streak stays visible):"
-    jq '{status, critical, error, details: (.details | {declared_consumers, subscribed_consumers, consumer_max_fail_streak, consumer_resubscribes})}' <<<"$MESSAGING_DEBUG"
-    DEBUG_ERROR="$(jq -r '.error // empty' <<<"$MESSAGING_DEBUG")"
-    [[ "$DEBUG_ERROR" == "$CONSUMER_ARM_ERROR" ]] \
-        || fail "the 503 came from '$DEBUG_ERROR', not the consumer arm ('$CONSUMER_ARM_ERROR') — is the broker up?"
-    echo "  error='$CONSUMER_ARM_ERROR' ← the consumer arm, not the publisher's"
-    echo "  'publisher not ready' — the broker and the publisher never went down"
-fi
+# As in the poll loops, only a timeout (000) retries. READ stays revoked, so the
+# arm is still failing on every attempt.
+for _ in 1 2 3; do
+    fetch_debug && break
+    [[ "$DEBUG_CODE" == 000 ]] || debug_unavailable
+done
+[[ "$DEBUG_CODE" == 200 ]] || debug_unavailable
+echo
+echo "GET $DEBUG_HEALTH_URL → messaging component (where the verdict and the streak are read):"
+messaging_json
+DEBUG_STATUS="$(debug_jq 'm.status' -r)"
+DEBUG_ERROR="$(debug_jq 'm.error // empty' -r)"
+DEBUG_STREAK="$(debug_jq 'd.consumer_max_fail_streak' -r)"
+[[ "$DEBUG_STATUS" == unhealthy ]] \
+    || fail "the debug view reports messaging '$DEBUG_STATUS' beside the 503, not 'unhealthy'"
+[[ "$DEBUG_ERROR" == "$CONSUMER_ARM_ERROR" ]] \
+    || fail "messaging failed with '$DEBUG_ERROR', not the consumer arm ('$CONSUMER_ARM_ERROR') — is the broker up?"
+# shellcheck disable=SC2016 # $n is a jq variable
+debug_jq 'd.consumer_max_fail_streak >= $n' -e --argjson n "$GIVEUP_STREAK" >/dev/null 2>&1 \
+    || fail "consumer_max_fail_streak is '$DEBUG_STREAK', below the give-up streak $GIVEUP_STREAK"
+echo "  error='$CONSUMER_ARM_ERROR' ← the consumer arm, not the publisher's"
+echo "  'publisher not ready' — the broker and the publisher never went down"
+
+# /ready's gate stops at the first failing critical kind, and the 503 body no
+# longer names it: the app logs it once per refused /ready instead.
+echo
+echo "App log — the kind that blocked /ready (only the log names it since v0.69.0):"
+BLOCKING=""
+for _ in 1 2 3 4 5; do
+    # shellcheck disable=SC2016 # $e is a jq variable
+    BLOCKING="$(app_log_lines 'select(.message == "Readiness check failed" and .component == "messaging" and .error == $e)
+        | "  [\(.level)] \(.message) component=\(.component) error=\(.error)"' --arg e "$CONSUMER_ARM_ERROR" | tail -n 1)"
+    [[ -n "$BLOCKING" ]] && break
+    sleep 1
+done
+[[ -n "$BLOCKING" ]] \
+    || fail "no 'Readiness check failed' line with component=messaging and error='$CONSUMER_ARM_ERROR' in $APP_LOG — the 503 was not raised by the messaging kind"
+echo "$BLOCKING"
 
 echo
 echo "App log — the supervisor's failed attempts (Debug for 1-4, WARN from $GIVEUP_STREAK):"
@@ -518,16 +601,15 @@ last=""
 while :; do
     kill -0 "$APP_PID" 2>/dev/null || app_failed "the app exited during recovery"
     code="$(http_status "$API_BASE/ready" "$READY_BODY")"
-    if [[ "$code" == 200 ]]; then
-        line="$(ready_line)"
-        if jq -e '.messaging_stats.declared_consumers >= 1
-                and .messaging_stats.subscribed_consumers == .messaging_stats.declared_consumers
-                and .messaging_stats.consumer_max_fail_streak == 0' "$READY_BODY" >/dev/null 2>&1; then
-            printf '  [+%3ds] %s\n' $((SECONDS - T0)) "$line"
-            break
-        fi
-    else
-        line="/ready $code"
+    fetch_debug || [[ "$DEBUG_CODE" == 000 ]] || debug_unavailable
+    line="$(poll_line "$code")"
+    if [[ "$code" == 200 && "$DEBUG_CODE" == 200 ]] \
+        && debug_jq 'm.status == "healthy"
+                and d.declared_consumers >= 1
+                and d.subscribed_consumers == d.declared_consumers
+                and d.consumer_max_fail_streak == 0' -e >/dev/null 2>&1; then
+        printf '  [+%3ds] %s\n' $((SECONDS - T0)) "$line"
+        break
     fi
     if [[ "$line" != "$last" ]]; then
         printf '  [+%3ds] %s\n' $((SECONDS - T0)) "$line"
@@ -539,8 +621,15 @@ done
 
 echo
 echo "GET $API_BASE/ready → 200:"
-stats_json
-FINAL_RESUBSCRIBES="$(jq -r '.messaging_stats.consumer_resubscribes' "$READY_BODY")"
+jq -c . "$READY_BODY"
+ready_body_is ready \
+    || fail "/ready answered 200 with '$(head -c 200 "$READY_BODY")', not exactly {\"status\":\"ready\"}"
+echo
+echo "GET $DEBUG_HEALTH_URL → messaging component:"
+messaging_json
+FINAL_RESUBSCRIBES="$(debug_jq 'd.consumer_resubscribes' -r)"
+[[ "$FINAL_RESUBSCRIBES" =~ ^[0-9]+$ ]] \
+    || fail "consumer_resubscribes is '$FINAL_RESUBSCRIBES' on $DEBUG_HEALTH_URL, not a count"
 ((FINAL_RESUBSCRIBES > BASE_RESUBSCRIBES)) \
     || fail "consumer_resubscribes did not move ($BASE_RESUBSCRIBES → $FINAL_RESUBSCRIBES)"
 
