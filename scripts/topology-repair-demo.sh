@@ -18,9 +18,10 @@
 #
 #   1. payment-events (sealed payments): publish one payment and see it on the
 #      consumerless payments.authorized.tap queue; delete the exchange; publish
-#      again; see the exchange and both of its bindings come back; check that the
-#      publish into the hole told the truth (a 202 is on the tap, a 500 is not);
-#      and see a payment published after the repair reach the tap.
+#      again; see the exchange and both of its bindings come back; check the
+#      publish into the hole (a 202 must be on the tap; a 500 is reported as
+#      unconfirmed, on the tap or not); and see a payment published after the
+#      repair reach the tap.
 #   2. product-events (outbox relay): delete it, create a product, and see the
 #      exchange come back once the relay's next poll publishes into the hole.
 #
@@ -32,8 +33,12 @@
 #     re-bound is returned by the broker, retried on a 100ms backoff within
 #     messaging.reconnect.maxpublishattempts (default 5), and answered 500 if the
 #     last attempt is returned too. It is no longer acked and dropped behind a
-#     202. Step 3 asserts that: a 202 reaches the tap, a 500 does not. Residual
-#     caveats:
+#     202. Step 3 asserts that a 202 reaches the tap. A 500 is UNCONFIRMED, not
+#     refused: a deadline, a shutdown or a confirm lost with its channel can end
+#     in a 500 after the event reached a queue. Only the app log shows whether
+#     every attempt was returned, and this script cannot read it, so step 3
+#     reports whether a 500's payment is on the tap and never fails on it.
+#     Residual caveats:
 #       - Mandatory means routed to at least one queue. Bindings replay in
 #         declaration order, payments.authorized before payments.authorized.tap,
 #         so a publish landing between the two reaches the consumer but not the
@@ -355,8 +360,10 @@ echo "   No restart. The app log has 'Messaging topology redeclared on new chann
 
 section "3/4  Delivery after the repair"
 
-# The invariant the Mandatory publisher buys: the answer tells the truth. A 202
-# was routed to a queue, and a 500 reached none. Never "202 and absent".
+# The invariant the Mandatory publisher buys: a 202 was routed to a queue. Never
+# "202 and absent". A 5xx is unconfirmed, not a refusal: a returned publish ends
+# in one, but so can a deadline, a shutdown or a confirm lost with its channel
+# after the event reached a queue. So a 5xx is reported, on the tap or not.
 case "$TRIP_STATUS" in
     2*)
         [[ -n "$TRIP_ORDER" ]] || fail "the payment published into the hole got HTTP $TRIP_STATUS but no order id"
@@ -366,14 +373,21 @@ case "$TRIP_STATUS" in
         echo "   its retry ran on the new channel after the pass had re-bound the queues."
         ;;
     5*)
+        # Report only, never fail: without the app log this script cannot tell a
+        # returned publish from one whose confirm was lost after it was queued.
         if tap_has amount "$TRIP_AMOUNT"; then
-            fail "the payment published into the hole got HTTP $TRIP_STATUS, yet a body carrying its marker amount $TRIP_AMOUNT reached '$TAP_QUEUE': the caller was told it failed while the event went out"
+            echo "⚠️  the payment published into the hole got HTTP $TRIP_STATUS, and a body carrying its"
+            echo "   marker amount ($TRIP_AMOUNT) reached '$TAP_QUEUE': delivered despite the 5xx."
+            echo "   A 5xx is unconfirmed, not refused. Reconcile on the orderId in the app log's"
+            echo "   ERROR 'Failed to authorize payment' line; a client retry would mint a second one."
+        else
+            echo "ℹ️  the payment published into the hole got HTTP $TRIP_STATUS, and nothing carrying its"
+            echo "   marker amount ($TRIP_AMOUNT) reached '$TAP_QUEUE' within the read window. That is"
+            echo "   consistent with a refusal (every attempt returned or 404'd within the ~0.4s retry"
+            echo "   budget), not proof of one: a copy routed only to '$QUEUE' in the gap between the"
+            echo "   two binding declares would not show here. The outcome stays unconfirmed; the app"
+            echo "   log's ERROR 'Failed to authorize payment' line carries the orderId to reconcile on."
         fi
-        echo "✅ the payment published into the hole got HTTP $TRIP_STATUS, and nothing carrying its"
-        echo "   marker amount ($TRIP_AMOUNT) reached the tap. Every attempt landed before the"
-        echo "   queues were re-bound (returned by the broker) or before the exchange was back"
-        echo "   (404), all within the ~0.4s retry budget. The caller was told the authorization"
-        echo "   failed, instead of getting 202 for an event no queue received."
         ;;
     *)
         echo "ℹ️  the payment published into the hole got no answer from the app (HTTP ${TRIP_STATUS:-<no response>})."
@@ -429,5 +443,6 @@ echo "What does not: the native streams lane (product-activity, port 5552) is"
 echo "declared at startup only; a deleted stream needs an app restart."
 echo "The window: a payment published mid-repair is returned by the broker until its"
 echo "queues are re-bound. The Mandatory publisher retries it for about 0.4s, then"
-echo "answers 500, so a 202 means a queue received it."
+echo "answers 500, so a 202 means a queue received it. A 500 is unconfirmed, not a"
+echo "refusal: reconcile on the orderId in the app log before re-submitting."
 echo "Measure it under load: make loadtest-topology-repair"

@@ -29,7 +29,11 @@
 // broker, retried on a 100ms backoff within messaging.reconnect.maxpublishattempts
 // (default 5), and answered 500 if its last attempt is returned too. Before, it
 // was broker-acked and dropped while the caller got 202. Those 500s are counted
-// apart ("5xx in repair window"): the caller was told, so they are not a loss.
+// apart ("5xx in repair window", outcome unconfirmed). A 500 is unconfirmed, not
+// refused: a deadline, a shutdown or a confirm lost with its channel can end in
+// a 500 after the event reached a queue. The counters measure HTTP outcomes, not
+// delivery, and the loss's upper bound (payments_not_accepted) already includes
+// every 5xx.
 // The loss stays a REPORTED number, never a failed threshold, because three
 // caveats remain:
 //   - Mandatory means routed to at least one queue. Bindings replay in
@@ -232,8 +236,11 @@ const productsCreated = new Counter('products_created');
 const productsNotCreated = new Counter('products_not_created');
 const paymentsAccepted = new Counter('payments_accepted');
 const paymentsNotAccepted = new Counter('payments_not_accepted');
-// 5xx answers: the Mandatory publisher's unroutable (or 404-NACKed) publish that
-// exhausted its retries. Told to the caller, so never part of the loss.
+// 5xx answers: usually the Mandatory publisher's unroutable (or 404-NACKed)
+// publish that exhausted its retries, but a deadline, a shutdown or a confirm
+// lost with its channel can also answer 5xx after the event was queued. HTTP
+// outcomes with the delivery unconfirmed; payments_not_accepted counts them too,
+// so lostMax already bounds them.
 const payments5xx = new Counter('payments_5xx');
 const payments5xxDisruption = new Counter('payments_5xx_disruption');
 // Success rate per phase, so the report shows the error burst is confined to
@@ -615,11 +622,12 @@ export function handleSummary(data: any): Record<string, string> {
 
   // A 202 whose order never reached the tap is lost, or reached only
   // payments.authorized (the between-bindings gap). A request that did NOT get a
-  // 202 may still have been published: a 500 from a returned Mandatory publish was
-  // never queued, but an HTTP timeout or a confirm lost with its channel leaves the
-  // outcome unknown, and if it landed its order is among `arrived`. So the loss is
-  // exact when every request got a 202, and bounded above by the non-202 count
-  // otherwise.
+  // 202 may still have been published. Every non-202 is unconfirmed, a 500
+  // included: a returned Mandatory publish ends in one, but so can a deadline, a
+  // shutdown or a confirm lost with its channel after the event reached a queue,
+  // and an HTTP timeout leaves the outcome unknown too. If it landed, its order is
+  // among `arrived`. So the loss is exact when every request got a 202, and
+  // bounded above by the non-202 count (5xx included) otherwise.
   const lostMin = Math.max(0, accepted - arrived);
   const lostMax = Math.max(0, accepted - arrived + notAccepted);
   const lostText = lostMin === lostMax
@@ -635,7 +643,7 @@ export function handleSummary(data: any): Record<string, string> {
   routed between the two binding declares (payments.authorized is re-bound
   first, so it reached the consumer, not the tap: queue stats above tap stats),
   a return amqp091 dropped after its 256-slot buffer stayed full for 5s, or a
-  non-202 whose outcome is unknown (the upper bound).`
+  non-202 (5xx included) whose outcome is unconfirmed (the upper bound).`
     : `  No 202 was lost this run. An unroutable publish in the window answers 500
   (Mandatory publisher); the gap between the two binding declares still exists,
   and no publish happened to land inside it.`;
@@ -666,8 +674,8 @@ END-TO-END DELIVERY (${TAP_QUEUE})
   202 Accepted                    ${accepted}
   Distinct orders on the tap      ${arrived}
   Lost in repair window           ${lostText}
-  5xx in repair window            ${count('payments_5xx_disruption')}   (first ${DISRUPTION_S}s after the delete; the caller was told, not a loss)
-  5xx over the whole run          ${count('payments_5xx')}
+  5xx in repair window            ${count('payments_5xx_disruption')}   (outcome unconfirmed; first ${DISRUPTION_S}s after the delete; inside the lost upper bound)
+  5xx over the whole run          ${count('payments_5xx')}   (outcome unconfirmed)
   Duplicates on the tap           ${count('tap_duplicates')}   (a retried publish whose first confirm died with the old channel)
   Foreign bodies skipped          ${count('tap_foreign')}
   Routed to the tap (stats)       ${tapRouted === undefined ? 'n/a' : tapRouted}

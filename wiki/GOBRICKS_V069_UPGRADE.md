@@ -173,10 +173,14 @@ Nothing sets `server.probes.port` today. Before an environment sets it above 0
 
 ## Follow-up recommendations
 
-- **Idempotency key on `POST /api/v1/payments/authorize`**, so a client can
-  retry a 500 without minting a second `orderId`.
-- **Map `ErrPublishUnroutable` to 503 with `Retry-After`** instead of the
-  generic 500: during a repair the condition is transient.
+- **Idempotency key on `POST /api/v1/payments/authorize` first**, so a client
+  can retry a 500 without minting a second `orderId`.
+- **Only once that key exists, map `ErrPublishUnroutable` to 503 with
+  `Retry-After`** instead of the generic 500: during a repair the condition is
+  transient, but a 503 invites automatic retries, and without the key each one
+  mints a new `orderId` for a payment that may already be queued. Until then,
+  callers must not retry automatically and must reconcile on the `orderId` in
+  the ERROR `Failed to authorize payment` log line.
 - **Count delivery on `payments.authorized`, not only the tap,** in
   `loadtests/topology-repair.ts`, so the between-bindings gap stops reading as a
   loss.
@@ -195,7 +199,8 @@ Nothing sets `server.probes.port` today. Before an environment sets it above 0
 - Unit tests pin the adoption: the publisher carries `Mandatory` (a mutation to
   `false` fails the test), the consumer binding is declared before the tap, and
   an unroutable publish answers 500 with no card data.
-- `make redeclare-demo` asserts that a 2xx reaches the tap and a 5xx does not.
+- `make redeclare-demo` asserts that a 2xx reaches the tap, and reports a 5xx
+  as unconfirmed, on the tap or not, without failing.
 - Live proofs, on the local docker stack with `config.development.yaml`:
   - Clean boot: no ERROR, the only WARN is the development CORS one; `/ready`
     answered exactly `{"status":"ready"}`.

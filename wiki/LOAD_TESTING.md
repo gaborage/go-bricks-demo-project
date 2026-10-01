@@ -218,9 +218,12 @@ repair time in the summary with that budget before raising either
   request got a 202. Otherwise it is a range, because a request that failed may
   still have been published. Next to it, *5xx in repair window* (the first
   `TOPO_DISRUPTION` seconds after the delete) and *5xx over the whole run* count
-  the payments answered 500. The caller was told, so they are never part of the
-  loss. The same numbers land under `topology_repair` in the `PERF_SUMMARY_FILE`
-  JSON (`payments_5xx`, `payments_5xx_repair_window`).
+  the payments answered 500. They measure HTTP outcomes and cannot identify
+  confirmed non-delivery: a 5xx is unconfirmed, not refused, because a deadline,
+  a shutdown or a confirm lost with its channel can end in a 500 after the event
+  reached a queue. Every 5xx is a non-202, so the loss range's upper bound
+  already includes them. The same numbers land under `topology_repair` in the
+  `PERF_SUMMARY_FILE` JSON (`payments_5xx`, `payments_5xx_repair_window`).
 
 **Why a loss is not a failure.** The pass is not atomic: exchanges first, then
 queues, then bindings. The payments publisher is `Mandatory` (go-bricks v0.69.0),
@@ -236,8 +239,8 @@ A tap-side loss can still appear, for three reasons:
   to the tap* in the stats is that gap.
 - amqp091 drops a return if its 256-slot buffer stays full for 5s, and that
   publish reads as routed.
-- A non-202 whose outcome is unknown (an HTTP timeout, a confirm lost with its
-  channel) widens the upper bound.
+- A non-202 whose outcome is unknown (a 5xx, an HTTP timeout, a confirm lost
+  with its channel) widens the upper bound.
 
 The test measures what is left instead of hiding it; operationally, treat a
 deleted exchange as an incident and reconcile the payments authorized while it
