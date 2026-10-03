@@ -25,6 +25,9 @@ const (
 	baseOnlyKeyValue   = "/api/v1"
 	devOnlyKey         = "database.host" // set in config.development.yaml only
 	devOnlyKeyValue    = "localhost"
+	appNameKey         = "app.name" // set in config.yml, so every environment shares it
+	appNameValue       = "go-bricks-demo-project"
+	appVersionKey      = "app.version"
 	repoRootFromCmdAPI = "../.."
 )
 
@@ -88,6 +91,11 @@ func TestConfigLayoutBaseIsEnvironmentNeutral(t *testing.T) {
 	values := k.All()
 	require.NotEmpty(t, values, "%s parsed to nothing", baseConfigFile)
 	require.Contains(t, values, baseOnlyKey)
+
+	// The identity lives in the base: an environment without an overlay would
+	// otherwise run as the framework default name, gobricks-service.
+	assert.Equal(t, appNameValue, k.String(appNameKey), "%s must set %s", baseConfigFile, appNameKey)
+	assert.NotEmpty(t, k.String(appVersionKey), "%s must set %s", baseConfigFile, appVersionKey)
 
 	for key, value := range values {
 		assert.Falsef(t, isEnvironmentSpecificKey(key),

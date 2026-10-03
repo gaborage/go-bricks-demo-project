@@ -6,9 +6,9 @@
 # overrides database.host). Maps merge key by key across the layers; a list
 # set by a later layer REPLACES the earlier list, it does not append.
 #
-# Environment-neutral on purpose: module, topology and behavior settings only.
-# No infrastructure hosts or ports, no credentials, no key paths, no dev-only
-# demo knobs. config.development.yaml supplies those for the local
+# Environment-neutral on purpose: app identity, module, topology and behavior
+# settings only. No infrastructure hosts or ports, no credentials, no key paths,
+# no dev-only demo knobs. config.development.yaml supplies those for the local
 # docker-compose stack (`make run`); any other environment supplies them
 # through environment variables — wiki/DEPLOYING.md lists the ones a deploy
 # MUST set.
@@ -20,12 +20,22 @@
 # =============================================================================
 
 # --- Application identity ---------------------------------------------------
-# Not set here, so app.name and app.version stay at the framework defaults
-# (gobricks-service / v1.0.0). A deploy names itself with APP_NAME and
-# APP_VERSION. APP_ENV selects the overlay; it defaults to development, so a
-# deploy that forgets it loads config.development.yaml.
-# app:
-#   name: go-bricks-demo-project
+# Set here so every environment runs under the same name; without it the
+# framework default is gobricks-service. app.name is stamped as the AMQP app_id
+# of every publish, logged as app/service at startup, shown on
+# /_sys/health-debug and, with the OTLP export on, names the tracer and becomes
+# server.address on HTTP spans and metrics. It is NOT the OTel resource
+# service.name — that is observability.service.name (OBSERVABILITY_SERVICE_NAME).
+#
+# app.version is the release version, and the place a build pipeline reads it
+# from: bump it here per release. v1.0.0 matches the framework default, so it
+# changes nothing at runtime. APP_NAME and APP_VERSION still override both.
+#
+# APP_ENV selects the overlay; it defaults to development, so a deploy that
+# forgets it loads config.development.yaml.
+app:
+  name: go-bricks-demo-project
+  version: v1.0.0
 
 # --- HTTP Server ------------------------------------------------------------
 # All routes — including health and ready — are mounted under this base path.
