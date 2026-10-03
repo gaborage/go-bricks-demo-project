@@ -87,7 +87,7 @@ install_linux() {
     log_info "Installing k6 on Linux..."
 
     # Detect Linux distribution
-    if [ -f /etc/os-release ]; then
+    if [[ -f /etc/os-release ]]; then
         . /etc/os-release
         case "$ID" in
             ubuntu|debian)
@@ -164,7 +164,7 @@ install_direct() {
     # Get latest version
     local latest_version=$(curl -s https://api.github.com/repos/grafana/k6/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
 
-    if [ -z "$latest_version" ]; then
+    if [[ -z "$latest_version" ]]; then
         log_error "Failed to get latest k6 version"
         exit 1
     fi
@@ -232,17 +232,17 @@ print_usage() {
     echo "📚 Quick Start:"
     echo ""
     echo "Run a load test:"
-    echo "  k6 run loadtests/products-crud.js"
+    echo "  k6 run loadtests/products-crud.ts"
     echo ""
     echo "Run with custom options:"
-    echo "  k6 run --vus 50 --duration 5m loadtests/products-crud.js"
+    echo "  k6 run --vus 50 --duration 5m loadtests/products-crud.ts"
     echo ""
     echo "Available tests:"
-    echo "  • loadtests/products-crud.js       - Realistic CRUD mix"
-    echo "  • loadtests/products-read-only.js  - Read-only baseline"
-    echo "  • loadtests/ramp-up-test.js        - Gradual load increase"
-    echo "  • loadtests/spike-test.js          - Traffic spike simulation"
-    echo "  • loadtests/sustained-load.js      - Extended stability test"
+    echo "  • loadtests/products-crud.ts       - Realistic CRUD mix"
+    echo "  • loadtests/products-read-only.ts  - Read-only baseline"
+    echo "  • loadtests/ramp-up-test.ts        - Gradual load increase"
+    echo "  • loadtests/spike-test.ts          - Traffic spike simulation"
+    echo "  • loadtests/sustained-load.ts      - Extended stability test"
     echo ""
     echo "Using Makefile:"
     echo "  make loadtest-crud      - Run CRUD mix test"

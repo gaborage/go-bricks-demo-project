@@ -65,7 +65,8 @@ done
 
 # debug_json <path> — the JSON body of a /_sys debug endpoint, or nothing.
 debug_json() {
-    curl -fsS --max-time 3 "$APP_URL/_sys/$1" 2>/dev/null || true
+    local endpoint="$1"
+    curl -fsS --max-time 3 "$APP_URL/_sys/$endpoint" 2>/dev/null || true
 }
 
 goroutines() {

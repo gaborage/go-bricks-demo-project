@@ -62,11 +62,13 @@ request() {
 
 # jq_get FILTER — evaluate FILTER against RESP_BODY, empty string if missing.
 jq_get() {
-    jq -r "$1 // empty" <<<"$RESP_BODY"
+    local filter="$1"
+    jq -r "$filter // empty" <<<"$RESP_BODY"
 }
 
 expect_status() {
-    [[ "$RESP_STATUS" == "$1" ]] || fail "$2: expected HTTP $1, got $RESP_STATUS — body: $(head -c 300 <<<"$RESP_BODY")"
+    local want="$1" label="$2"
+    [[ "$RESP_STATUS" == "$want" ]] || fail "$label: expected HTTP $want, got $RESP_STATUS — body: $(head -c 300 <<<"$RESP_BODY")"
 }
 
 # ---------------------------------------------------------------------------

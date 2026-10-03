@@ -130,12 +130,14 @@ esac
 
 # first_value KEY FILE — the first `KEY: value` in FILE, i.e. the first tenant's.
 first_value() {
-    awk -v key="$1" '$1 == key":" { print $2; exit }' "$2"
+    local key="$1" file="$2"
+    awk -v key="$key" '$1 == key":" { print $2; exit }' "$file"
 }
 
 # listed_count FILE — how many tenant IDs the CLI's own lister reads from FILE.
 listed_count() {
-    "$GO_BRICKS_MIGRATE" list --source-config "$1" --json | jq -r '.tenants | length'
+    local config="$1"
+    "$GO_BRICKS_MIGRATE" list --source-config "$config" --json | jq -r '.tenants | length'
 }
 
 # Case 2: an enabled fleet whose tenant listing comes back empty — what a

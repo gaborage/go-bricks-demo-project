@@ -80,10 +80,11 @@ usage() {
 }
 
 require_key() {
-    [ -f "$1" ] || fail "$1 not found — run 'make generate-keys' first"
+    local key_file="$1"
+    [[ -f "$key_file" ]] || fail "$key_file not found — run 'make generate-keys' first"
 }
 
-[ "$#" -eq 1 ] || usage
+[[ "$#" -eq 1 ]] || usage
 MODE="$1"
 case "$MODE" in
     nested|mle) ;;
@@ -93,7 +94,7 @@ esac
 command -v go >/dev/null 2>&1 || fail "go is required but not installed"
 
 # Without a pipe the CLI would sit waiting on the terminal.
-if [ -t 0 ]; then
+if [[ -t 0 ]]; then
     echo "❌ no payload on stdin — pipe a JSON body in (see README, Tokens walkthrough)" >&2
     usage
 fi
@@ -103,11 +104,11 @@ fi
 # go.mod, exactly as CI does, and keep the sealer itself off the workspace too.
 export GOWORK=off
 
-if [ -z "${SEAL_PAYLOAD_VERSION:-}" ]; then
+if [[ -z "${SEAL_PAYLOAD_VERSION:-}" ]]; then
     SEAL_PAYLOAD_VERSION="$(go list -m -f '{{.Version}}' "$FRAMEWORK_MODULE")" \
         || fail "could not read the $FRAMEWORK_MODULE version from go.mod"
 fi
-[ -n "$SEAL_PAYLOAD_VERSION" ] || fail "go.mod reports no version for $FRAMEWORK_MODULE"
+[[ -n "$SEAL_PAYLOAD_VERSION" ]] || fail "go.mod reports no version for $FRAMEWORK_MODULE"
 SEAL_PAYLOAD_PKG="${FRAMEWORK_MODULE}/cmd/seal-payload@${SEAL_PAYLOAD_VERSION}"
 
 case "$MODE" in
@@ -125,4 +126,5 @@ case "$MODE" in
             -enc "$MLE_ENC" -typ "$MLE_TYP" -iat-ms \
             -envelope visa-mle
         ;;
+    *) usage ;; # unreachable: MODE was validated above
 esac
