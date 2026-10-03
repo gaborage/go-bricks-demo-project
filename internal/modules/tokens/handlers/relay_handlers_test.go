@@ -35,7 +35,7 @@ func registerRelay(h *RelayHandler) *testRegistrar {
 }
 
 // serveVTSRelay registers the VTS Issuer relay for real and drives it.
-func serveVTSRelay(t *testing.T, relay RelayService, body string) *httptest.ResponseRecorder {
+func serveVTSRelay(t *testing.T, relay Relayer, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	cfg := newMLEConfig()

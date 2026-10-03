@@ -8,8 +8,8 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// RelayService is the narrow interface the relay handler depends on.
-type RelayService interface {
+// Relayer is the narrow interface the relay handler depends on.
+type Relayer interface {
 	Relay(ctx context.Context, pan string) (*domain.Token, error)
 }
 
@@ -31,9 +31,9 @@ type RelayResponse struct {
 
 // RelayHandler bridges plaintext HTTP into the JOSE-wrapped outbound path. One
 // type serves every relay whose entry point is a bare RelayRequest: the wire
-// shape lives in how the RelayService's client was wired, never here.
+// shape lives in how the client behind the Relayer was wired, never here.
 type RelayHandler struct {
-	svc    RelayService
+	svc    Relayer
 	logger logger.Logger
 	// path is the route the relay is served on.
 	path string
@@ -42,20 +42,20 @@ type RelayHandler struct {
 	failure string
 }
 
-// NewRelayHandler wires the nested JWE-of-JWS RelayService into the HTTP layer.
-func NewRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
+// NewRelayHandler wires the nested JWE-of-JWS Relayer into the HTTP layer.
+func NewRelayHandler(svc Relayer, l logger.Logger) *RelayHandler {
 	return &RelayHandler{svc: svc, logger: l, path: "/tokens/relay", failure: "relay failed"}
 }
 
 // NewVTSIssuerRelayHandler wires the JWS-of-JWE (Visa Token Service Issuer)
-// RelayService into the HTTP layer. Same request and response contract as the
+// Relayer into the HTTP layer. Same request and response contract as the
 // nested relay.
 //
 // Unlike the other two relays it has no simulator route beside it: the VTS
 // Issuer counterparty is the relay client's base transport (see
 // service.VTSIssuerPeerSimulator for why a /__sim/ route cannot carry this wire
 // shape).
-func NewVTSIssuerRelayHandler(svc RelayService, l logger.Logger) *RelayHandler {
+func NewVTSIssuerRelayHandler(svc Relayer, l logger.Logger) *RelayHandler {
 	return &RelayHandler{svc: svc, logger: l, path: "/tokens/vts-issuer-relay", failure: "VTS issuer relay failed"}
 }
 

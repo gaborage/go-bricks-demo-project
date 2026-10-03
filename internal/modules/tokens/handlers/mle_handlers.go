@@ -10,8 +10,8 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// MLERelayService is the narrow interface the MLE relay handler depends on.
-type MLERelayService interface {
+// MLERelayer is the narrow interface the MLE relay handler depends on.
+type MLERelayer interface {
 	Relay(ctx context.Context, pan string) (*domain.Token, error)
 }
 
@@ -46,13 +46,13 @@ type MLEEnvelope struct {
 
 // MLEHandler serves the MLE relay entry point and the in-process peer simulator.
 type MLEHandler struct {
-	relay MLERelayService
+	relay MLERelayer
 	peer  MLEPeerSimulator
 	log   logger.Logger
 }
 
 // NewMLEHandler wires the MLE relay and simulator into the HTTP layer.
-func NewMLEHandler(relay MLERelayService, peer MLEPeerSimulator, l logger.Logger) *MLEHandler {
+func NewMLEHandler(relay MLERelayer, peer MLEPeerSimulator, l logger.Logger) *MLEHandler {
 	return &MLEHandler{relay: relay, peer: peer, log: l}
 }
 
