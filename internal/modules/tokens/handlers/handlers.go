@@ -91,21 +91,21 @@ type PeerSimResponse struct {
 	Token *domain.Token `json:"token"`
 }
 
-// TokenizationService is the narrow interface the handler depends on. Defined
-// here (not in service/) so handlers compile against an interface they own,
-// keeping the package importable in tests with a stub.
-type TokenizationService interface {
+// Tokenizer is the narrow interface the handler depends on. Defined here (not
+// in service/) so handlers compile against an interface they own, keeping the
+// package importable in tests with a stub.
+type Tokenizer interface {
 	Tokenize(ctx context.Context, pan string) (*domain.Token, error)
 }
 
 // Handler serves the partner-facing /tokens route and the in-process peer simulator.
 type Handler struct {
-	svc    TokenizationService
+	svc    Tokenizer
 	logger logger.Logger
 }
 
 // NewHandler wires the tokenization service into the HTTP layer.
-func NewHandler(svc TokenizationService, l logger.Logger) *Handler {
+func NewHandler(svc Tokenizer, l logger.Logger) *Handler {
 	return &Handler{svc: svc, logger: l}
 }
 
