@@ -23,7 +23,7 @@ SAMPLES_DIR="$PROJECT_ROOT/samples/flyway-output"
 
 # Repo-relative paths so they resolve the same on host (for trap cleanup of
 # extra migration files) and inside the Flyway container (mounted at /work).
-MIGRATIONS_REL="migrations/multitenant"
+MIGRATIONS_REL="migrations-multitenant"
 FLYWAY_CONF_REL="flyway/flyway-multitenant.conf"
 MIGRATIONS_DIR="$PROJECT_ROOT/$MIGRATIONS_REL"
 V1_PATH="$MIGRATIONS_DIR/V1__create_orders_table.sql"
@@ -141,5 +141,5 @@ flyway validate >"$SAMPLES_DIR/validate-checksum-mismatch.json" || true
 echo
 echo "Captured 7 samples in $SAMPLES_DIR"
 for f in "$SAMPLES_DIR"/*.json; do
-    [ -e "$f" ] && ls -la "$f"
+    [[ -e "$f" ]] && ls -la "$f"
 done

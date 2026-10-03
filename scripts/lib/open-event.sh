@@ -29,6 +29,7 @@ install_open_event() {
         || fail "could not install open-event@${version} — check network access to the Go module proxy"
     OPEN_EVENT_BIN="$dir/open-event"
     [[ -x "$OPEN_EVENT_BIN" ]] || fail "open-event@${version} installed no binary at $OPEN_EVENT_BIN"
+    return 0
 }
 
 # open_event ARGS... — run the installed CLI with ARGS; its exit status is the
@@ -47,9 +48,11 @@ open_event() {
         case "$arg" in
             -print-subject* | --print-subject*)
                 fail "open_event: refusing -print-subject — it would print the decrypted card (PAN)" ;;
+            *) ;; # every other argument passes through to the CLI
         esac
     done
     "$OPEN_EVENT_BIN" "$@"
+    return $? # the CLI's own status: callers assert on it
 }
 
 # assert_redacted PAN LABEL FILE... — fail if the PAN appears in any FILE,

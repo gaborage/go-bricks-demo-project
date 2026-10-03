@@ -28,6 +28,7 @@ guard_mgmt_endpoint() {
             ;;
         *) fail "RABBIT_MGMT='$url' must start with https://, or http:// for a loopback host (localhost, 127.0.0.1, [::1])" ;;
     esac
+    return 0
 }
 
 # write_curl_cfg PATH URL USER PASS — render a 0600 curl config carrying the
@@ -48,4 +49,5 @@ write_curl_cfg() {
     esc_pass="${pass//\\/\\\\}"; esc_pass="${esc_pass//\"/\\\"}"
     printf 'user = "%s:%s"\n' "$esc_user" "$esc_pass" >"$path"
     if [[ "$url" == http://* ]]; then printf 'noproxy = "*"\n' >>"$path"; fi
+    return 0
 }

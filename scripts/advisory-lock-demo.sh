@@ -140,14 +140,16 @@ trap stop_replicas EXIT
 # count LOG TRIGGER MESSAGE — lines ReportJob wrote for one trigger type.
 # Non-JSON lines (a panic trace, a banner) are skipped rather than fatal.
 count() {
-    jq -Rn --arg t "$2" --arg m "$3" \
+    local log_file="$1" trigger="$2" message="$3"
+    jq -Rn --arg t "$trigger" --arg m "$message" \
         '[inputs | fromjson? | select(type == "object" and .trigger == $t and .message == $m)] | length' \
-        "$1"
+        "$log_file"
 }
 
 # total TRIGGER MESSAGE — the same count summed over both replicas.
 total() {
-    echo $(( $(count "${LOGS[0]}" "$1" "$2") + $(count "${LOGS[1]}" "$1" "$2") ))
+    local trigger="$1" message="$2"
+    echo $(( $(count "${LOGS[0]}" "$trigger" "$message") + $(count "${LOGS[1]}" "$trigger" "$message") ))
 }
 
 # wait_for TIMEOUT_SECONDS TRIGGER MESSAGE... TARGET — poll until the summed
@@ -223,8 +225,9 @@ check_released() {
 # 127.0.0.1 on purpose: /_sys is behind the scheduler's CIDR middleware, which
 # admits only loopback callers when scheduler.security.cidrallowlist is empty.
 trigger() {
+    local port="$1"
     curl -sS -o /dev/null -w '%{http_code}' -X POST \
-        "http://127.0.0.1:$1$API_BASE_PATH/_sys/job/$JOB_ID" 2>/dev/null || true
+        "http://127.0.0.1:${port}${API_BASE_PATH}/_sys/job/$JOB_ID" 2>/dev/null || true
 }
 
 # --- 0. start two replicas ------------------------------------------------

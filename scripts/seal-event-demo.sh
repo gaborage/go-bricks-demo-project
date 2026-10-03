@@ -159,6 +159,7 @@ b64url_decode() {
     case $(( ${#data} % 4 )) in
         2) data="${data}==" ;;
         3) data="${data}=" ;;
+        *) ;; # 0 needs no padding; 1 is not valid base64url and the decoder rejects it
     esac
     printf '%s' "$data" | "${B64_DECODE[@]}"
 }
@@ -205,7 +206,8 @@ write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 
 # queue_depth NAME — messages currently sitting in the queue, or "" if absent.
 queue_depth() {
-    curl -sS -K "$CURL_CFG" "$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$1" \
+    local queue="$1"
+    curl -sS -K "$CURL_CFG" "$RABBIT_MGMT/api/queues/$RABBIT_VHOST/$queue" \
         | jq -r 'if type == "object" and has("messages") then .messages else empty end'
 }
 
@@ -215,10 +217,10 @@ queue_depth() {
 # management API surfaces a quorum queue's `messages` on the stats emission
 # tick (~5s) — a single read right after a publish reliably under-reports.
 wait_queue_depth_above() {
-    local depth="" deadline=$((SECONDS + 20))
+    local queue="$1" baseline="$2" depth="" deadline=$((SECONDS + 20))
     while ((SECONDS < deadline)); do
-        depth="$(queue_depth "$1")"
-        if [[ -n "$depth" && "$depth" -gt "$2" ]] 2>/dev/null; then
+        depth="$(queue_depth "$queue")"
+        if [[ -n "$depth" && "$depth" -gt "$baseline" ]] 2>/dev/null; then
             echo "$depth"
             return 0
         fi
@@ -277,7 +279,7 @@ elif command -v docker >/dev/null 2>&1 \
 fi
 
 ledger_count() {
-    local sql out
+    local key="$1" sql out
     # `:'key'` is a psql CLIENT-side substitution — it expands to a properly
     # quoted SQL literal, so the key cannot break out of the string, but it is
     # not a server-side bind parameter. Crucially, psql expands -v variables only
@@ -288,12 +290,12 @@ ledger_count() {
         host)
             out="$(printf '%s\n' "$sql" \
                 | psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-                    -v key="$1" -tA -f - 2>/dev/null)" || return 1
+                    -v key="$key" -tA -f - 2>/dev/null)" || return 1
             ;;
         docker)
             out="$(printf '%s\n' "$sql" \
                 | docker exec -i -e PGPASSWORD go-bricks-postgres \
-                    psql -U "$PG_USER" -d "$PG_DB" -v key="$1" -tA -f - 2>/dev/null)" || return 1
+                    psql -U "$PG_USER" -d "$PG_DB" -v key="$key" -tA -f - 2>/dev/null)" || return 1
             ;;
         *) return 1 ;;
     esac

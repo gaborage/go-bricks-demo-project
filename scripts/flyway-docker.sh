@@ -46,6 +46,9 @@ case "$EFFECTIVE_DB_HOST" in
     localhost|127.0.0.1|::1)
         EFFECTIVE_DB_HOST="$CONTAINER_DB_HOST"
         ;;
+    *)
+        # Any other host is reachable from the compose network as given.
+        ;;
 esac
 
 # Since go-bricks v0.61.0 (ADR-085) the go-bricks-migrate CLI builds the PostgreSQL
@@ -61,6 +64,9 @@ for ((_i = $#; _i > 0; _i--)); do
     case "$arg" in
         -url=jdbc:postgresql://*)
             arg="$(printf '%s' "$arg" | sed -E "s#^(-url=jdbc:postgresql://)(localhost|127\.0\.0\.1|\[::1\])([:/])#\1${CONTAINER_DB_HOST}\3#")"
+            ;;
+        *)
+            # Every other argument is forwarded to Flyway unchanged.
             ;;
     esac
     set -- "$@" "$arg"
