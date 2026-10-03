@@ -117,10 +117,10 @@ func TestUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			product := New(testID, testName, testDescription, testPrice, testImageURL)
-			originalUpdatedDate := product.UpdatedDate
-
-			// Ensure UpdatedDate visibly advances regardless of test execution speed.
-			time.Sleep(time.Millisecond)
+			// A fixed past timestamp makes the advance check independent of
+			// clock resolution and execution speed.
+			originalUpdatedDate := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+			product.UpdatedDate = originalUpdatedDate
 
 			product.Update(tt.updates)
 

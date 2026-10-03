@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -600,7 +602,25 @@ func TestNewAWSSecretsTenantStore_CustomCacheSettings(t *testing.T) {
 	}
 }
 
+// isolateAWSEnv keeps loadAWSConfig from reading the machine's AWS settings:
+// a developer's AWS_ENDPOINT_URL or AWS_PROFILE, or a profile in ~/.aws, would
+// otherwise change the loaded config or fail the load.
+func isolateAWSEnv(t *testing.T) {
+	t.Helper()
+	empty := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatalf("write empty AWS config: %v", err)
+	}
+	t.Setenv("AWS_ENDPOINT_URL", "")
+	t.Setenv("AWS_ENDPOINT_URL_SECRETS_MANAGER", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_DEFAULT_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", empty)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", empty)
+}
+
 func TestLoadAWSConfig_CustomEndpoint(t *testing.T) {
+	isolateAWSEnv(t)
 	cfg, err := loadAWSConfig(AWSSecretsConfig{EndpointURL: "http://localhost:4566"}, context.Background())
 	if err != nil {
 		t.Fatalf("loadAWSConfig() error = %v", err)
@@ -611,6 +631,7 @@ func TestLoadAWSConfig_CustomEndpoint(t *testing.T) {
 }
 
 func TestLoadAWSConfig_NoEndpoint(t *testing.T) {
+	isolateAWSEnv(t)
 	cfg, err := loadAWSConfig(AWSSecretsConfig{}, context.Background())
 	if err != nil {
 		t.Fatalf("loadAWSConfig() error = %v", err)
