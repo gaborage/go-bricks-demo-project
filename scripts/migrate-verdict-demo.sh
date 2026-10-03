@@ -261,7 +261,9 @@ if [[ "$MISMATCHES" -eq 0 ]]; then
     echo "✅ Exit codes 0 / 2 / 1 and verdicts clean / nothing_attempted / fleet_split, as ADR-115 defines them"
     exit 0
 fi
-echo "❌ $MISMATCHES case(s) did not match. Cases 1 and 3 need every real tenant to pass:"
-echo "   validate needs an applied fleet (make migrate-multitenant-up), or re-run with"
-echo "   VERDICT_ACTION=info, which needs only make migrate-multitenant-init."
+{
+    echo "❌ $MISMATCHES case(s) did not match. Cases 1 and 3 need every real tenant to pass:"
+    echo "   validate needs an applied fleet (make migrate-multitenant-up), or re-run with"
+    echo "   VERDICT_ACTION=info, which needs only make migrate-multitenant-init."
+} >&2
 exit 1
