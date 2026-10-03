@@ -12,6 +12,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// moduleName identifies this module for registration and logging.
+const moduleName = "webhooks"
+
 // Module showcases the KeyStore brick by exposing sign/verify endpoints.
 type Module struct {
 	handler *handlers.WebhookHandler
@@ -27,14 +30,14 @@ func NewModule() *Module {
 
 // Name returns the module name for registration.
 func (m *Module) Name() string {
-	return "webhooks"
+	return moduleName
 }
 
 // Init initializes the module with application dependencies.
 // It wires: KeyStore → SigningService → WebhookHandler.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger.WithFields(map[string]any{
-		"module": "webhooks",
+		"module": moduleName,
 	})
 
 	m.logger.Info().Msg("Initializing webhooks module")

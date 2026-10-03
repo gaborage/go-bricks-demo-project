@@ -179,7 +179,7 @@ install_direct() {
     cd "$temp_dir"
 
     log_info "Downloading from: ${download_url}"
-    curl -L -o k6.tar.gz "$download_url"
+    curl -L --proto '=https' --proto-redir '=https' -o k6.tar.gz "$download_url"
 
     tar -xzf k6.tar.gz
     sudo mv "k6-v${latest_version}-${os}-${k6_arch}/k6" /usr/local/bin/k6

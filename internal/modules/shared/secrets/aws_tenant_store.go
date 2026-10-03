@@ -44,46 +44,66 @@ type SecretsManagerAPI interface {
 
 // SecretDatabaseConfig represents the structure of database configuration stored in AWS Secrets Manager
 type SecretDatabaseConfig struct {
-	Type     string `json:"type"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Database string `json:"database"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Pool     *struct {
-		Max *struct {
-			Connections int32 `json:"connections"`
-		} `json:"max"`
-		Idle *struct {
-			Connections int32         `json:"connections"`
-			Time        time.Duration `json:"time"`
-		} `json:"idle"`
-		Lifetime *struct {
-			Max time.Duration `json:"max"`
-		} `json:"lifetime"`
-	} `json:"pool,omitempty"`
-	Query *struct {
-		Slow *struct {
-			Threshold time.Duration `json:"threshold"`
-			Enabled   bool          `json:"enabled"`
-		} `json:"slow"`
-		Log *struct {
-			Parameters bool `json:"parameters"`
-			MaxLength  int  `json:"max"`
-		} `json:"log"`
-	} `json:"query,omitempty"`
-	TLS *struct {
-		Mode     string `json:"mode"`
-		CertFile string `json:"cert"`
-		KeyFile  string `json:"key"`
-		CAFile   string `json:"ca"`
-	} `json:"tls,omitempty"`
-	Oracle *struct {
-		Service *struct {
-			Name string `json:"name"`
-			SID  string `json:"sid"`
-		} `json:"service"`
-	} `json:"oracle,omitempty"`
+	Type     string              `json:"type"`
+	Host     string              `json:"host"`
+	Port     int                 `json:"port"`
+	Database string              `json:"database"`
+	Username string              `json:"username"`
+	Password string              `json:"password"`
+	Pool     *secretPoolConfig   `json:"pool,omitempty"`
+	Query    *secretQueryConfig  `json:"query,omitempty"`
+	TLS      *secretTLSConfig    `json:"tls,omitempty"`
+	Oracle   *secretOracleConfig `json:"oracle,omitempty"`
+}
+
+type secretPoolConfig struct {
+	Max      *secretPoolMaxConfig      `json:"max"`
+	Idle     *secretPoolIdleConfig     `json:"idle"`
+	Lifetime *secretPoolLifetimeConfig `json:"lifetime"`
+}
+
+type secretPoolMaxConfig struct {
+	Connections int32 `json:"connections"`
+}
+
+type secretPoolIdleConfig struct {
+	Connections int32         `json:"connections"`
+	Time        time.Duration `json:"time"`
+}
+
+type secretPoolLifetimeConfig struct {
+	Max time.Duration `json:"max"`
+}
+
+type secretQueryConfig struct {
+	Slow *secretQuerySlowConfig `json:"slow"`
+	Log  *secretQueryLogConfig  `json:"log"`
+}
+
+type secretQuerySlowConfig struct {
+	Threshold time.Duration `json:"threshold"`
+	Enabled   bool          `json:"enabled"`
+}
+
+type secretQueryLogConfig struct {
+	Parameters bool `json:"parameters"`
+	MaxLength  int  `json:"max"`
+}
+
+type secretTLSConfig struct {
+	Mode     string `json:"mode"`
+	CertFile string `json:"cert"`
+	KeyFile  string `json:"key"`
+	CAFile   string `json:"ca"`
+}
+
+type secretOracleConfig struct {
+	Service *secretOracleServiceConfig `json:"service"`
+}
+
+type secretOracleServiceConfig struct {
+	Name string `json:"name"`
+	SID  string `json:"sid"`
 }
 
 // NewAWSSecretsTenantStore creates a new AWS Secrets Manager-backed tenant store
@@ -220,51 +240,68 @@ func (s *AWSSecretsTenantStore) toDatabaseConfig(secret *SecretDatabaseConfig) *
 		Password: secret.Password,
 	}
 
-	// Set pool configuration if provided
-	if secret.Pool != nil {
-		if secret.Pool.Max != nil && secret.Pool.Max.Connections > 0 {
-			config.Pool.Max.Connections = secret.Pool.Max.Connections
-		}
-		if secret.Pool.Idle != nil {
-			if secret.Pool.Idle.Connections > 0 {
-				config.Pool.Idle.Connections = secret.Pool.Idle.Connections
-			}
-			if secret.Pool.Idle.Time > 0 {
-				config.Pool.Idle.Time = secret.Pool.Idle.Time
-			}
-		}
-		if secret.Pool.Lifetime != nil && secret.Pool.Lifetime.Max > 0 {
-			config.Pool.Lifetime.Max = secret.Pool.Lifetime.Max
-		}
-	}
-
-	// Set query configuration if provided
-	if secret.Query != nil {
-		if secret.Query.Slow != nil {
-			config.Query.Slow.Threshold = secret.Query.Slow.Threshold
-			config.Query.Slow.Enabled = secret.Query.Slow.Enabled
-		}
-		if secret.Query.Log != nil {
-			config.Query.Log.Parameters = secret.Query.Log.Parameters
-			config.Query.Log.MaxLength = secret.Query.Log.MaxLength
-		}
-	}
-
-	// Set TLS configuration if provided
-	if secret.TLS != nil {
-		config.TLS.Mode = secret.TLS.Mode
-		config.TLS.CertFile = secret.TLS.CertFile
-		config.TLS.KeyFile = secret.TLS.KeyFile
-		config.TLS.CAFile = secret.TLS.CAFile
-	}
-
-	// Set Oracle-specific configuration if provided
-	if secret.Oracle != nil && secret.Oracle.Service != nil {
-		config.Oracle.Service.Name = secret.Oracle.Service.Name
-		config.Oracle.Service.SID = secret.Oracle.Service.SID
-	}
+	applyPoolConfig(config, secret.Pool)
+	applyQueryConfig(config, secret.Query)
+	applyTLSConfig(config, secret.TLS)
+	applyOracleConfig(config, secret.Oracle)
 
 	return config
+}
+
+// applyPoolConfig copies non-zero connection pool settings from the secret into config.
+func applyPoolConfig(config *gobricksConfig.DatabaseConfig, pool *secretPoolConfig) {
+	if pool == nil {
+		return
+	}
+	if pool.Max != nil && pool.Max.Connections > 0 {
+		config.Pool.Max.Connections = pool.Max.Connections
+	}
+	if pool.Idle != nil {
+		if pool.Idle.Connections > 0 {
+			config.Pool.Idle.Connections = pool.Idle.Connections
+		}
+		if pool.Idle.Time > 0 {
+			config.Pool.Idle.Time = pool.Idle.Time
+		}
+	}
+	if pool.Lifetime != nil && pool.Lifetime.Max > 0 {
+		config.Pool.Lifetime.Max = pool.Lifetime.Max
+	}
+}
+
+// applyQueryConfig copies slow-query and logging settings from the secret into config.
+func applyQueryConfig(config *gobricksConfig.DatabaseConfig, query *secretQueryConfig) {
+	if query == nil {
+		return
+	}
+	if query.Slow != nil {
+		config.Query.Slow.Threshold = query.Slow.Threshold
+		config.Query.Slow.Enabled = query.Slow.Enabled
+	}
+	if query.Log != nil {
+		config.Query.Log.Parameters = query.Log.Parameters
+		config.Query.Log.MaxLength = query.Log.MaxLength
+	}
+}
+
+// applyTLSConfig copies TLS settings from the secret into config.
+func applyTLSConfig(config *gobricksConfig.DatabaseConfig, tls *secretTLSConfig) {
+	if tls == nil {
+		return
+	}
+	config.TLS.Mode = tls.Mode
+	config.TLS.CertFile = tls.CertFile
+	config.TLS.KeyFile = tls.KeyFile
+	config.TLS.CAFile = tls.CAFile
+}
+
+// applyOracleConfig copies Oracle service settings from the secret into config.
+func applyOracleConfig(config *gobricksConfig.DatabaseConfig, oracle *secretOracleConfig) {
+	if oracle == nil || oracle.Service == nil {
+		return
+	}
+	config.Oracle.Service.Name = oracle.Service.Name
+	config.Oracle.Service.SID = oracle.Service.SID
 }
 
 // buildSecretName constructs the full secret name based on prefix, tenant ID, and config type
@@ -280,40 +317,15 @@ func (s *AWSSecretsTenantStore) ListTenants(ctx context.Context) ([]string, erro
 	var nextToken *string
 
 	for {
-		input := &secretsmanager.ListSecretsInput{
-			Filters: []types.Filter{
-				{
-					Key:    types.FilterNameStringTypeName,
-					Values: []string{prefix},
-				},
-			},
-		}
-
-		if nextToken != nil {
-			input.NextToken = nextToken
-		}
-
-		result, err := s.client.ListSecrets(ctx, input)
+		pageTenants, next, err := s.fetchTenantIDPage(ctx, prefix, nextToken)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list secrets: %w", err)
+			return nil, err
 		}
-
-		for _, secret := range result.SecretList {
-			if secret.Name != nil && strings.HasSuffix(*secret.Name, "/database") {
-				// Extract tenant ID from secret name
-				secretName := *secret.Name
-				tenantPart := strings.TrimPrefix(secretName, prefix)
-				tenantID := strings.TrimSuffix(tenantPart, "/database")
-				if tenantID != "" {
-					tenants = append(tenants, tenantID)
-				}
-			}
-		}
-
-		if result.NextToken == nil {
+		tenants = append(tenants, pageTenants...)
+		if next == nil {
 			break
 		}
-		nextToken = result.NextToken
+		nextToken = next
 	}
 
 	s.logger.Debug().
@@ -322,6 +334,48 @@ func (s *AWSSecretsTenantStore) ListTenants(ctx context.Context) ([]string, erro
 		Msg("Listed tenants from AWS Secrets Manager")
 
 	return tenants, nil
+}
+
+// fetchTenantIDPage fetches a single page of secrets matching prefix and
+// returns the tenant IDs found on that page along with AWS's pagination token.
+func (s *AWSSecretsTenantStore) fetchTenantIDPage(ctx context.Context, prefix string, nextToken *string) (tenantIDs []string, nextPageToken *string, err error) {
+	input := &secretsmanager.ListSecretsInput{
+		Filters: []types.Filter{
+			{
+				Key:    types.FilterNameStringTypeName,
+				Values: []string{prefix},
+			},
+		},
+	}
+	if nextToken != nil {
+		input.NextToken = nextToken
+	}
+
+	result, err := s.client.ListSecrets(ctx, input)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list secrets: %w", err)
+	}
+
+	for _, secret := range result.SecretList {
+		if secret.Name == nil {
+			continue
+		}
+		if tenantID := tenantIDFromSecretName(*secret.Name, prefix); tenantID != "" {
+			tenantIDs = append(tenantIDs, tenantID)
+		}
+	}
+
+	return tenantIDs, result.NextToken, nil
+}
+
+// tenantIDFromSecretName extracts the tenant ID from a "<prefix>/<tenantID>/database"
+// secret name, returning "" if the name doesn't match that pattern.
+func tenantIDFromSecretName(secretName, prefix string) string {
+	if !strings.HasSuffix(secretName, "/database") {
+		return ""
+	}
+	tenantPart := strings.TrimPrefix(secretName, prefix)
+	return strings.TrimSuffix(tenantPart, "/database")
 }
 
 // InvalidateCache removes a specific tenant's configuration from the cache
