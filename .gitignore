@@ -38,8 +38,14 @@
 # Multi-tenant migration demo fleet config
 !config.multitenant.yaml
 
-# Migration SQL files (single-tenant + schema-per-tenant)
+# Migration SQL files: the default database, the `analytics` named database
+# (bind-mounted by the compose flyway-analytics service) and the schema-per-tenant
+# fleet. The `migrations/` pattern is anchored to that one directory, so each
+# sibling needs its own line — without one, a new file there is silently ignored
+# and a fresh clone mounts an empty migrations directory.
 !migrations/**/*.sql
+!migrations-analytics/*.sql
+!migrations-multitenant/*.sql
 
 # Flyway configs (per-vendor + multi-tenant)
 !flyway/*.conf
@@ -92,6 +98,9 @@
 !etc/docker/tempo/*.yaml
 !etc/docker/loki/*.yaml
 !etc/docker/otel/*.yaml
+# Grafana loads every JSON in this directory as a dashboard (dashboards.yml).
+# Editor backups such as *.json.bak stay ignored.
+!etc/docker/grafana/provisioning/dashboards/json/*.json
 
 # ...even if they are in subdirectories
 !*/
