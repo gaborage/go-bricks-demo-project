@@ -21,6 +21,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// moduleName identifies this module for registration and logging.
+const moduleName = "legacy"
+
 // Module demonstrates WithRawResponse() for Strangler Fig migration patterns.
 // It reuses the products service/repository to serve the same data
 // without the APIResponse envelope wrapping.
@@ -39,14 +42,14 @@ func NewModule() *Module {
 
 // Name returns the module name for registration.
 func (m *Module) Name() string {
-	return "legacy"
+	return moduleName
 }
 
 // Init initializes the module with application dependencies.
 // It wires: getDB → ProductRepository → ProductService → LegacyHandler.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger.WithFields(map[string]any{
-		"module": "legacy",
+		"module": moduleName,
 	})
 
 	m.logger.Info().Msg("Initializing legacy module")

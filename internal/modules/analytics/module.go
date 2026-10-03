@@ -17,6 +17,9 @@ import (
 )
 
 const (
+	// moduleName identifies this module for registration and logging.
+	moduleName = "analytics"
+
 	// analyticsDBName is the name of the named database in config.yaml.
 	// This matches the key under the "databases:" section in config.development.yaml.
 	analyticsDBName = "analytics"
@@ -47,7 +50,7 @@ func NewModule() *Module {
 
 // Name returns the module name for registration.
 func (m *Module) Name() string {
-	return "analytics"
+	return moduleName
 }
 
 // Init initializes the module with application dependencies.
@@ -55,7 +58,7 @@ func (m *Module) Name() string {
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.deps = deps
 	m.logger = deps.Logger.WithFields(map[string]any{
-		"module": "analytics",
+		"module": moduleName,
 	})
 
 	m.logger.Info().Msg("Initializing analytics module")

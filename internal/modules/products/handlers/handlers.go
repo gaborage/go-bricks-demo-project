@@ -189,11 +189,13 @@ func (h *ProductHandler) DeleteProduct(req DeleteProductRequest, ctx server.Hand
 	return server.NoContent(), nil
 }
 
+const productByIDPath = "/products/:id"
+
 // RegisterProductRoutes registers product-related HTTP routes
 func (h *ProductHandler) RegisterProductRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.GET(hr, r, "/products/:id", h.GetProduct)
+	server.GET(hr, r, productByIDPath, h.GetProduct)
 	server.GET(hr, r, "/products", h.ListProducts)
 	server.POST(hr, r, "/products", h.CreateProduct)
-	server.PUT(hr, r, "/products/:id", h.UpdateProduct)
-	server.DELETE(hr, r, "/products/:id", h.DeleteProduct)
+	server.PUT(hr, r, productByIDPath, h.UpdateProduct)
+	server.DELETE(hr, r, productByIDPath, h.DeleteProduct)
 }
