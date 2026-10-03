@@ -41,6 +41,7 @@ type Cache struct {
 	mu      sync.RWMutex
 	metrics CacheMetrics
 	stopCh  chan struct{}
+	done    chan struct{} // closed when cleanupLoop returns
 	once    sync.Once
 }
 
@@ -51,6 +52,7 @@ func NewCache(ttl time.Duration, maxSize int) *Cache {
 		ttl:     ttl,
 		maxSize: maxSize,
 		stopCh:  make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -61,8 +63,11 @@ func NewCache(ttl time.Duration, maxSize int) *Cache {
 
 // Get retrieves a value from the cache, returning nil if not found or expired
 func (c *Cache) Get(key string) any {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	// Full lock, not RLock: Get updates the hit/miss counters in c.metrics, so
+	// two concurrent readers holding only the read lock would race on them
+	// (and lose increments).
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	c.metrics.TotalReads++
 
@@ -140,6 +145,7 @@ func (c *Cache) Close() {
 
 // cleanupLoop runs periodically to remove expired entries
 func (c *Cache) cleanupLoop() {
+	defer close(c.done)
 	ticker := time.NewTicker(c.ttl / 2) // Clean up twice per TTL period
 	defer ticker.Stop()
 

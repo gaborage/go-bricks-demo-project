@@ -107,3 +107,26 @@ func TestVTSIssuerRelayRouteHidesPartnerErrors(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "internal detail")
 	assert.Contains(t, rec.Body.String(), "VTS issuer relay failed")
 }
+
+// TestRelay drives the nested relay handler directly: the relayed token comes
+// back as is, and a failed partner call is a generic 500 whose message does not
+// carry the relay's error text.
+func TestRelay(t *testing.T) {
+	l := logger.New("disabled", false)
+
+	t.Run("returns the relayed token", func(t *testing.T) {
+		resp, apiErr := NewRelayHandler(&stubRelay{}, l).Relay(RelayRequest{PAN: validPAN}, newHandlerCtx(nil))
+		require.Nil(t, apiErr)
+		require.NotNil(t, resp)
+		require.NotNil(t, resp.Token)
+		assert.Equal(t, "tok_123", resp.Token.Token)
+	})
+
+	t.Run("relay error is a generic 500", func(t *testing.T) {
+		resp, apiErr := NewRelayHandler(&failingRelay{}, l).Relay(RelayRequest{PAN: validPAN}, newHandlerCtx(nil))
+		require.Nil(t, resp)
+		require.NotNil(t, apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.HTTPStatus())
+		assert.Equal(t, "relay failed", apiErr.Message())
+	})
+}

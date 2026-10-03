@@ -5,11 +5,123 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics/domain"
 	"github.com/gaborage/go-bricks/database"
 	dbtest "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
+
+const testProductID = "product-123"
+
+func newView() *domain.ProductView {
+	return domain.NewProductView(testProductID, "Mozilla/5.0", "127.0.0.1", "session-abc", "https://example.com")
+}
+
+// dbReturning is a getDB that always resolves to db.
+func dbReturning(db database.Interface) func(context.Context) (database.Interface, error) {
+	return func(context.Context) (database.Interface, error) {
+		return db, nil
+	}
+}
+
+// dbUnavailable is a getDB whose connection cannot be resolved.
+func dbUnavailable(context.Context) (database.Interface, error) {
+	return nil, errors.New("analytics database down")
+}
+
+func TestRecordView(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful insert", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectExec("INSERT INTO product_views").WillReturnRowsAffected(1)
+
+		view := newView()
+		if err := NewAnalyticsRepository(dbReturning(db)).RecordView(ctx, view); err != nil {
+			t.Fatalf("RecordView() unexpected error = %v", err)
+		}
+		if view.ID == "" {
+			t.Error("RecordView() left view.ID empty, want a generated UUID")
+		}
+		dbtest.AssertExecExecuted(t, db, "INSERT INTO product_views")
+	})
+
+	t.Run("database unavailable", func(t *testing.T) {
+		if err := NewAnalyticsRepository(dbUnavailable).RecordView(ctx, newView()); err == nil {
+			t.Error("RecordView() expected error, got nil")
+		}
+	})
+
+	t.Run("insert error", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectExec("INSERT INTO product_views").WillReturnError(errors.New("insert failed"))
+
+		if err := NewAnalyticsRepository(dbReturning(db)).RecordView(ctx, newView()); err == nil {
+			t.Error("RecordView() expected error, got nil")
+		}
+	})
+}
+
+func TestGetViewStats(t *testing.T) {
+	ctx := context.Background()
+	statsColumns := []string{"total_views", "views_today", "views_this_week", "last_viewed_at"}
+
+	t.Run("successful query with last viewed time", func(t *testing.T) {
+		lastViewed := time.Now().UTC()
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("FROM product_views").WillReturnRows(
+			dbtest.NewRowSet(statsColumns...).AddRow(int64(42), int64(5), int64(12), lastViewed),
+		)
+
+		stats, err := NewAnalyticsRepository(dbReturning(db)).GetViewStats(ctx, testProductID)
+		if err != nil {
+			t.Fatalf("GetViewStats() unexpected error = %v", err)
+		}
+		if stats.ProductID != testProductID || stats.TotalViews != 42 || stats.ViewsToday != 5 || stats.ViewsThisWeek != 12 {
+			t.Errorf("GetViewStats() = %+v, want %s with 42/5/12 views", *stats, testProductID)
+		}
+		if !stats.LastViewedAt.Equal(lastViewed) {
+			t.Errorf("LastViewedAt = %v, want %v", stats.LastViewedAt, lastViewed)
+		}
+		dbtest.AssertQueryExecuted(t, db, "WHERE product_id = $1")
+	})
+
+	// MAX(viewed_at) is NULL for a product nobody has viewed yet.
+	t.Run("no views yet leaves last viewed at zero", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("FROM product_views").WillReturnRows(
+			dbtest.NewRowSet(statsColumns...).AddRow(int64(0), int64(0), int64(0), nil),
+		)
+
+		stats, err := NewAnalyticsRepository(dbReturning(db)).GetViewStats(ctx, testProductID)
+		if err != nil {
+			t.Fatalf("GetViewStats() unexpected error = %v", err)
+		}
+		if stats.TotalViews != 0 {
+			t.Errorf("TotalViews = %d, want 0", stats.TotalViews)
+		}
+		if !stats.LastViewedAt.IsZero() {
+			t.Errorf("LastViewedAt = %v, want zero value", stats.LastViewedAt)
+		}
+	})
+
+	t.Run("database unavailable", func(t *testing.T) {
+		if _, err := NewAnalyticsRepository(dbUnavailable).GetViewStats(ctx, testProductID); err == nil {
+			t.Error("GetViewStats() expected error, got nil")
+		}
+	})
+
+	t.Run("query error", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("FROM product_views").WillReturnError(errors.New("query failed"))
+
+		if _, err := NewAnalyticsRepository(dbReturning(db)).GetViewStats(ctx, testProductID); err == nil {
+			t.Error("GetViewStats() expected error, got nil")
+		}
+	})
+}
 
 // TestBuildTopViewedQuery pins the SQL the type-safe builder renders for the
 // top-viewed aggregate.
@@ -115,6 +227,19 @@ func TestGetTopViewed(t *testing.T) {
 		// The statement that actually reached the driver is the built one.
 		dbtest.AssertQueryExecuted(t, db, "GROUP BY product_id")
 		dbtest.AssertQueryExecuted(t, db, "ORDER BY total_views DESC")
+	})
+
+	t.Run("empty result set", func(t *testing.T) {
+		db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT product_id").WillReturnRows(dbtest.NewRowSet("product_id", "total_views"))
+
+		stats, err := NewAnalyticsRepository(dbReturning(db)).GetTopViewed(ctx, 10)
+		if err != nil {
+			t.Fatalf("GetTopViewed() unexpected error = %v", err)
+		}
+		if len(stats) != 0 {
+			t.Errorf("GetTopViewed() returned %d rows, want 0", len(stats))
+		}
 	})
 
 	// The previous hand-written `LIMIT $1` bound with 0 returned no rows. Keep
