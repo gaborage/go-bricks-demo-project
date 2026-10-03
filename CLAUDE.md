@@ -145,7 +145,7 @@ See [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) for running the scripts and the
 ### Application Bootstrap
 
 The application uses `go-bricks/app.NewWithOptions()` (config-driven like `app.New()`, plus one route-table hook) which handles:
-1. **Configuration loading** - Environment-based config from `config.yaml` (see Config System section)
+1. **Configuration loading** - Base `config.yml` plus the `config.<APP_ENV>.yaml` overlay (see Config System section)
 2. **Database manager** - Connection pooling and lifecycle management
 3. **Messaging manager** - RabbitMQ client setup
 4. **Observability provider** - OpenTelemetry setup (see Observability section)
@@ -194,8 +194,9 @@ products/
 2. **`InjectInto(&struct)`** - For flat structs with `config:` tags (only supports primitives)
 
 **Environment-based config:**
-- `APP_ENV=development` loads `config.yaml` + `config.development.yaml`
-- Can be overridden by `config.{env}.yaml`
+- Every environment loads the base [config.yml](config.yml); `APP_ENV=development` (the framework default) adds [config.development.yaml](config.development.yaml) on top
+- go-bricks reads `config.yaml` first and falls back to `config.yml` only when `config.yaml` is absent, so never add a `config.yaml`: it would shadow the base ([cmd/api/config_layout_test.go](cmd/api/config_layout_test.go) fails if one appears)
+- The base is environment-neutral (no hosts, credentials or key paths); a non-development deploy supplies those through env vars, listed in [wiki/DEPLOYING.md](wiki/DEPLOYING.md)
 - Environment variables override YAML (e.g., `APP_NAME` overrides `app.name`)
 
 **Note:** A bare `DEBUG` environment variable used to conflict with go-bricks' `debug` config section (startup crash). As of go-bricks **v0.43.0 (#601)** the framework silently drops a bare `DEBUG` env var, so this workaround is **no longer required** — kept for anyone on an older framework version:
@@ -248,7 +249,7 @@ Every new database connection has its session timezone set to a configured IANA 
 
 The framework applies the setting per *physical* connection (PostgreSQL via pgx `RuntimeParams` in the StartupMessage), so pool members spawned later for growth or after drops don't drift back to the server default — a real bug a one-shot `SET TIME ZONE` after `sql.Open` would have.
 
-Demo config in [config.development.yaml](config.development.yaml) — default DB uses `UTC`, the `analytics` named DB uses `Asia/Tokyo` to make the per-DB enforcement visible:
+Demo config in [config.yml](config.yml) — default DB uses `UTC`, the `analytics` named DB uses `Asia/Tokyo` to make the per-DB enforcement visible:
 
 ```bash
 psql -h localhost -p 5432 -U postgres -d postgres -c "SHOW TIMEZONE;"   # → UTC
@@ -259,7 +260,7 @@ See [ADR-016](https://github.com/gaborage/go-bricks/blob/main/wiki/adr_016_datab
 
 ### Multi-Tenant Support
 
-**Current mode:** Single-tenant (see `config.yaml: multitenant.enabled: false`)
+**Current mode:** Single-tenant (`multitenant.enabled` is unset, so the framework default `false` applies)
 
 **Multi-tenant mode** (can be enabled):
 - Tenant ID resolved from HTTP header (`X-Tenant-ID`)
@@ -606,7 +607,7 @@ release. Promoting a framework change into the demo means bumping that pin with
 
 ## API Endpoints
 
-Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
+Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 
 **Health checks:**
 - `GET /api/v1/health` - Liveness probe
@@ -657,8 +658,9 @@ Base path: `/api/v1` (configured in `config.yaml: server.path.base`)
 
 ## Configuration Files
 
-- `config.yaml` - Base configuration (not present in this project, uses framework defaults)
-- [config.development.yaml](config.development.yaml) - Development overrides (extensively documented)
+- [config.yml](config.yml) - Base configuration, loaded in every environment: environment-neutral settings only (extensively documented). There is deliberately no `config.yaml`, which go-bricks would load instead
+- [config.development.yaml](config.development.yaml) - Development overlay: docker-compose hosts and credentials, `certs/` keys, dev/benchmark knobs
+- [wiki/DEPLOYING.md](wiki/DEPLOYING.md) - Env vars a non-development deploy must set
 - `.env` - Secrets (gitignored, use `.env.example` as template)
 - [etc/docker/docker-compose.yml](etc/docker/docker-compose.yml) - Infrastructure services
 - [Makefile](Makefile) - Development commands
@@ -742,7 +744,7 @@ outbox.Publish(ctx, tx, &app.OutboxEvent{
 tx.Commit(ctx)
 ```
 
-**Config:** See `outbox:` section in [config.development.yaml](config.development.yaml).
+**Config:** See `outbox:` section in [config.yml](config.yml).
 
 **The demo owns the outbox DDL** (`outbox.autocreatetable: false`). go-bricks v0.61.0 (ADR-088) reshaped the ledger — rows gained `seq` and `lane`, plus a companion `gobricks_outbox_leader` table so one replica drains — and framework autocreate only ever CREATEs a missing table, never ALTERs an existing one. `migrations/V3__upgrade_outbox_ledger.sql` carries that shape, so **run `make migrate` before `make run`**, on a fresh volume as well as a retained one.
 
@@ -894,7 +896,7 @@ type PaymentAuthorized struct {
 }
 ```
 
-Ordering is the security decision: **encrypt the Subject first, then sign the whole result** — signing a plaintext PAN would be a confirmation oracle, so the signature always covers ciphertext. `delivery.Body` is one compact JWS whose payload is the business JSON with the `card` member replaced in place by a compact JWE, and `typ: vnd.gobricks.sealed.v1+json` is the only sealed marker (there is no `x-sealed` AMQP header). The tag names **Logical kids**, never key generations: the keystore holds `payments-sign-v1` and `payments-encrypt-v1`, and with a single generation provisioned the producer auto-activates it — so this demo ships no `messaging.seal.active` selector, only a commented-out one in [config.development.yaml](config.development.yaml) for the rotation story (rotation flips the selector; the tag never changes). Lane rules: sealing rides the classic typed lane only — `DeclareTypedPublisher[T]` plus `DeclareTypedConsumerWithMeta` (the meta-less consume door refuses a seal-tagged `T`, since `Meta.DedupKey()` is what the inbox dedups on), while streams typed declarations refuse a seal-tagged `T` and `outbox.Publish` refuses a seal-tagged struct payload with `outbox.ErrSealedPayloadNeedsBytes` (that lane takes `publisher.Seal(ctx, evt)` bytes instead).
+Ordering is the security decision: **encrypt the Subject first, then sign the whole result** — signing a plaintext PAN would be a confirmation oracle, so the signature always covers ciphertext. `delivery.Body` is one compact JWS whose payload is the business JSON with the `card` member replaced in place by a compact JWE, and `typ: vnd.gobricks.sealed.v1+json` is the only sealed marker (there is no `x-sealed` AMQP header). The tag names **Logical kids**, never key generations: the keystore holds `payments-sign-v1` and `payments-encrypt-v1`, and with a single generation provisioned the producer auto-activates it — so this demo ships no `messaging.seal.active` selector, only a commented-out one in [config.yml](config.yml) for the rotation story (rotation flips the selector; the tag never changes). Lane rules: sealing rides the classic typed lane only — `DeclareTypedPublisher[T]` plus `DeclareTypedConsumerWithMeta` (the meta-less consume door refuses a seal-tagged `T`, since `Meta.DedupKey()` is what the inbox dedups on), while streams typed declarations refuse a seal-tagged `T` and `outbox.Publish` refuses a seal-tagged struct payload with `outbox.ErrSealedPayloadNeedsBytes` (that lane takes `publisher.Seal(ctx, evt)` bytes instead).
 
 **Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
 
@@ -1056,7 +1058,7 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 Before go-bricks v0.65.0, `/ready` judged the messaging kind by its **publisher** alone, so a service whose AMQP consumer had silently detached stayed in rotation while its queue filled up. v0.65.0 tracks every declared consumer's subscription (#1684), and the opt-in key `messaging.consumers.critical` (#1686, ADR-114) lets that state fail readiness:
 
 - **Consumer arm:** once a declared AMQP consumer (here only `payments.authorized`) is unsubscribed **and** its supervisor has failed **5** re-subscribes in a row, `/ready` answers 503. Five is the framework constant at which the `Consumer re-subscribe attempt failed` log turns WARN, and it is not configurable. A reconnect that recovers inside the streak never reaches the verdict.
-- **Publisher arm:** the existing "is the leased publisher ready?" check becomes critical too, so a broker outage answers 503 **at once**, with no streak. That is why the key is absent in [config.development.yaml](config.development.yaml), with only a commented example: turning it on is a per-environment decision (env `MESSAGING_CONSUMERS_CRITICAL=true`).
+- **Publisher arm:** the existing "is the leased publisher ready?" check becomes critical too, so a broker outage answers 503 **at once**, with no streak. That is why no config file sets the key, and [config.yml](config.yml) carries only a commented example: turning it on is a per-environment decision (env `MESSAGING_CONSUMERS_CRITICAL=true`).
 - **Not covered:** stream consumers (the activity projection). The streams kind is never critical.
 
 Where to watch it:
@@ -1232,7 +1234,7 @@ When contributing to this showcase project, follow this workflow to maintain qua
 4. **Update touchpoints** - Update relevant files when configuration or dependencies change:
    - [README.md](README.md) - If quick start or features change
    - `.env.example` - If new environment variables are needed
-   - [config.development.yaml](config.development.yaml) - If new config options are added
+   - [config.yml](config.yml) (every environment) or [config.development.yaml](config.development.yaml) (local infra and dev-only knobs) - If new config options are added
    - [CLAUDE.md](CLAUDE.md) - If architecture or workflows change
    - Onboarding steps - If setup process changes
 
@@ -1350,10 +1352,10 @@ Explore the code in this order:
     - `handlers/` serves `GET /api/v1/products/activity` and the guarded `POST /api/v1/__sim/streams/poison`
     - Products publishes into it via the `ActivityRecorder` seam — interface and payload declared in `products/service` (the consumer owns the contract), adapted onto `activity/domain` in `module.go`, wired in [cmd/api/main.go](cmd/api/main.go) — best-effort, WARN on failure
 
-11. **[config.development.yaml](config.development.yaml)** - Configuration
-    - Outbox configuration (poll interval, batch size, retention)
-    - KeyStore configuration (DER file paths for RSA keys, including the sealing generations)
-    - The commented-out `messaging.seal.active` selector (rotation story)
+11. **[config.yml](config.yml)** + **[config.development.yaml](config.development.yaml)** - Configuration (base + development overlay)
+    - Base: outbox configuration (poll interval, batch size, retention), inbox, scheduler, log filter
+    - Base: the commented-out `messaging.seal.active` selector (rotation story)
+    - Overlay: KeyStore configuration (DER file paths for RSA keys, including the sealing generations)
     - `messaging.streams` — stream URI (port 5552), `addressresolver` for Docker port mapping, and the lowered `offsetstore.countbeforestorage`
     - See `make generate-keys` for key generation
 
@@ -1365,11 +1367,11 @@ Explore the code in this order:
     - `module.go` reads `custom.partnerfeed.enabled` in `Init` and, when on, calls `DeclareExternalExchange("partner-events")`: a name-only reference that every declare pass verifies passively and never creates (ADR-119). The queue, its quorum DLQ pair and the binding are declared normally.
     - `domain/stock.go` declares `StockUpdated`, the partner's `validate`-tagged contract, and the topology names. Its trap comment explains why no module in this process may also declare `partner-events`.
     - The typed consumer runs one worker, which keeps a SKU's updates in order, and only logs, so a redelivery is harmless.
-    - [config.development.yaml](config.development.yaml) carries the switch and `messaging.declare.externalwait` commented out, with the startupProbe sizing caveat.
+    - [config.yml](config.yml) carries the switch and `messaging.declare.externalwait` commented out, with the startupProbe sizing caveat.
     - `make external-exchange-demo` shows the broker 404 abort, the `messaging.declare.externalwait` wait, and consumption.
 
 14. **[internal/modules/analytics/](internal/modules/analytics/)** - Analytics module (named databases demo)
-    - `module.go` resolves the `analytics` database with `deps.DBByName(ctx, "analytics")` instead of `deps.DB(ctx)`; it is the second PostgreSQL instance (port 5433 in the base compose file) that the `databases.analytics` section of [config.development.yaml](config.development.yaml) describes, with its own session timezone (`Asia/Tokyo`)
+    - `module.go` resolves the `analytics` database with `deps.DBByName(ctx, "analytics")` instead of `deps.DB(ctx)`; it is the second PostgreSQL instance (port 5433 in the base compose file) that the `databases.analytics` sections describe: its shape and its own session timezone (`Asia/Tokyo`) in [config.yml](config.yml), its local connection in [config.development.yaml](config.development.yaml)
     - `handlers/` serves `POST /api/v1/analytics/views`, `GET /api/v1/analytics/views/:productId` and `GET /api/v1/analytics/views`
     - `make migrate-analytics` applies its schema (Flyway, `--profile migrations`)
 

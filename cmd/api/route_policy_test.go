@@ -162,7 +162,7 @@ const demoModulePath = "github.com/gaborage/go-bricks-demo-project/"
 // the framework's module registry does: Init every enabled module this repository
 // owns (in development, so the activity module registers its poison simulator), then
 // RegisterRoutes each one through a handler registry that resolves jose: kids against
-// the keystore, under the /api/v1 base path config.development.yaml sets. ModuleName
+// the keystore, under the /api/v1 base path config.yml sets. ModuleName
 // is attributed by registration span, as the framework does.
 //
 // Framework modules are skipped: of those, only the scheduler registers routes, all

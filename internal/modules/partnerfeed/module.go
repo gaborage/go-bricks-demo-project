@@ -88,7 +88,7 @@ func (m *Module) RegisterRoutes(*server.HandlerRegistry, server.RouteRegistrar) 
 // aborts rather than serving HTTP while consuming nothing. With
 // messaging.declare.externalwait > 0 the framework re-runs the pass on a 404
 // until the owner creates the exchange or the budget runs out — see the
-// commented entry in config.development.yaml for what that costs.
+// commented entry in config.yml for what that costs.
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	if !m.enabled {
 		return

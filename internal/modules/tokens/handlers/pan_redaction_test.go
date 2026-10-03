@@ -30,7 +30,7 @@ func captureFilteredLogger(t *testing.T, filter *logger.FilterConfig) (logger.Lo
 }
 
 // Each PAN-bearing request logged whole renders only its last four digits. The
-// app filter adds the `pan` needle config.development.yaml sets under
+// app filter adds the `pan` needle config.yml sets under
 // log.sensitivefields; the framework-default filter has no such needle, so that
 // row proves the RedactedForLog hook itself keeps the PAN out.
 func TestPANBearingRequestsLogOnlyLast4(t *testing.T) {

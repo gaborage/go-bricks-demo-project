@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The server.path.base config.development.yaml sets, and the framework's
+// The server.path.base config.yml sets, and the framework's
 // default server.host.
 const (
 	apiBase      = "/api/v1"

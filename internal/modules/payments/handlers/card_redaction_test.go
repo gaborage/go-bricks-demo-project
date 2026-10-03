@@ -20,7 +20,7 @@ const redactFixtureHolder = "Ada Lovelace"
 var longDigitRun = regexp.MustCompile(`\d{5,}`)
 
 // appFilterConfig mirrors the filter the app's logger runs with: the framework
-// defaults plus the `pan` needle config.development.yaml adds under
+// defaults plus the `pan` needle config.yml adds under
 // log.sensitivefields, merged the way the framework merges YAML needles.
 func appFilterConfig() *logger.FilterConfig {
 	cfg := logger.DefaultFilterConfig()

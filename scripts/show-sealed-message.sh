@@ -477,7 +477,7 @@ echo "  * consumer side: after the open the handler holds the card in memory onl
 echo "    the app log line for the 'payments.authorized' delivery carries cardLast4,"
 echo "    never the plaintext card, and the delivery is deduped through the inbox."
 echo "  * rotation: provision payments-sign-v2, then pin it with the commented-out"
-echo "    'messaging.seal.active' selector in config.development.yaml, and re-run"
+echo "    'messaging.seal.active' selector in config.yml, and re-run"
 echo "    this script with OPEN_SIGN_KID=payments-sign-v2 — the kid above moves, the"
 echo "    seal tag never changes, and open-event has to be told the new generation"
 echo "    because it never trusts the header's."

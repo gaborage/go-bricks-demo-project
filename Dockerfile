@@ -1,8 +1,9 @@
 # Multi-stage build for the go-bricks demo API.
 #
 # The build context is an allowlist (.dockerignore): go.mod/go.sum, cmd/,
-# internal/ and config.development.yaml. certs/, .env and the untracked go.work
-# never reach the daemon, so no key or secret can land in a layer.
+# internal/, config.yml and config.development.yaml. certs/, .env and the
+# untracked go.work never reach the daemon, so no key or secret can land in a
+# layer.
 #
 # Build:  docker build -t go-bricks-demo-project .
 # Run:    see "Running the container" in README.md — the image carries no keys
@@ -42,11 +43,13 @@ WORKDIR /app
 
 COPY --from=builder /out/app ./app
 
-# The demo ships one config file. go-bricks loads config.yaml (absent: framework
-# defaults) plus config.<APP_ENV>.yaml from the working directory, so the image
-# selects development by default. Environment variables override any key, e.g.
-# DATABASE_HOST, MESSAGING_BROKER_URL, SERVER_PORT.
-COPY config.development.yaml ./
+# go-bricks loads config.yaml, or config.yml when config.yaml is absent (the
+# environment-neutral base), plus config.<APP_ENV>.yaml from the working
+# directory. The image selects development by default; any other APP_ENV runs on
+# the base alone. Environment variables override any key, e.g. DATABASE_HOST,
+# MESSAGING_BROKER_URL, SERVER_PORT — wiki/DEPLOYING.md lists the ones a
+# non-development deploy must set.
+COPY config.yml config.development.yaml ./
 ENV APP_ENV=development
 
 USER appuser
@@ -54,7 +57,7 @@ USER appuser
 EXPOSE 8080
 
 # Liveness via the framework's static health route (server.path.base +
-# server.path.health, /api/v1/health in config.development.yaml). The binary has
+# server.path.health, /api/v1/health in config.yml). The binary has
 # no health-check flag; busybox wget does the request. Shell form so an
 # overridden SERVER_PORT or SERVER_PATH_BASE is honoured.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

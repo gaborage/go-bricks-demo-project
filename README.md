@@ -492,7 +492,7 @@ The opt-in key `messaging.consumers.critical: true` (#1686, ADR-114) makes `/rea
 answer **503** once a declared consumer (here `payments.authorized`) is unsubscribed
 and has failed 5 re-subscribes in a row. With the key on, the publisher check is
 critical too, so a broker outage also answers 503, and immediately. That is why
-[config.development.yaml](config.development.yaml) only carries a commented example.
+[config.yml](config.yml) only carries a commented example.
 
 ```bash
 # Stop any `make run` first: the script boots its own app with
@@ -585,7 +585,8 @@ still an app restart.
 ## Configuration
 
 Key files:
-- **[config.development.yaml](config.development.yaml)** - All configuration options with examples
+- **[config.yml](config.yml)** - Base configuration, loaded in every environment: routes, outbox, inbox, scheduler, log filter, database types and timezones. No hosts, credentials or key paths
+- **[config.development.yaml](config.development.yaml)** - Development overlay (`APP_ENV=development`, what `make run` uses): docker-compose hosts and credentials, `certs/` keys, dev/benchmark knobs
 - **[etc/docker/docker-compose.yml](etc/docker/docker-compose.yml)** - Infrastructure services
 - **`.env`** - Secrets (gitignored, see `.env.example`)
 
@@ -601,6 +602,10 @@ messaging.streams.addressresolver.host: localhost      # Required under Docker p
 messaging.streams.addressresolver.port: 5552
 messaging.streams.offsetstore.countbeforestorage: 10   # Framework default 500
 ```
+
+### Running outside development
+
+Any `APP_ENV` other than `development` loads only [config.yml](config.yml), so the deploy supplies hosts, credentials and keys through environment variables: `DATABASE_*` (including `DATABASE_TLS_MODE` / `DATABASE_TLS_CA`), `DATABASES_ANALYTICS_*`, `MESSAGING_BROKER_URL`, `MESSAGING_STREAMS_URI`, a `KEYSTORE_KEYS_<NAME>_*_VALUE` pair per key, `CORS_ORIGINS`, and the `OBSERVABILITY_*` variables if you export telemetry. go-bricks reads `config.yaml` before `config.yml`, so never add a `config.yaml`. [wiki/DEPLOYING.md](wiki/DEPLOYING.md) has the full list and the dev-only defaults that do not carry over.
 
 ## Development
 
@@ -621,7 +626,7 @@ make seal-mle              # JSON on stdin -> Visa MLE {"encData":...} body for 
 
 ### Running the container
 
-The [Dockerfile](Dockerfile) builds the API against `go.mod` alone (`GOWORK=off`), and `.dockerignore` sends only `go.mod`, `go.sum`, `cmd/`, `internal/` and `config.development.yaml` to the daemon, so `certs/` and `.env` never reach an image layer. The image runs with `APP_ENV=development`. Mount the keys read-only, and point the app at the compose services by their network names:
+The [Dockerfile](Dockerfile) builds the API against `go.mod` alone (`GOWORK=off`), and `.dockerignore` sends only `go.mod`, `go.sum`, `cmd/`, `internal/`, `config.yml` and `config.development.yaml` to the daemon, so `certs/` and `.env` never reach an image layer. The image runs with `APP_ENV=development`. Mount the keys read-only, and point the app at the compose services by their network names:
 
 ```bash
 docker build -t go-bricks-demo-project .
@@ -768,7 +773,8 @@ go-bricks-demo-project/
 ├── migrations-analytics/        # Flyway migrations (analytics database)
 ├── loadtests/                   # k6 load tests
 ├── etc/docker/                  # Docker Compose + configs
-├── config.development.yaml      # Configuration
+├── config.yml                   # Base configuration (every environment)
+├── config.development.yaml      # Development overlay (local infra, certs/, dev knobs)
 └── Makefile                     # Development commands
 ```
 

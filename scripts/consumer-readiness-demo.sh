@@ -8,8 +8,8 @@
 # declared AMQP consumer is unsubscribed AND its supervisor has failed 5
 # re-subscribes in a row — the same streak at which the framework's
 # "Consumer re-subscribe attempt failed" log turns WARN. A reconnect that
-# recovers inside the streak never reaches the verdict. config.development.yaml
-# leaves the key OFF: it also judges the publisher arm critically, so any
+# recovers inside the streak never reaches the verdict. No config file sets the
+# key (config.yml documents it commented out), so it is OFF: it also judges the publisher arm critically, so any
 # publisher not-ready moment answers 503 at once. This script turns it on for
 # the one app process it boots, and for nothing else.
 #
@@ -69,8 +69,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The app reads config.development.yaml and certs/ relative to its working
-# directory, so it must start from the repo root.
+# The app reads config.yml, config.development.yaml and certs/ relative to its
+# working directory, so it must start from the repo root.
 cd "$SCRIPT_DIR/.."
 
 # Endpoint guard + credential-file writer, shared with the sealed-message demos.

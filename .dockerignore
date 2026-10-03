@@ -6,6 +6,7 @@
 !go.sum
 !cmd/
 !internal/
+!config.yml
 !config.development.yaml
 
 # Tests never enter the binary.

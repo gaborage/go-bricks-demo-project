@@ -455,7 +455,8 @@ seal-mle:
 # --- Consumer-aware readiness (go-bricks v0.65.0, #1686/#1684, ADR-114) -------
 # /ready fails closed once the payments.authorized consumer gives up
 # re-subscribing. The script builds and boots its OWN app with
-# MESSAGING_CONSUMERS_CRITICAL=true (config.development.yaml keeps the key off),
+# MESSAGING_CONSUMERS_CRITICAL=true (no config file sets the key; config.yml
+# documents it commented out),
 # so stop any `make run` first — it refuses a busy port. It revokes the app
 # user's broker READ on payments.authorized only, closes the consumer's
 # connection, and polls until /ready turns 503 at a streak of 5. Since go-bricks
