@@ -358,6 +358,9 @@ func TestAWSSecretsTenantStore_ListTenants(t *testing.T) {
 					NextToken: aws.String("page2"),
 				}, nil
 			}
+			if got := aws.ToString(params.NextToken); got != "page2" {
+				t.Errorf("ListSecrets NextToken = %q, want %q", got, "page2")
+			}
 			return &secretsmanager.ListSecretsOutput{
 				SecretList: []types.SecretListEntry{
 					{Name: aws.String("/gobricks/test/tenant3/database")},
