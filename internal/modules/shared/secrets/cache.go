@@ -41,6 +41,7 @@ type Cache struct {
 	mu      sync.RWMutex
 	metrics CacheMetrics
 	stopCh  chan struct{}
+	done    chan struct{} // closed when cleanupLoop returns
 	once    sync.Once
 }
 
@@ -51,6 +52,7 @@ func NewCache(ttl time.Duration, maxSize int) *Cache {
 		ttl:     ttl,
 		maxSize: maxSize,
 		stopCh:  make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -143,6 +145,7 @@ func (c *Cache) Close() {
 
 // cleanupLoop runs periodically to remove expired entries
 func (c *Cache) cleanupLoop() {
+	defer close(c.done)
 	ticker := time.NewTicker(c.ttl / 2) // Clean up twice per TTL period
 	defer ticker.Stop()
 

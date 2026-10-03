@@ -2,7 +2,6 @@ package secrets
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -404,19 +403,15 @@ func TestCache_ConcurrentSetAndDelete(t *testing.T) {
 }
 
 func TestCache_Close(t *testing.T) {
-	// Counted before NewCache, so the cleanup goroutine it starts is excluded
-	// and the loop below waits for that goroutine to exit.
-	before := runtime.NumGoroutine()
-
 	c := NewCache(10*time.Millisecond, 10)
 	c.Close()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before {
-		if time.Now().After(deadline) {
-			t.Fatalf("cleanup goroutine still running after Close(): before=%d, now=%d", before, runtime.NumGoroutine())
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Wait on this cache's own exit signal rather than a process-wide
+	// goroutine count, which other tests' goroutines can skew either way.
+	select {
+	case <-c.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup goroutine still running 2s after Close()")
 	}
 }
 

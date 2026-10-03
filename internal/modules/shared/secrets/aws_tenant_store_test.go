@@ -566,6 +566,7 @@ func TestNewAWSSecretsTenantStore_EmptyPrefix(t *testing.T) {
 }
 
 func TestNewAWSSecretsTenantStore_Defaults(t *testing.T) {
+	isolateAWSEnv(t)
 	store, err := NewAWSSecretsTenantStore(context.Background(), testLoggerAWS(), AWSSecretsConfig{Prefix: testSecretsPrefix})
 	if err != nil {
 		t.Fatalf("NewAWSSecretsTenantStore() error = %v", err)
@@ -584,6 +585,7 @@ func TestNewAWSSecretsTenantStore_Defaults(t *testing.T) {
 }
 
 func TestNewAWSSecretsTenantStore_CustomCacheSettings(t *testing.T) {
+	isolateAWSEnv(t)
 	store, err := NewAWSSecretsTenantStore(context.Background(), testLoggerAWS(), AWSSecretsConfig{
 		Prefix:  testSecretsPrefix,
 		Cache:   30 * time.Second,
