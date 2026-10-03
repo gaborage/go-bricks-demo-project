@@ -1,0 +1,343 @@
+# =============================================================================
+# Go-Bricks Demo Project — Base Configuration
+# =============================================================================
+# Loaded in EVERY environment, then overlaid by config.<APP_ENV>.yaml (or .yml)
+# and finally by environment variables (lower-case, "_" -> ".": DATABASE_HOST
+# overrides database.host). Maps merge key by key across the layers; a list
+# set by a later layer REPLACES the earlier list, it does not append.
+#
+# Environment-neutral on purpose: module, topology and behavior settings only.
+# No infrastructure hosts or ports, no credentials, no key paths, no dev-only
+# demo knobs. config.development.yaml supplies those for the local
+# docker-compose stack (`make run`); any other environment supplies them
+# through environment variables — wiki/DEPLOYING.md lists the ones a deploy
+# MUST set.
+#
+# WHY .yml: go-bricks reads config.yaml FIRST and falls back to config.yml only
+# when config.yaml is absent. Never add a config.yaml next to this file — it
+# would silently replace every setting below. cmd/api/config_layout_test.go
+# fails the build if one appears.
+# =============================================================================
+
+# --- Application identity ---------------------------------------------------
+# Not set here, so app.name and app.version stay at the framework defaults
+# (gobricks-service / v1.0.0). A deploy names itself with APP_NAME and
+# APP_VERSION. APP_ENV selects the overlay; it defaults to development, so a
+# deploy that forgets it loads config.development.yaml.
+# app:
+#   name: go-bricks-demo-project
+
+# --- HTTP Server ------------------------------------------------------------
+# All routes — including health and ready — are mounted under this base path.
+# The framework default for server.path.base is empty (routes at root), so the
+# documented demo URLs (curl http://localhost:8080/api/v1/products) and the
+# k6 load tests only resolve once this is set to /api/v1.
+#
+# health/ready resolve at /api/v1/health and /api/v1/ready respectively.
+server:
+  path:
+    base: "/api/v1"
+    health: "/health"
+    ready: "/ready"
+
+# --- Messaging (RabbitMQ) ---------------------------------------------------
+# No messaging key is set in this file. The two URIs below are per environment
+# and have no usable default; the knobs after them are commented examples.
+# YAML allows ONE top-level messaging: key per file, so every example sits under
+# the single commented root at the end of this section: uncomment the root and
+# only the children you need.
+#
+# messaging.broker.url — REQUIRED (env MESSAGING_BROKER_URL). The AMQP broker
+# URL. Required for the outbox relay to publish events; without it the relay job
+# logs "messaging not available" every poll interval (5s).
+#
+# messaging.streams.uri — REQUIRED (env MESSAGING_STREAMS_URI) while the
+# activity module declares streams. Native stream protocol — activity module
+# (ADR-059 / ADR-063 / ADR-091). A SECOND, independent lane. Streams speak the
+# rabbitmq_stream protocol on 5552, not AMQP on 5672, so this URI is
+# deliberately NOT derived from messaging.broker.url: a deployment may expose
+# one listener and not the other.
+#
+# ADR-091 (opt-in at the build graph): setting this uri is only half the
+# switch. The `messaging/streams` package must also be linked into the binary,
+# and any import of it does that. internal/modules/activity/module.go imports
+# it by NAME and uses it — it declares the topology, so it needs the package's
+# types anyway, and that same import is what links the lane. Only a process
+# that declares no topology of its own would need a blank `_` import instead.
+# With neither, startup FAILS with app.ErrStreamsNotLinked rather than
+# silently dropping every stream declaration. Neither uri nor import (the
+# state before this demo) starts clean. This binary links the lane, so a
+# deploy without the uri fails at startup.
+#
+# Plaintext rabbitmq-stream:// WARNs outside development — production
+# terminates TLS in front of the broker or uses rabbitmq-stream+tls:// (5551).
+# Behind port mapping, NAT or a load balancer also set
+# messaging.streams.addressresolver (see config.development.yaml).
+#
+# --- Consumer-aware readiness (go-bricks v0.65.0, #1686, ADR-114) — OFF here -
+# Absent (the default), /ready judges the messaging kind by its publisher alone
+# and never critically. `consumers.critical: true` makes the kind critical, and
+# BOTH of its arms with it:
+#   - consumer arm: GET /api/v1/ready answers 503 once a declared AMQP
+#     consumer (here: payments.authorized) is unsubscribed AND has failed 5
+#     re-subscribes in a row — the streak at which the "Consumer re-subscribe
+#     attempt failed" log turns WARN. A reconnect that recovers inside the
+#     streak never reaches the verdict. Since go-bricks v0.69.0 (ADR-120) the
+#     /ready body is only {"status":"ready"} or {"status":"not ready"}. Watch
+#     the streak climb on GET /_sys/health-debug (debug.enabled, loopback-only),
+#     under data.components.messaging: details.subscribed_consumers vs
+#     declared_consumers, consumer_max_fail_streak, consumer_resubscribes, and
+#     error "consumer re-subscribe exhausted" once the arm fails. The
+#     `Readiness check failed` log line names the blocking kind
+#     (component=messaging). With the OTLP export on, the
+#     messaging.consumer.* and app.readiness.status gauges carry the same.
+#   - publisher arm: the existing "is the leased publisher ready?" check is now
+#     judged critically too, so a broker outage (any publisher not-ready moment)
+#     answers 503 at once, with no streak.
+# That second arm is why the key stays off in this file: turning it on is a
+# per-environment decision (env MESSAGING_CONSUMERS_CRITICAL=true). `make
+# demo-consumer-readiness` enables it for the one app process it boots. Stream
+# consumers (the activity projection) are not covered — the streams kind is
+# never critical. With the key on, gate liveness on /health, never /ready,
+# or a broker incident becomes a restart loop.
+#
+# --- Aggregate per-publish bound (go-bricks v0.64.0, ADR-103) ---------------
+# When set, the WHOLE logical publish — the readiness pre-flight plus every
+# retry attempt — runs under one deadline, layered under any tighter caller
+# deadline. Unset (the default) is unbounded, which is what this demo runs.
+#
+# Startup validates a floor of messaging.reconnect.readytimeout +
+# messaging.reconnect.connectiontimeout — 35s at framework defaults (5s + 30s)
+# — because a shorter bound would truncate a healthy cold-path first attempt
+# into a false failure. So demo-scale values like 5s are REFUSED at startup,
+# not merely ineffective; pick a value above the floor or leave it unset.
+#
+# On expiry the caller sees context.DeadlineExceeded wrapping the last
+# attempt's cause (messaging.ErrPublishNacked or ErrPublishConfirmTimeout),
+# so a timed-out publish's outcome is UNKNOWN — the message may still have
+# landed. Consumers must be idempotent before this is safe to enable.
+#
+# --- Sealed messages — payments module (go-bricks v0.63.0, ADR-097) ---------
+# A `seal:`-tagged event type encrypts its one declared Subject and signs the
+# whole document. Key material lives in keystore.keys (generations
+# payments-sign-v1 / payments-encrypt-v1, supplied per environment — see the
+# KeyStore section below); seal.active only SELECTS which provisioned
+# generation seals NEW traffic — it never widens what can be opened, since
+# every message names the generation that sealed it.
+#
+# Deliberately absent here: a family with exactly one provisioned generation
+# auto-activates. Provision a second and startup refuses to guess — that is
+# when the selector stops being optional.
+#
+# Rotation (framework wiki/sealing.md, "Rotation runbooks"): provision v2
+# everywhere FIRST, then flip the selector and redeploy. Both at once strands
+# in-flight and outbox-replayed v1 traffic in the DLQ as
+# SEAL_KID_UNKNOWN_GENERATION.
+#
+# --- Startup wait for an EXTERNAL exchange (go-bricks v0.67.0, #1774, ADR-119)
+# Only matters once a module references an exchange another service owns —
+# here the opt-in partnerfeed module (custom.partnerfeed.enabled below), whose
+# partner-events is verified with a passive declare and never created.
+#
+# 0 (the default, so absent here) aborts startup at once on the broker's 404.
+# A positive duration re-runs the whole startup declare pass on a 404, with
+# backoff (first gap min(1s, externalwait/4), doubling to 5s), until the owner
+# creates the exchange or the budget runs out; then startup aborts with the
+# broker's own 404. It engages only for a service that declared consumers,
+# only on a 404, and only on the control-plane startup pass (single-tenant, or
+# messaging.tenancy: shared). Env: MESSAGING_DECLARE_EXTERNALWAIT.
+#
+# Two costs before setting it anywhere real:
+#   * a MISTYPED external name never converges either, so it spends the whole
+#     budget before failing — a fast, legible crash becomes a slow one;
+#   * the HTTP listener starts only after this pass, so size the startupProbe
+#     (initial delay + failure threshold) for: first declare attempt +
+#     externalwait + one final attempt that runs to its own
+#     infrastructure-setup timeout — not for externalwait alone.
+# make external-exchange-demo sets it for its own run only.
+#
+# messaging:
+#   consumers:
+#     critical: true
+#   publishtimeout: 40s
+#   seal:
+#     active:
+#       payments-sign: "v2"
+#   declare:
+#     externalwait: 60s
+
+# --- Custom module switches -------------------------------------------------
+# Read by the modules themselves through deps.Config, so the framework's loader
+# applies the usual env mapping (lower-case, "_" -> "."): CUSTOM_PARTNERFEED_ENABLED.
+# YAML allows ONE top-level custom: key per file (a second one is a duplicate
+# key and fails config load), so every custom.* example sits under the single
+# commented root below: uncomment the root and only the children you need.
+#
+# partnerfeed (internal/modules/partnerfeed): consumes partner.stock.updated from
+# partner-events, an exchange ANOTHER service owns. Off by default, because no
+# partner service runs locally: switched on with the exchange absent, startup
+# fails on the broker's 404 (or waits, with messaging.declare.externalwait above).
+# make external-exchange-demo turns it on for its own run and plays the partner.
+# The demo-only custom.products.report.hold lives in config.development.yaml.
+# custom:
+#   partnerfeed:
+#     enabled: true
+
+# --- Logging ----------------------------------------------------------------
+# go-bricks v0.39.0 (go-bricks#424) changed the default log output format from
+# "json" to "auto": console (colored) only when stdout is a TTY AND OTLP log
+# export is inactive — otherwise JSON. Pinned explicitly so `make run` keeps
+# readable console output locally while still emitting JSON for the Loki/OTLP
+# pipeline. NOTE: "console" combined with OTLP log export panics at startup;
+# "auto" resolves that automatically.
+log:
+  output:
+    format: auto   # auto | console | json
+
+  # Extends logger.DefaultFilterConfig (case-insensitive substring on the field
+  # name). `pan` is not a framework default: the tokens relays hand httpclient a
+  # PRE-SEAL plaintext {"pan":...} body, which appendBodyPreview logs verbatim
+  # when LogPayloads + debug are on. An overlay that sets this list REPLACES it,
+  # so repeat `pan` there.
+  sensitivefields:
+    - pan
+
+# --- Default Database -------------------------------------------------------
+# Accessed by modules via deps.DB(ctx). The connection identity — host, port,
+# database, username, password (and database.tls.* outside development) — is
+# per environment: config.development.yaml for the docker-compose Postgres,
+# DATABASE_* environment variables anywhere else.
+database:
+  type: postgresql
+
+  # Session timezone (go-bricks v0.29.0+) — IANA name applied to EVERY new
+  # physical connection. PostgreSQL receives it via the pgx StartupMessage's
+  # RuntimeParams, so pool members spawned later (after drops, lifetime expiry,
+  # or burst load) inherit the same setting — no one-shot drift.
+  #
+  # Behavior:
+  #   "UTC"               (default if unset)        opinionated, environment-stable
+  #   "America/New_York"  (any IANA name)           validated via time.LoadLocation
+  #   "-"                 (sentinel)                opt out: inherit DB server default
+  #   "+05:30"            (numeric offset)          REJECTED — use Etc/GMT-5 instead
+  #
+  # See: https://github.com/gaborage/go-bricks/blob/main/wiki/adr_016_database_session_timezone.md
+  timezone: UTC
+  # timezone: "-"   # legacy opt-out: inherit DB server default timezone (keep the quotes in YAML)
+
+# --- Named Databases --------------------------------------------------------
+# Accessed via deps.DBByName(ctx, "<name>"). The analytics module uses "analytics".
+# Only the shape lives here; the connection identity is per environment
+# (config.development.yaml, or DATABASES_ANALYTICS_* environment variables).
+databases:
+  analytics:
+    type: postgresql
+
+    # Each named database gets its own timezone setting. Here we deliberately
+    # pick a non-UTC zone to prove the per-connection enforcement: queries
+    # against analytics report Tokyo time even when the default DB reports UTC.
+    timezone: Asia/Tokyo
+    # timezone: "-"   # legacy opt-out for the analytics named DB
+
+# --- Transactional Outbox ---------------------------------------------------
+# Reliable event publishing via the dual-write pattern.
+# Events are written to an outbox table inside the same DB transaction as
+# business data, then relayed to RabbitMQ by a background poller.
+# NOTE (go-bricks v0.40.1, #549): config keys bind by their flat-smushed koanf
+# tag (tablename, autocreatetable, …), NOT the underscored form. The pre-0.40.1
+# underscored keys (table_name, auto_create_table, …) silently STOP binding on
+# upgrade and fall back to their zero-value defaults with no error — which for
+# this block means defaultexchange="" (events never route). Keep these
+# flat-smushed.
+outbox:
+  enabled: true
+  tablename: gobricks_outbox
+  # The demo owns the outbox DDL. go-bricks v0.61.0 (ADR-088) reshaped the ledger
+  # — rows gained `seq` and `lane`, and the relay takes a companion
+  # <tablename>_leader row FOR UPDATE NOWAIT to admit exactly one drainer — and
+  # framework autocreate only ever CREATEs a missing table, it never ALTERs an
+  # existing one. So on a retained volume autocreate cannot migrate the old shape
+  # and Init fails with TableUnusableError regardless of this flag. Owning the DDL
+  # in migrations/V3__upgrade_outbox_ledger.sql makes the upgrade explicit and
+  # replayable: run `make migrate` before `make run`.
+  autocreatetable: false
+  defaultexchange: product-events  # Target exchange when event.Exchange is empty
+  pollinterval: 5s                 # How often the relay checks for unsent events
+  batchsize: 100                   # Max events per relay cycle
+  # go-bricks v0.45.0 (#626) reworked retry semantics and v0.61.0 (#1229) added a
+  # second poison class. maxretries dead-letters only POISON events to
+  # status='failed'. Two poison classes are reachable in THIS config (single
+  # tenant, outbox.superstreams unset, so every row is lane='amqp'): undecodable
+  # headers, and a destination the AMQP frame can never carry (exchange, routing
+  # key or header key past the shortstr ceiling). Both are message-intrinsic —
+  # refused identically every cycle, so retrying them forever is pointless.
+  # outbox/relay.go dead-letters further classes this config does not reach: a
+  # messaging.ErrTenantStampConflict, an unknown lane, and the stream-lane cases
+  # (unknown stream, missing partition key). Connectivity
+  # failures (broker down, NACK, publish-confirm timeout, missing exchange) advance
+  # retry_count and retry INDEFINITELY — they never park. Monitor retry_count and
+  # prune status='failed' rows manually (DeletePublished purges only 'published').
+  maxretries: 5                    # Poison-event dead-letter threshold (NOT connectivity retries)
+  retentionperiod: 72h             # How long delivered events are kept
+  # publishtimeout bounds a single relay publish attempt (v0.45.0, default 60s).
+  # HARD INVARIANT: publishtimeout MUST be >= messaging.reconnect.connectiontimeout
+  # (default 30s) or the outbox module fails to Init. Raise this if you raise the
+  # reconnect connection timeout.
+  publishtimeout: 60s
+
+# --- Inbox (consumer-side idempotency) --------------------------------------
+# The durable complement to the outbox above: the inbox records processed event
+# ids in a ledger and commits that row in the SAME transaction as the business
+# write, so a redelivery is skipped instead of reprocessed.
+#
+# The sealed payments consumer REQUIRES it. A seal-tagged consumer dedups on the
+# sealed envelope's "<sign family>:<jti>" key (messaging.Metadata.DedupKey), and
+# the payments module refuses to Init when deps.Inbox is nil — so inbox.NewModule()
+# must be registered in cmd/api/main.go before the payments module.
+#
+# Same koanf key rule as the outbox block above: keys are flat-smushed
+# (`tablename`, `autocreatetable`, `retentionperiod`). An underscored key
+# silently STOPS binding and falls back to its zero value with no error.
+inbox:
+  enabled: true
+  # Framework default name, spelled out so the DDL and the config visibly agree.
+  tablename: gobricks_inbox
+  # The demo owns the inbox DDL (migrations/V4__create_inbox_ledger.sql), exactly
+  # like the outbox above — run `make migrate` before `make run`. Framework
+  # autocreate only ever CREATEs a missing table, it never ALTERs an existing
+  # one, so managed migrations are the honest production pattern to showcase.
+  autocreatetable: false
+  # RETENTION IS THE REPLAY WINDOW. A message redelivered after its ledger row
+  # was swept is processed AGAIN, so this MUST exceed the broker's maximum
+  # redelivery window. It also bounds every DLQ drain, every outbox re-drive,
+  # and the drain gate of a sealed-key rotation (wiki/sealing.md). 168h (7d) is
+  # the framework default, pinned explicitly so the window is visible rather
+  # than implied. Written as hours because Go durations have no "d" unit.
+  retentionperiod: 168h
+  # Where the ledger lives under multi-tenancy. "per-tenant" is the framework
+  # default; in this single-tenant demo (multitenant.enabled is false) both
+  # values behave identically — named here for the reader, not for effect.
+  tenancy: per-tenant
+
+# --- Scheduler --------------------------------------------------------------
+# The scheduler drives the outbox relay job above. go-bricks v0.39.0
+# (go-bricks#527) added scheduler.timezone — the IANA name used to interpret
+# scheduled-job times. Unset now defaults to UTC; pinned explicitly to mirror
+# database.timezone and document intent. Sentinel "-" opts out (host-local).
+scheduler:
+  timezone: UTC
+
+# --- KeyStore ----------------------------------------------------------------
+# No key material here: every entry is per environment. Each entry is
+# keystore.keys.<name>.{public|private}.{file|value} — `file:` a DER path,
+# `value:` raw base64 DER, never both for one half. config.development.yaml
+# points at the DER files `make generate-keys` writes to certs/; a deploy
+# usually injects base64 from a secret manager, e.g.
+# KEYSTORE_KEYS_PAYMENTS-SIGN-V1_PRIVATE_VALUE (hyphens pass through as-is).
+#
+# Entries the modules resolve at startup, both halves each:
+#   webhook-signing      webhooks module (sign + verify)
+#   tokens-our           tokens module, our JOSE keypair
+#   tokens-peer          tokens module, the in-process peer simulator's keypair
+#   payments-sign-v1     payments module, sealing sign family (generation v1)
+#   payments-encrypt-v1  payments module, sealing encrypt family (generation v1)

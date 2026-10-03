@@ -30,7 +30,9 @@
 !.env.example
 !config.example.yaml
 
-# Development config (committed so visitors see all options)
+# Base config (every environment) and the development overlay, committed so
+# visitors see all options
+!config.yml
 !config.development.yaml
 
 # Multi-tenant migration demo fleet config

@@ -249,7 +249,7 @@ fi
 
 LAUNCHED_AT="$(date +%s)"
 for i in 0 1; do
-    # Same binary, same config.development.yaml; only the port and the hold
+    # Same binary, same config files; only the port and the hold
     # differ from `make run`. env -u DEBUG mirrors its `unset DEBUG`.
     env -u DEBUG \
         APP_ENV="${APP_ENV:-development}" \

@@ -21,7 +21,7 @@ import (
 const moduleName = "products"
 
 // productEventsExchange is the topic exchange the outbox relay publishes
-// product lifecycle events to (outbox.defaultexchange in config.development.yaml).
+// product lifecycle events to (outbox.defaultexchange in config.yml).
 const productEventsExchange = "product-events"
 
 // reportHoldKey sets job.ReportJob.Hold (env CUSTOM_PRODUCTS_REPORT_HOLD). Unset

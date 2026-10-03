@@ -20,8 +20,9 @@ const (
 	// moduleName identifies this module for registration and logging.
 	moduleName = "analytics"
 
-	// analyticsDBName is the name of the named database in config.yaml.
-	// This matches the key under the "databases:" section in config.development.yaml.
+	// analyticsDBName is the name of the named database: the key under the
+	// "databases:" section of config.yml (its shape) and config.development.yaml
+	// (its local connection).
 	analyticsDBName = "analytics"
 )
 

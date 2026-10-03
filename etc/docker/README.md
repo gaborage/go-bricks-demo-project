@@ -251,5 +251,5 @@ curl http://localhost:13133/
 ## Related Documentation
 
 - [PROMETHEUS_GRAFANA_SETUP.md](../../wiki/PROMETHEUS_GRAFANA_SETUP.md) - Complete Prometheus/Grafana setup guide
-- [config.development.yaml](../../config.development.yaml) - Application observability configuration
+- [config.yml](../../config.yml) and [config.development.yaml](../../config.development.yaml) - Application configuration (base and development overlay)
 - [New Relic OTLP Documentation](https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/opentelemetry-setup/) - Official New Relic OTLP guide
