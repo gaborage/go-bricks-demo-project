@@ -32,6 +32,10 @@ variable added on top of a `file:` entry is refused at startup (`both 'file' and
 
 [config.yml](../config.yml) holds every setting that must match in all environments:
 
+- the app identity, `app.name: go-bricks-demo-project` and `app.version` (bump it
+  per release, or override either with `APP_NAME` / `APP_VERSION`). The name is
+  the AMQP `app_id` and the startup log's `app`, not the OTel `service.name`,
+  which comes from `OBSERVABILITY_SERVICE_NAME`
 - the `/api/v1` route prefix and the health and ready paths
 - the log filter's `pan` needle and the `auto` log format
 - the database types and session timezones (`UTC` default, `Asia/Tokyo` analytics)
@@ -52,7 +56,6 @@ environments therefore run with the framework defaults:
 | Variable | Notes |
 |----------|-------|
 | `APP_ENV` | Anything but `development`. |
-| `APP_NAME`, `APP_VERSION` | Recommended. Otherwise `gobricks-service` / `v1.0.0`. |
 | `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_DATABASE`, `DATABASE_USERNAME`, `DATABASE_PASSWORD` | Default database. A non-empty password must be at least 8 bytes. |
 | `DATABASE_TLS_MODE`, `DATABASE_TLS_CA` | `require`, `verify-ca` or `verify-full`, and the CA file path. `DATABASE_TLS_CERT` / `DATABASE_TLS_KEY` for client certificates. |
 | `DATABASES_ANALYTICS_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`, `_PASSWORD`, `_TLS_MODE`, `_TLS_CA` | The `analytics` named database, same rules. |
