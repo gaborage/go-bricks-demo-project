@@ -22,7 +22,7 @@ import (
 const vtsPeerName = "visa-vts-issuer-peer-sim"
 
 // vtsFixture reuses the MLE fixture's keystore and resolver (both halves of
-// tokens-our and tokens-peer) and adds the VTS Issuer simulator. Keeping the MLE
+// tokensour and tokenspeer) and adds the VTS Issuer simulator. Keeping the MLE
 // simulator alongside is deliberate: the key-separation test needs both.
 type vtsFixture struct {
 	mle *mleFixture
@@ -263,7 +263,7 @@ func TestVTSIssuerOpenRefusesOtherShapes(t *testing.T) {
 
 // TestVTSIssuerInnerJWERefusedOnBareRoute pins the key-separation reasoning in
 // NewVTSIssuerRelayService. The inner JWE of a VTS Issuer request is encrypted to
-// tokens-peer, and so is every MLE request: the MLE simulator decrypts with the
+// tokenspeer, and so is every MLE request: the MLE simulator decrypts with the
 // same kid and authenticates nobody. Lifted out of its signed wrapper and replayed
 // there, that inner JWE is refused only because the bare policy pins A128GCM. The
 // control case widens the pin and shows the lifted JWE would then open, which is

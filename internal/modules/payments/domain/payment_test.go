@@ -19,8 +19,8 @@ func TestPaymentAuthorizedSealDeclarationScans(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, spec, "PaymentAuthorized must carry a seal declaration the codec recognizes")
 
-	assert.Equal(t, "payments-sign", spec.SignLogical)
-	assert.Equal(t, "payments-encrypt", spec.EncryptLogical)
+	assert.Equal(t, "paymentssign", spec.SignLogical)
+	assert.Equal(t, "paymentsencrypt", spec.EncryptLogical)
 	assert.Equal(t, "Card", spec.SubjectField)
 	assert.Equal(t, "card", spec.SubjectPath, "the subject's json name is the signed sp entry")
 	assert.Equal(t, []string{"card"}, spec.SealedPaths())

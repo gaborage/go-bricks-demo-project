@@ -130,7 +130,7 @@ server:
 # --- Sealed messages — payments module (go-bricks v0.63.0, ADR-097) ---------
 # A `seal:`-tagged event type encrypts its one declared Subject and signs the
 # whole document. Key material lives in keystore.keys (generations
-# payments-sign-v1 / payments-encrypt-v1, supplied per environment — see the
+# paymentssign-v1 / paymentsencrypt-v1, supplied per environment — see the
 # KeyStore section below); seal.active only SELECTS which provisioned
 # generation seals NEW traffic — it never widens what can be opened, since
 # every message names the generation that sealed it.
@@ -172,7 +172,7 @@ server:
 #   publishtimeout: 40s
 #   seal:
 #     active:
-#       payments-sign: "v2"
+#       paymentssign: "v2"
 #   declare:
 #     externalwait: 60s
 
@@ -343,11 +343,12 @@ scheduler:
 # `value:` raw base64 DER, never both for one half. config.development.yaml
 # points at the DER files `make generate-keys` writes to certs/; a deploy
 # usually injects base64 from a secret manager, e.g.
-# KEYSTORE_KEYS_PAYMENTS-SIGN-V1_PRIVATE_VALUE (hyphens pass through as-is).
+# KEYSTORE_KEYS_PAYMENTSSIGN-V1_PRIVATE_VALUE (the -v<N> hyphen passes through
+# as-is; see wiki/DEPLOYING.md for why names carry no other separator).
 #
 # Entries the modules resolve at startup, both halves each:
-#   webhook-signing      webhooks module (sign + verify)
-#   tokens-our           tokens module, our JOSE keypair
-#   tokens-peer          tokens module, the in-process peer simulator's keypair
-#   payments-sign-v1     payments module, sealing sign family (generation v1)
-#   payments-encrypt-v1  payments module, sealing encrypt family (generation v1)
+#   webhooksigning      webhooks module (sign + verify)
+#   tokensour           tokens module, our JOSE keypair
+#   tokenspeer          tokens module, the in-process peer simulator's keypair
+#   paymentssign-v1     payments module, sealing sign family (generation v1)
+#   paymentsencrypt-v1  payments module, sealing encrypt family (generation v1)

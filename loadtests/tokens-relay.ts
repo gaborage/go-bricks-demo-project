@@ -5,7 +5,7 @@
 //
 //   k6  --plaintext-->  /tokens/relay
 //                       │
-//                       ├─ outbound JOSETransport: sign + encrypt (tokens-our + tokens-peer)
+//                       ├─ outbound JOSETransport: sign + encrypt (tokensour + tokenspeer)
 //                       │
 //                       │   POST /__sim/peer/tokens (in-process peer simulator)
 //                       │   ├─ inbound JOSE middleware: decrypt + verify

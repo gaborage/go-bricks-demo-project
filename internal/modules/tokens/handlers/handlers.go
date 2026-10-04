@@ -25,11 +25,11 @@ const maxClaimAge = 5 * time.Minute
 
 // TokenizeRequest is the JOSE-protected POST body of the partner-facing /tokens route.
 //
-// jose tag: inbound = decrypt with our private key (tokens-our), verify the JWS with
-// the peer's public key (tokens-peer). The framework decrypts + verifies before our
+// jose tag: inbound = decrypt with our private key (tokensour), verify the JWS with
+// the peer's public key (tokenspeer). The framework decrypts + verifies before our
 // handler is invoked — the handler sees a plain Go struct.
 type TokenizeRequest struct {
-	_   struct{} `jose:"decrypt=tokens-our,verify=tokens-peer"`
+	_   struct{} `jose:"decrypt=tokensour,verify=tokenspeer"`
 	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
@@ -63,10 +63,10 @@ func panLogView(pan string) map[string]any {
 }
 
 // TokenizeResponse is the JOSE-protected response. Outbound = sign with our private
-// key (tokens-our) + encrypt to the peer's public key (tokens-peer). The framework
+// key (tokensour) + encrypt to the peer's public key (tokenspeer). The framework
 // seals before returning the bytes on the wire.
 type TokenizeResponse struct {
-	_     struct{}      `jose:"sign=tokens-our,encrypt=tokens-peer"`
+	_     struct{}      `jose:"sign=tokensour,encrypt=tokenspeer"`
 	Token *domain.Token `json:"token"`
 }
 
@@ -78,7 +78,7 @@ type TokenizeResponse struct {
 // pair only coexists because the simulator is the same process that owns both
 // sides of the keystore.
 type PeerSimRequest struct {
-	_   struct{} `jose:"decrypt=tokens-peer,verify=tokens-our"`
+	_   struct{} `jose:"decrypt=tokenspeer,verify=tokensour"`
 	PAN string   `json:"pan" validate:"required,number,min=13,max=19"`
 }
 
@@ -87,7 +87,7 @@ func (r PeerSimRequest) RedactedForLog() any { return panLogView(r.PAN) }
 
 // PeerSimResponse is the simulator's outbound seal — peer signs, peer encrypts to us.
 type PeerSimResponse struct {
-	_     struct{}      `jose:"sign=tokens-peer,encrypt=tokens-our"`
+	_     struct{}      `jose:"sign=tokenspeer,encrypt=tokensour"`
 	Token *domain.Token `json:"token"`
 }
 
@@ -112,7 +112,7 @@ func NewHandler(svc Tokenizer, l logger.Logger) *Handler {
 // CreateToken handles POST /api/v1/tokens — the partner-facing JOSE route.
 //
 // By the time this runs, the framework has decrypted the JWE, verified the JWS
-// against tokens-peer, and bound the inner JSON into req. Application code
+// against tokenspeer, and bound the inner JSON into req. Application code
 // only sees plain structs.
 func (h *Handler) CreateToken(req TokenizeRequest, ctx server.HandlerContext) (*TokenizeResponse, server.IAPIError) {
 	if err := h.enforceClaimFreshness(ctx); err != nil {

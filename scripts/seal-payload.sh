@@ -10,14 +10,14 @@
 # (usage, missing keys, `go: downloading ...`) goes to stderr.
 #
 #   nested  JWE(JWS(payload)) for POST /api/v1/tokens. Plays the PEER: signs
-#           with the peer PRIVATE key (kid tokens-peer, the route's verify=
-#           name) and encrypts to our PUBLIC key (kid tokens-our, its decrypt=
+#           with the peer PRIVATE key (kid tokenspeer, the route's verify=
+#           name) and encrypts to our PUBLIC key (kid tokensour, its decrypt=
 #           name) — the same keys and kids the retired cmd/seal-payload used.
 #
 #   mle     Visa Message Level Encryption for POST /api/v1/__sim/peer/mle: one
 #           bare JWE (no inner JWS; RSA-OAEP-256 + A128GCM, typ JOSE,
 #           millisecond iat) inside {"encData":"<compact>"}. Plays the RELAY's
-#           outbound role: encrypts to the peer PUBLIC key (kid tokens-peer),
+#           outbound role: encrypts to the peer PUBLIC key (kid tokenspeer),
 #           which is the key the MLE peer simulator opens with. Nothing is
 #           signed — bare mode authenticates no sender (go-bricks ADR-107).
 #
@@ -53,8 +53,8 @@ cd "$SCRIPT_DIR/.."
 FRAMEWORK_MODULE="github.com/gaborage/go-bricks"
 
 # Kid names — must match internal/modules/tokens/module.go (OurKid / PeerKid).
-OUR_KID="tokens-our"
-PEER_KID="tokens-peer"
+OUR_KID="tokensour"
+PEER_KID="tokenspeer"
 
 # Key files written by `make generate-keys`. The peer public key is also
 # inlined into config.development.yaml (the keystore's value: source); this is

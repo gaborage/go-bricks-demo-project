@@ -46,7 +46,7 @@ func TestRelayServiceRefusesPlaintextSuccess(t *testing.T) {
 
 	relay, err := NewRelayService(&RelayConfig{
 		PartnerURL: peer.URL,
-		KeyStore:   newMLEFixture(t).keystore, // holds both halves of tokens-our and tokens-peer
+		KeyStore:   newMLEFixture(t).keystore, // holds both halves of tokensour and tokenspeer
 		SignKid:    testOurKid,
 		EncryptKid: testPeerKid,
 		VerifyKid:  testPeerKid,

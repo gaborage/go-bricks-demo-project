@@ -69,15 +69,19 @@ The keystore entries the modules resolve at startup, both halves each:
 
 | `<NAME>` | Used by |
 |----------|---------|
-| `WEBHOOK-SIGNING` | webhooks module: sign and verify |
-| `TOKENS-OUR` | tokens module: this service's JOSE keypair |
-| `TOKENS-PEER` | tokens module: the in-process peer simulators' keypair |
-| `PAYMENTS-SIGN-V1` | payments module: sealing sign family, generation v1 |
-| `PAYMENTS-ENCRYPT-V1` | payments module: sealing encrypt family, generation v1 |
+| `WEBHOOKSIGNING` | webhooks module: sign and verify |
+| `TOKENSOUR` | tokens module: this service's JOSE keypair |
+| `TOKENSPEER` | tokens module: the in-process peer simulators' keypair |
+| `PAYMENTSSIGN-V1` | payments module: sealing sign family, generation v1 |
+| `PAYMENTSENCRYPT-V1` | payments module: sealing encrypt family, generation v1 |
 
-Hyphens stay in the variable name, for example
-`KEYSTORE_KEYS_PAYMENTS-SIGN-V1_PRIVATE_VALUE`. Docker `-e` / `--env-file`,
-Kubernetes `env` and `env(1)` accept such names; a POSIX shell `export` does not.
+The variable name is the config path upper-cased with `.` turned into `_`, so
+an entry name carries no separator: an `_` would read back as a path separator,
+and a POSIX shell `export` refuses a `-`. The two sealing entries keep their
+`-v<N>` suffix anyway, because go-bricks treats only a name ending in
+`-v<digits>` as a sealing generation. Their variables, for example
+`KEYSTORE_KEYS_PAYMENTSSIGN-V1_PRIVATE_VALUE`, work through Docker `-e` /
+`--env-file`, Kubernetes `env` and `env(1)`, but not through a shell `export`.
 To mount DER files instead, set `..._FILE` to the mounted path rather than
 `..._VALUE`, never both for one half.
 

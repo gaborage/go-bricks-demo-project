@@ -69,9 +69,9 @@ TAP_QUEUE="${TAP_QUEUE:-payments.authorized.tap}"
 TAP_ATTEMPTS="${TAP_ATTEMPTS:-10}"
 
 EXPECTED_TYP="vnd.gobricks.sealed.v1+json"
-SIGN_FAMILY="payments-sign"       # Logical kid from the seal tag; the wire kid
-                                  # is a GENERATION of it (payments-sign-v<N>)
-ENCRYPT_FAMILY="payments-encrypt"
+SIGN_FAMILY="paymentssign"        # Logical kid from the seal tag; the wire kid
+                                  # is a GENERATION of it (paymentssign-v<N>)
+ENCRYPT_FAMILY="paymentsencrypt"
 
 # What the payments consumer declares — must match internal/modules/payments.
 EVENT_TYPE="payment.authorized"
@@ -85,12 +85,13 @@ SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-}"
 # The generations open-event expects. They are DECLARED, never lifted from the
 # header section 3 decodes: that header is unauthenticated until the signature
 # verifies, which is why the CLI takes both kids as required flags. Override
-# them after a rotation. The consumer-half key files follow the keystore's DER
-# naming (payments-sign-v1 -> certs/payments_sign_v1_public.der).
-OPEN_SIGN_KID="${OPEN_SIGN_KID:-payments-sign-v1}"
-OPEN_ENCRYPT_KID="${OPEN_ENCRYPT_KID:-payments-encrypt-v1}"
-OPEN_SIGN_KEY_FILE="certs/${OPEN_SIGN_KID//-/_}_public.der"          # consumer half: PUBLIC
-OPEN_ENCRYPT_KEY_FILE="certs/${OPEN_ENCRYPT_KID//-/_}_private.der"   # consumer half: PRIVATE
+# them after a rotation. The consumer-half key files follow the DER naming
+# `make generate-keys` writes, which is not the entry name, so only the
+# generation suffix carries over (paymentssign-v1 -> certs/payments_sign_v1_public.der).
+OPEN_SIGN_KID="${OPEN_SIGN_KID:-paymentssign-v1}"
+OPEN_ENCRYPT_KID="${OPEN_ENCRYPT_KID:-paymentsencrypt-v1}"
+OPEN_SIGN_KEY_FILE="certs/payments_sign_${OPEN_SIGN_KID##*-}_public.der"            # consumer half: PUBLIC
+OPEN_ENCRYPT_KEY_FILE="certs/payments_encrypt_${OPEN_ENCRYPT_KID##*-}_private.der"  # consumer half: PRIVATE
 
 # The order id is NOT an input: the service mints it and returns it, and this
 # script uses that value to prove the message on the broker is the one it just
@@ -476,9 +477,9 @@ echo "Next:"
 echo "  * consumer side: after the open the handler holds the card in memory only —"
 echo "    the app log line for the 'payments.authorized' delivery carries cardLast4,"
 echo "    never the plaintext card, and the delivery is deduped through the inbox."
-echo "  * rotation: provision payments-sign-v2, then pin it with the commented-out"
+echo "  * rotation: provision paymentssign-v2, then pin it with the commented-out"
 echo "    'messaging.seal.active' selector in config.yml, and re-run"
-echo "    this script with OPEN_SIGN_KID=payments-sign-v2 — the kid above moves, the"
+echo "    this script with OPEN_SIGN_KID=paymentssign-v2 — the kid above moves, the"
 echo "    seal tag never changes, and open-event has to be told the new generation"
 echo "    because it never trusts the header's."
 echo "  * refusals: 'make seal-event-demo' parks a wrong-event-type body on the DLQ"
