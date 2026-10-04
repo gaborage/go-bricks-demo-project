@@ -119,7 +119,7 @@ func NewVTSIssuerInboundPolicy(decryptKid, verifyKid string) *jose.Policy {
 //
 // Key separation (ADR-111): an inner JWE lifted out of a signed body would decrypt
 // on a bare-JWE route that shares its DecryptKid, where nothing authenticates the
-// sender. This demo reuses tokens-our/tokens-peer across all three shapes, and
+// sender. This demo reuses tokensour/tokenspeer across all three shapes, and
 // what keeps that safe is the Enc pin on the bare policies: they accept A128GCM
 // only, and this mode's inner JWE is A256GCM, so a lifted inner JWE fails to
 // parse there. Production gives each mode its own kids.

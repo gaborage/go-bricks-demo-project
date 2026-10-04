@@ -115,7 +115,7 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
 > package default is RS256; `httpclient.Builder.Build` fills an unset `SigAlg`
 > with RS256, so the mistake only shows when the partner rejects the signature.
 > The inbound policy pins the outer `alg` to exactly what it declares. The demo
-> reuses `tokens-our`/`tokens-peer` across all three modes; production gives each
+> reuses `tokensour`/`tokenspeer` across all three modes; production gives each
 > mode its own kids, because the inner JWE lifted out of a signed body would
 > decrypt on a bare-JWE route that shares its decrypt kid. See go-bricks ADR-111.
 
@@ -131,11 +131,11 @@ make run
 # 3. Seal a payload as the peer would and POST it to /tokens.
 #    DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 #    `make seal-payload` runs the framework's seal-payload CLI at the go-bricks
-#    version in go.mod: it signs with tokens-peer and encrypts to tokens-our.
+#    version in go.mod: it signs with tokenspeer and encrypts to tokensour.
 printf '%s' '{"pan":"4111111111111111"}' | make seal-payload | \
   curl -s -X POST http://localhost:8080/api/v1/tokens \
        -H 'Content-Type: application/jose' --data-binary @-
-# The reply is a compact JWE sealed back to tokens-peer. The CLI only seals,
+# The reply is a compact JWE sealed back to tokenspeer. The CLI only seals,
 # so use the relay endpoint (step 4) to see a plaintext token.
 
 # 4. Drive the outbound JOSETransport via the relay endpoint.
@@ -151,12 +151,12 @@ curl -s -X POST http://localhost:8080/api/v1/tokens/mle-relay \
 
 # 6. Mint the MLE body yourself and POST it straight to the MLE peer simulator.
 #    `make seal-mle` runs the same CLI in bare mode (-mode bare -enc A128GCM
-#    -typ JOSE -iat-ms -envelope visa-mle) and encrypts to tokens-peer, the key
+#    -typ JOSE -iat-ms -envelope visa-mle) and encrypts to tokenspeer, the key
 #    the simulator opens with. Nothing is signed.
 printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
   curl -s -X POST http://localhost:8080/api/v1/__sim/peer/mle \
        -H 'Content-Type: application/json' --data-binary @-
-# {"encData":"eyJ..."}: sealed back to tokens-our. This is the envelope the
+# {"encData":"eyJ..."}: sealed back to tokensour. This is the envelope the
 # step 5 relay unwraps for you.
 
 # 7. Drive the VTS Issuer (JWS-of-JWE) path.
@@ -173,9 +173,9 @@ framework's
 [jose.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli)
 for every flag.
 
-The keystore exercises both source styles for a single keypair: `tokens-our` is
+The keystore exercises both source styles for a single keypair: `tokensour` is
 file-backed (production pattern for Kubernetes secret mounts), and
-`tokens-peer` mixes file-backed private with inline base64 public (the
+`tokenspeer` mixes file-backed private with inline base64 public (the
 `value:` style typical of secret-manager projection).
 
 ### Payments (Sealed AMQP Messages Example)
@@ -226,7 +226,7 @@ echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"411111111
   | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
-      -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+      -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
       -subject card -event-type payment.authorized > body.txt
 
 # Publish it. `rabbitmqadmin` is the shorthand; the script uses the same
@@ -241,7 +241,7 @@ Three things the in-app `POST /payments/authorize` flow cannot show:
 | # | What | Why it needs an out-of-band producer |
 |---|------|--------------------------------------|
 | 1 | **The consumer opens it.** | The app never produced this body. It is accepted because the wire `kid` is a provisioned generation of the family its `seal` tag names and the signature verifies — acceptance is key material plus declaration agreement, never process identity. |
-| 2 | **The same bytes twice trip inbox dedup.** | The `jti` is minted once per **seal**, so republishing one `body.txt` gives two deliveries with the same `payments-sign:<jti>` dedup key and the second is skipped. Every HTTP call seals afresh, so two `POST`s never collide — and re-running the CLI is a new seal, not a replay. |
+| 2 | **The same bytes twice trip inbox dedup.** | The `jti` is minted once per **seal**, so republishing one `body.txt` gives two deliveries with the same `paymentssign:<jti>` dedup key and the second is skipped. Every HTTP call seals afresh, so two `POST`s never collide — and re-running the CLI is a new seal, not a replay. |
 | 3 | **A wrong `-event-type` lands on the DLQ.** | Re-seal the same document with `-event-type payment.captured`: signature, kids and manifest all still valid, only the signed `etyp` disagrees. Open-rule 7 refuses it with `SEAL_EVENT_TYPE_MISMATCH` and the delivery is nacked without requeue onto `payments.authorized.dlq`. This is the cross-type reroute class the ledger cannot close. |
 
 The broker records only `x-death` on the parked message. The `SEAL_*` code is in
@@ -276,7 +276,7 @@ go install github.com/gaborage/go-bricks/cmd/open-event@v0.69.0
 open-event \
   -sign-key-file certs/payments_sign_v1_public.der \
   -encrypt-key-file certs/payments_encrypt_v1_private.der \
-  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
   -subject card -event-type payment.authorized -tenancy disabled -json < body.txt | jq -c .
 # {"envelope":{"jti":"…","eventType":"payment.authorized",…},
 #  "document":{"orderId":"ext-1","amount":4599,"currency":"USD","card":"<redacted>"}}
@@ -295,7 +295,7 @@ open-event \
   reports any non-zero exit as its own `1` and would hide the refusal's `3`.
 - **Both kids are required flags.** The CLI never reads them from the
   unauthenticated header, so after a rotation you pass the new generation
-  (`OPEN_SIGN_KID=payments-sign-v2 make show-sealed-message`).
+  (`OPEN_SIGN_KID=paymentssign-v2 make show-sealed-message`).
 
 ### Activity (RabbitMQ Super-Stream Example)
 The **native stream protocol** (port 5552, `rabbitmq_stream` plugin) rather than the

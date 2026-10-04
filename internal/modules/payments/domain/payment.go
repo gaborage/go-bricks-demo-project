@@ -64,18 +64,18 @@ func (c CardDetails) RedactedForLog() any {
 // PaymentAuthorized is the event published when an authorization succeeds.
 //
 // The sentinel names two Logical kids, never key generations: rotation swaps
-// keystore entries (payments-sign-v2, ...) and never edits this tag. Both sides
+// keystore entries (paymentssign-v2, ...) and never edits this tag. Both sides
 // of the integration share this struct and derive their own role from it — the
-// producer signs with the payments-sign PRIVATE key and encrypts to the
-// payments-encrypt PUBLIC key; the consumer verifies with the payments-sign
-// PUBLIC key and decrypts with the payments-encrypt PRIVATE key. This demo is
+// producer signs with the paymentssign PRIVATE key and encrypts to the
+// paymentsencrypt PUBLIC key; the consumer verifies with the paymentssign
+// PUBLIC key and decrypts with the paymentsencrypt PRIVATE key. This demo is
 // both, so its keystore provisions both halves of both families.
 //
 // Card carries seal:"subject" and so must always be present on the wire: no
 // omitempty, no json:"-", no embedding. The framework refuses the declaration at
 // startup otherwise.
 type PaymentAuthorized struct {
-	_        struct{}    `seal:"sign=payments-sign,encrypt=payments-encrypt"`
+	_        struct{}    `seal:"sign=paymentssign,encrypt=paymentsencrypt"`
 	OrderID  string      `json:"orderId" validate:"required"`
 	Amount   int64       `json:"amount" validate:"required,gt=0"` // minor units (cents)
 	Currency string      `json:"currency" validate:"required,len=3,alpha"`

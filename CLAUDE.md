@@ -469,7 +469,7 @@ make test                                        # Run all tests (uses race dete
 
 [cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
 
-- **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `payments-sign-v1` and `payments-encrypt-v1`, and restores the previous runtime in `t.Cleanup`.
+- **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `paymentssign-v1` and `paymentsencrypt-v1`, and restores the previous runtime in `t.Cleanup`.
 - **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.69.0, and their `Init` needs a validated config, a database or DER files.
 - **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
 - **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
@@ -795,15 +795,15 @@ return j.generate(ctx)
 
 ### KeyStore RSA Signing
 
-The webhooks module demonstrates the **KeyStore** brick — named RSA key pairs loaded from DER files at startup. The signing service uses `deps.KeyStore.PrivateKey("webhook-signing")` to sign and `PublicKey("webhook-signing")` to verify payloads.
+The webhooks module demonstrates the **KeyStore** brick — named RSA key pairs loaded from DER files at startup. The signing service uses `deps.KeyStore.PrivateKey("webhooksigning")` to sign and `PublicKey("webhooksigning")` to verify payloads.
 
 ```go
 // Sign a payload
-privKey, _ := keyStore.PrivateKey("webhook-signing")
+privKey, _ := keyStore.PrivateKey("webhooksigning")
 sig, _ := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, hash)
 
 // Verify a signature
-pubKey, _ := keyStore.PublicKey("webhook-signing")
+pubKey, _ := keyStore.PublicKey("webhooksigning")
 err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash, sig)
 ```
 
@@ -822,12 +822,12 @@ The tokens module ([internal/modules/tokens/](internal/modules/tokens/)) demonst
 // Both halves of the integration must declare matching jose: tags. Asymmetric
 // declaration (only request OR only response tagged) panics at startup.
 type TokenizeRequest struct {
-    _   struct{} `jose:"decrypt=tokens-our,verify=tokens-peer"`
+    _   struct{} `jose:"decrypt=tokensour,verify=tokenspeer"`
     PAN string   `json:"pan" validate:"required,min=13,max=19"`
 }
 
 type TokenizeResponse struct {
-    _     struct{}      `jose:"sign=tokens-our,encrypt=tokens-peer"`
+    _     struct{}      `jose:"sign=tokensour,encrypt=tokenspeer"`
     Token *domain.Token `json:"token"`
 }
 ```
@@ -851,21 +851,21 @@ if err != nil {
 }
 ```
 
-**Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokens-peer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
+**Keystore source styles:** the demo intentionally uses both `file:` (DER on disk) and `value:` (inline base64) sources for a single keypair (`tokenspeer`). `make generate-keys` regenerates DER files AND patches the base64 between `BEGIN_TOKENS_PEER_PUB` / `END_TOKENS_PEER_PUB` markers in `config.development.yaml`. In production the `value:` source is typically populated from a secret manager (AWS Secrets Manager, Vault) projected into the pod environment.
 
 **Bare-JWE / Visa MLE (v0.64.0, ADR-107 + #1585):** the MLE relay endpoint exercises the second seal mode — `jose.Policy{Mode: jose.SealModeBareJWE}` is encrypt-only `JWE(payload)` (no inner JWS), paired with `httpclient.VisaMLEEnvelope()` on `JOSEConfig.Envelope`, which wraps the compact as `{"encData":"<compact>"}` `application/json` on the wire and unwraps inbound responses by shape. Bare mode admits `A128GCM` (via a direct `go-jose/v4` import — no go-bricks alias) and stamps `iat` in milliseconds when `IATMillis: true`. Two invariants shape the demo: bare mode does **not** authenticate the sender (no signature — production pairs it with mTLS / X-Pay-Token), and there is no `mode` key in the `jose:` struct-tag grammar, so a server route cannot select bare mode — the MLE peer simulator binds the envelope as plain JSON and opens/seals manually with `jose.Open`/`jose.Seal`. See [internal/modules/tokens/service/mle_relay_service.go](internal/modules/tokens/service/mle_relay_service.go).
 
 **JWS-of-JWE / VTS Issuer (v0.65.0, ADR-111 + #1610/#1623):** `POST /api/v1/tokens/vts-issuer-relay` exercises the third seal mode — `jose.Policy{Mode: jose.SealModeJWSofJWE}` encrypts first and signs the compact JWE: an outer JWS (`PS256`, `typ: JOSE`, `cty: JWE`, `iat` in seconds, fixed by the mode) over the inner JWE bare mode builds (`A256GCM`, `Policy.Typ`, millisecond `iat` under `IATMillis`, no `cty` even though `WithJOSE` fills `Policy.Cty`). No `Envelope`: the compact is the body, `application/jose`, both ways. Three rules shape the code:
 - **`SigAlg: josev4.PS256` is explicit on both policies.** Visa requires PS256; `httpclient.Builder.Build` fills an unset `SigAlg` with `jose.DefaultSigAlg` (RS256), so omitting it builds and seals and is rejected only by the partner. Inbound, `SigAlg` is a pin, not an allowlist: `Open` refuses any other outer `alg` (`JOSE_ALGORITHM_DISALLOWED`) before touching a key.
 - **Verify before decrypt.** `Open` refuses a non-3-segment body (`JOSE_OUTER_NOT_JWS` — the nested and bare shapes are poison here, never a fallback), a bad signature, or an outer header without `cty: JWE` before the private key is used.
-- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokens-our`/`tokens-peer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids.
+- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokensour`/`tokenspeer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids.
 
 **Why the VTS Issuer simulator is a transport, not a `/__sim/` route:** a typed go-bricks route (the only kind that takes `server.WithTags("simulator")`) always JSON-encodes its result, and the raw door `RouteRegistrar.Add` could answer `application/jose` but takes no route options, so its descriptor carries no tags; no `jose:` tag selects this mode either. Rather than wrap the compact in a JSON envelope Visa does not send, `service.VTSIssuerPeerSimulator` implements `http.RoundTripper` and is passed to `WithTransport` — the base slot below `JOSETransport` that production fills with its mTLS transport. Seal, retry loop, peer-labelled metrics, verify-then-decrypt and the plaintext-2xx refusal all run unchanged; only the dial is replaced. The relay addresses `http://vts-issuer-peer-sim.invalid/tokens` (RFC 6761: never resolves), so a client that lost that transport fails at DNS rather than reaching a real host. See [internal/modules/tokens/service/vts_issuer_relay_service.go](internal/modules/tokens/service/vts_issuer_relay_service.go).
 
 **Helper CLI:** request bodies for `curl` come from the framework's `seal-payload` CLI (go-bricks v0.65.0, #1615/#1620). It replaced the demo's own `cmd/seal-payload`, which could only do nested mode. Both targets read JSON on stdin and print only the sealed body, so it pipes into `curl --data-binary @-`:
 
-- `make seal-payload` plays the peer for `POST /api/v1/tokens`. It is a nested JWE-of-JWS that signs with `certs/tokens_peer_private.der` (`-sign-kid tokens-peer`, the route's `verify=`) and encrypts to `certs/tokens_our_public.der` (`-encrypt-kid tokens-our`, its `decrypt=`).
-- `make seal-mle` mints a Visa MLE body for `POST /api/v1/__sim/peer/mle`: `-mode bare -enc A128GCM -typ JOSE -iat-ms -envelope visa-mle`, encrypted to `certs/tokens_peer_public.der` (`-encrypt-kid tokens-peer`), which is the key the MLE peer simulator opens with. Nothing is signed. This is the same header shape as `NewMLEOutboundPolicy`.
+- `make seal-payload` plays the peer for `POST /api/v1/tokens`. It is a nested JWE-of-JWS that signs with `certs/tokens_peer_private.der` (`-sign-kid tokenspeer`, the route's `verify=`) and encrypts to `certs/tokens_our_public.der` (`-encrypt-kid tokensour`, its `decrypt=`).
+- `make seal-mle` mints a Visa MLE body for `POST /api/v1/__sim/peer/mle`: `-mode bare -enc A128GCM -typ JOSE -iat-ms -envelope visa-mle`, encrypted to `certs/tokens_peer_public.der` (`-encrypt-kid tokenspeer`), which is the key the MLE peer simulator opens with. Nothing is signed. This is the same header shape as `NewMLEOutboundPolicy`.
 
 [scripts/seal-payload.sh](scripts/seal-payload.sh) runs with `GOWORK=off` and resolves the CLI version with `go list -m` from `go.mod`, so there is no second pin to drift. The script repeats the module's kids, so a kid rename has to touch it too (the server reports drift as `JOSE_KID_UNKNOWN`). The CLI only seals and never opens a reply; the relay endpoints are what decrypt.
 
@@ -888,7 +888,7 @@ The payments module ([internal/modules/payments/](internal/modules/payments/)) d
 // the codec; without it a seal-tagged declaration fails Validate at startup with
 // messaging.ErrSealingNotLinked.
 type PaymentAuthorized struct {
-    _        struct{}    `seal:"sign=payments-sign,encrypt=payments-encrypt"`
+    _        struct{}    `seal:"sign=paymentssign,encrypt=paymentsencrypt"`
     OrderID  string      `json:"orderId" validate:"required"`
     Amount   int64       `json:"amount" validate:"required,gt=0"` // minor units
     Currency string      `json:"currency" validate:"required,len=3,alpha"`
@@ -896,7 +896,7 @@ type PaymentAuthorized struct {
 }
 ```
 
-Ordering is the security decision: **encrypt the Subject first, then sign the whole result** — signing a plaintext PAN would be a confirmation oracle, so the signature always covers ciphertext. `delivery.Body` is one compact JWS whose payload is the business JSON with the `card` member replaced in place by a compact JWE, and `typ: vnd.gobricks.sealed.v1+json` is the only sealed marker (there is no `x-sealed` AMQP header). The tag names **Logical kids**, never key generations: the keystore holds `payments-sign-v1` and `payments-encrypt-v1`, and with a single generation provisioned the producer auto-activates it — so this demo ships no `messaging.seal.active` selector, only a commented-out one in [config.yml](config.yml) for the rotation story (rotation flips the selector; the tag never changes). Lane rules: sealing rides the classic typed lane only — `DeclareTypedPublisher[T]` plus `DeclareTypedConsumerWithMeta` (the meta-less consume door refuses a seal-tagged `T`, since `Meta.DedupKey()` is what the inbox dedups on), while streams typed declarations refuse a seal-tagged `T` and `outbox.Publish` refuses a seal-tagged struct payload with `outbox.ErrSealedPayloadNeedsBytes` (that lane takes `publisher.Seal(ctx, evt)` bytes instead).
+Ordering is the security decision: **encrypt the Subject first, then sign the whole result** — signing a plaintext PAN would be a confirmation oracle, so the signature always covers ciphertext. `delivery.Body` is one compact JWS whose payload is the business JSON with the `card` member replaced in place by a compact JWE, and `typ: vnd.gobricks.sealed.v1+json` is the only sealed marker (there is no `x-sealed` AMQP header). The tag names **Logical kids**, never key generations: the keystore holds `paymentssign-v1` and `paymentsencrypt-v1`, and with a single generation provisioned the producer auto-activates it — so this demo ships no `messaging.seal.active` selector, only a commented-out one in [config.yml](config.yml) for the rotation story (rotation flips the selector; the tag never changes). Lane rules: sealing rides the classic typed lane only — `DeclareTypedPublisher[T]` plus `DeclareTypedConsumerWithMeta` (the meta-less consume door refuses a seal-tagged `T`, since `Meta.DedupKey()` is what the inbox dedups on), while streams typed declarations refuse a seal-tagged `T` and `outbox.Publish` refuses a seal-tagged struct payload with `outbox.ErrSealedPayloadNeedsBytes` (that lane takes `publisher.Seal(ctx, evt)` bytes instead).
 
 **Module registration order matters:** `keystore.NewModule()` and `inbox.NewModule()` must both be registered before the payments module — the seal runtime resolves key material from `deps.KeyStore` at declaration time, and the sealed consumer dedups through `deps.Inbox.ProcessOnce` on the `<sign family>:<jti>` key (the module's `Init` fails fast when `deps.Inbox` is nil). The ledger lives in the framework-default `gobricks_inbox` table.
 
@@ -928,7 +928,7 @@ under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
-  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
   -subject card -event-type payment.authorized
 ```
 
@@ -971,7 +971,7 @@ through [scripts/lib/open-event.sh](scripts/lib/open-event.sh):
 open-event \
   -sign-key-file certs/payments_sign_v1_public.der \
   -encrypt-key-file certs/payments_encrypt_v1_private.der \
-  -sign-kid payments-sign-v1 -encrypt-kid payments-encrypt-v1 \
+  -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
   -subject card -event-type payment.authorized -tenancy disabled -json < body.txt
 ```
 

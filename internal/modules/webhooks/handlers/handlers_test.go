@@ -65,7 +65,7 @@ func TestSignPayload(t *testing.T) {
 					Payload:   payload,
 					Signature: "dGVzdA==",
 					Algorithm: rs256Algorithm,
-					KeyName:   "webhook-signing",
+					KeyName:   "webhooksigning",
 				}, nil
 			},
 		}
@@ -198,7 +198,7 @@ func TestSignPayloadIntegration(t *testing.T) {
 				Payload:   payload,
 				Signature: "c2lnbmVk",
 				Algorithm: rs256Algorithm,
-				KeyName:   "webhook-signing",
+				KeyName:   "webhooksigning",
 			}, nil
 		},
 	}

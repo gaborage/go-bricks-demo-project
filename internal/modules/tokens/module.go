@@ -26,8 +26,8 @@ import (
 // stringly-typed drift. scripts/seal-payload.sh (make seal-payload / seal-mle)
 // repeats them for the framework seal-payload CLI and must follow any rename.
 const (
-	OurKid  = "tokens-our"
-	PeerKid = "tokens-peer"
+	OurKid  = "tokensour"
+	PeerKid = "tokenspeer"
 )
 
 // Module wires the partner-facing /tokens route, the in-process peer simulator,

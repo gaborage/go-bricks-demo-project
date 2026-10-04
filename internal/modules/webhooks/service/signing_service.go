@@ -16,7 +16,7 @@ import (
 
 const (
 	algorithm = "RS256"
-	keyName   = "webhook-signing"
+	keyName   = "webhooksigning"
 )
 
 // ErrMalformedSignature indicates a client-provided signature that cannot be decoded.
