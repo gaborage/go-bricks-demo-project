@@ -1695,7 +1695,7 @@ curl -s http://localhost:8080/_sys/health-debug | jq .data.components.messaging.
 # Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
 # failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
 # (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
-make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.67.0)
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.69.0)
 # Exit codes: 0 clean; 1 fleet split (something was attempted and something
 # failed or was never attempted); 2 nothing attempted, no schema touched (empty
 # or failed tenant listing, unreadable tenant store, credential provider that
