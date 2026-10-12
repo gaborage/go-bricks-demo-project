@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake macOS `security` for scripts/test-perf-harness.sh: answers
+# `find-generic-password -a <user> -s nr-user-key -w` with $FAKE_NR_KEY.
+set -euo pipefail
+[[ "${1:-}" == find-generic-password ]] || exit 1
+[[ " $* " == *" -s nr-user-key "* && " $* " == *" -w"* ]] || exit 44
+printf '%s\n' "${FAKE_NR_KEY:?}"

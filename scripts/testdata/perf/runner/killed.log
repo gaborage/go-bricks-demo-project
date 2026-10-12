@@ -1,0 +1,41 @@
+WARM_START=2025-10-14T00:00:00Z
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/products-read-only.ts
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 200 max VUs, 10m5s max duration (incl. graceful stop):
+              * steady: 150.00 iterations/s for 10m0s (maxVUs: 50-200, gracefulStop: 5s)
+
+running (10m00.0s), 000/050 VUs, 90000 complete and 0 interrupted iterations
+steady ✓ [ 100% ] 000/050 VUs  10m0s  150.00 iters/s
+
+     http_req_duration..............: avg=12.31ms min=1.02ms med=9.88ms max=412.7ms p(90)=21.4ms p(95)=27.9ms
+     http_reqs......................: 90000  148.757/s
+WARM_RC=0
+RUN_START=2025-10-14T00:02:07Z
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/products-read-only.ts
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 200 max VUs, 10m5s max duration (incl. graceful stop):
+              * steady: 150.00 iterations/s for 10m0s (maxVUs: 50-200, gracefulStop: 5s)
+
+running (10m00.0s), 000/050 VUs, 90000 complete and 0 interrupted iterations
+steady ✓ [ 100% ] 000/050 VUs  10m0s  150.00 iters/s
+
+     http_req_duration..............: avg=12.31ms min=1.02ms med=9.88ms max=412.7ms p(90)=21.4ms p(95)=27.9ms
+     http_reqs......................: 90000  148.757/s

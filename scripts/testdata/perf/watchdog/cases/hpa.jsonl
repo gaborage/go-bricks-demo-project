@@ -1,0 +1,2 @@
+{}
+{"hpa":{"items":[{"spec":{"scaleTargetRef":{"kind":"Deployment","name":"demo-app"}},"status":{"currentReplicas":1,"desiredReplicas":2}}]}}

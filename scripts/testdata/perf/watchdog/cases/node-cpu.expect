@@ -1,0 +1,2 @@
+VOID rule=node-cpu scope=rep action=kill
+KILLS 1

@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Fake kubectl for scripts/test-perf-harness.sh. It never talks to a cluster:
+# it records each call in $FAKE_DIR/kubectl.calls and answers from fixtures.
+#   FAKE_JOB_STATE   Complete | Failed | Deleted   (get job, logs)
+#   FAKE_LOG         file served by `logs` (and `logs -f`)
+#   FAKE_PODS_JSON   file served by `get pods` (default: no pods)
+#   FAKE_TOP         line served by `top pod` (default: metrics API missing)
+#   FAKE_WATCH_BASE  a watchdog sample (testdata/perf/watchdog/base.json): serves
+#                    the watchdog's live reads and accepts its `delete job`
+#   FAKE_WATCH_POD_NOTFOUND=1  answer `get pod` with NotFound
+#   FAKE_WATCH_JOBS  a job list served instead of base.json's .jobs; `get jobs`
+#                    and `delete job` apply the -l equality selector to it, and
+#                    every deleted job name is appended to $FAKE_DIR/deleted.jobs
+set -euo pipefail
+: "${FAKE_DIR:?FAKE_DIR must be set by the test runner}"
+printf '%s\n' "$*" >>"$FAKE_DIR/kubectl.calls"
+
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+        --context|--namespace|-n) i=$((i + 2)) ;;
+        *) break ;;
+    esac
+done
+verb="${args[$i]:-}"
+rest=" ${args[*]:$((i + 1))} "
+
+selector=""
+for ((k = i + 1; k < ${#args[@]}; k++)); do
+    if [[ "${args[$k]}" == -l ]]; then selector="${args[$((k + 1))]:-}"; fi
+done
+
+# jobs_matching -> the job list, filtered by the -l equality selector
+jobs_matching() {
+    local src
+    if [[ -n "${FAKE_WATCH_JOBS:-}" ]]; then src="$(cat "$FAKE_WATCH_JOBS")"; else src="$(jq '.jobs' "$FAKE_WATCH_BASE")"; fi
+    printf '%s' "$src" | jq --arg sel "$selector" '($sel | split(",") | map(split("="))) as $req
+        | .items |= map(select(. as $j | all($req[]; ($j.metadata.labels[.[0]] // "") == .[1])))'
+    return 0
+}
+
+if [[ -n "${FAKE_WATCH_BASE:-}" ]]; then
+    case "$verb:$rest" in
+        "get: deployment "*) jq '.deploy' "$FAKE_WATCH_BASE" ;;
+        "get: hpa "*) jq '.hpa' "$FAKE_WATCH_BASE" ;;
+        "get: pod "*)
+            if [[ -n "${FAKE_WATCH_POD_NOTFOUND:-}" ]]; then
+                echo 'Error from server (NotFound): pods "demo-app-0" not found' >&2; exit 1
+            fi
+            jq '.pod' "$FAKE_WATCH_BASE" ;;
+        "get: node "*) jq '.node' "$FAKE_WATCH_BASE" ;;
+        "get: events "*) jq '.events' "$FAKE_WATCH_BASE" ;;
+        "get: jobs "*) jobs_matching ;;
+        "top: node "*) jq -r '.top_node' "$FAKE_WATCH_BASE" ;;
+        "top: pod "*) jq -r '.top_broker' "$FAKE_WATCH_BASE" ;;
+        "delete: job -l "*)
+            jobs_matching | jq -r '.items[].metadata.name' | while IFS= read -r name; do
+                echo "job.batch \"$name\" deleted (fake)"
+                echo "$name" >>"$FAKE_DIR/deleted.jobs"
+            done ;;
+        *) echo "fake kubectl (watch): unexpected '$verb$rest'" >&2; exit 97 ;;
+    esac
+    exit 0
+fi
+
+case "$verb" in
+    apply)
+        cat >>"$FAKE_DIR/applied.yaml"
+        echo "---" >>"$FAKE_DIR/applied.yaml"
+        echo "applied (fake)"
+        ;;
+    get)
+        case "$rest" in
+            " job "*)
+                if [[ "${FAKE_JOB_STATE:-Complete}" == Deleted ]]; then
+                    echo 'Error from server (NotFound): jobs.batch "x" not found' >&2; exit 1
+                fi
+                printf '%s ' "${FAKE_JOB_STATE:-Complete}"
+                ;;
+            " pods "*)
+                if [[ -n "${FAKE_PODS_JSON:-}" ]]; then cat "$FAKE_PODS_JSON"; else echo '{"items":[]}'; fi
+                ;;
+            *) echo "fake kubectl: unexpected get:$rest" >&2; exit 97 ;;
+        esac
+        ;;
+    logs)
+        if [[ "$rest" == *" -f "* ]]; then
+            cat "${FAKE_LOG:?}"
+        elif [[ "${FAKE_JOB_STATE:-Complete}" == Deleted ]]; then
+            echo 'Error from server (NotFound): pods not found' >&2; exit 1
+        else
+            cat "${FAKE_LOG:?}"
+        fi
+        ;;
+    top)
+        if [[ -n "${FAKE_TOP:-}" ]]; then echo "$FAKE_TOP"; else echo "error: Metrics API not available" >&2; exit 1; fi
+        ;;
+    *)
+        echo "fake kubectl: unexpected verb '$verb'" >&2
+        exit 97
+        ;;
+esac

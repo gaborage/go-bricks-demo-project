@@ -1,0 +1,2 @@
+psql:/sql/reset.sql:41: WARNING:  skipping "products" --- only table or database owner can analyze it
+COUNT products=250131 seed=250000 outbox_pending=4 last_analyze=null

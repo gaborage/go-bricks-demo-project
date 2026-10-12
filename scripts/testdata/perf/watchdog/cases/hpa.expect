@@ -1,0 +1,2 @@
+VOID rule=hpa scope=rep action=kill
+KILLS 1

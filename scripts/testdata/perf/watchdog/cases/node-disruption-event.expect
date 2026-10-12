@@ -1,0 +1,2 @@
+VOID rule=node-disruption scope=session action=kill
+KILLS 1

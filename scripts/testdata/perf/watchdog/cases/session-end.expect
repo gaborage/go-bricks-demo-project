@@ -1,0 +1,2 @@
+VOID rule=session-end scope=session action=stop
+KILLS 1

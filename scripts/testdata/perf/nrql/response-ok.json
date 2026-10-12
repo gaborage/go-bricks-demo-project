@@ -1,0 +1,1 @@
+{"data":{"actor":{"account":{"nrql":{"results":[{"uniques.service.version":["v1.0.0-labela"]}],"metadata":{"eventTypes":["Metric"],"facets":[],"messages":[],"timeWindow":{"begin":1791936180000,"end":1791936660000}}}}}}}

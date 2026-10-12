@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "app-7d9f-abcde",
+        "uid": "uid-app-1"
+      },
+      "spec": {
+        "nodeName": "node-a"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "restartCount": 0
+          }
+        ]
+      }
+    }
+  ]
+}

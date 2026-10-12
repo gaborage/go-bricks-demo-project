@@ -1,0 +1,53 @@
+{
+  "now": "2026-10-14T00:00:00Z",
+  "deploy": {
+    "metadata": {"name": "demo-app"},
+    "spec": {"replicas": 1},
+    "status": {"replicas": 1, "readyReplicas": 1}
+  },
+  "hpa": {
+    "items": [
+      {
+        "metadata": {"name": "demo-app-hpa"},
+        "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "demo-app"}, "maxReplicas": 3},
+        "status": {"currentReplicas": 1, "desiredReplicas": 1}
+      }
+    ]
+  },
+  "pod": {
+    "metadata": {"name": "demo-app-0"},
+    "spec": {"nodeName": "node-a"},
+    "status": {
+      "phase": "Running",
+      "conditions": [{"type": "Ready", "status": "True"}],
+      "containerStatuses": [{"name": "app", "restartCount": 0, "lastState": {}}]
+    }
+  },
+  "node": {
+    "metadata": {"name": "node-a"},
+    "spec": {"taints": []},
+    "status": {
+      "conditions": [
+        {"type": "MemoryPressure", "status": "False"},
+        {"type": "DiskPressure", "status": "False"},
+        {"type": "PIDPressure", "status": "False"},
+        {"type": "Ready", "status": "True"}
+      ]
+    }
+  },
+  "events": {"items": []},
+  "top_node": "node-a   850m   45%   2100Mi   60%",
+  "top_broker": "broker-0   120m   600Mi",
+  "acu": {
+    "Label": "ServerlessDatabaseCapacity",
+    "Datapoints": [
+      {"Timestamp": "2026-10-13T23:58:00Z", "Maximum": 2.0, "Unit": "None"},
+      {"Timestamp": "2026-10-13T23:59:00Z", "Maximum": 2.5, "Unit": "None"}
+    ]
+  },
+  "jobs": {
+    "items": [
+      {"metadata": {"name": "k6-labela-s4-r1-1014000000", "labels": {"app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "load-generator"}}, "status": {"active": 1}}
+    ]
+  }
+}

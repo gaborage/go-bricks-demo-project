@@ -56,6 +56,9 @@
 # Shell scripts under scripts/, plus the helper lib the sealed-message demos source
 !scripts/*.sh
 !scripts/lib/*.sh
+# Offline fixtures and PATH stubs for scripts/test-perf-harness.sh (saved Job
+# logs, watchdog samples, NRQL goldens, fake kubectl/aws/curl/security)
+!scripts/testdata/**
 
 # Postgres bootstrap SQL for the multi-tenant demo
 !etc/docker/postgres/*.sql

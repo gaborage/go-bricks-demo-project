@@ -1,0 +1,2 @@
+VOID rule=pod-oom scope=rep action=kill
+KILLS 1

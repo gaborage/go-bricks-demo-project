@@ -1,0 +1,2 @@
+VOID rule=node-pressure scope=rep action=kill
+KILLS 1

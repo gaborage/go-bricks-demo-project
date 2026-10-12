@@ -1,0 +1,2 @@
+{}
+{"node":{"spec":{"taints":[{"key":"karpenter.sh/disrupted","effect":"NoSchedule"}]}}}

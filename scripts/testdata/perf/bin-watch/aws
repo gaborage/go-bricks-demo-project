@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake aws for the watchdog live-collection test: answers the CloudWatch ACU
+# read from $FAKE_WATCH_BASE and refuses anything else.
+set -euo pipefail
+echo "aws $*" >>"${FAKE_DIR:?}/aws.calls"
+[[ "${1:-} ${2:-}" == "cloudwatch get-metric-statistics" ]] || { echo "fake aws: unexpected: $*" >&2; exit 97; }
+jq '.acu' "${FAKE_WATCH_BASE:?}"
