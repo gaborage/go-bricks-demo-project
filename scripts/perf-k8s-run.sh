@@ -64,7 +64,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=lib/perf-common.sh
 source "$SCRIPT_DIR/lib/perf-common.sh"
 
-log() { echo "perf-k8s-run: $*" >&2; }
+log() {
+    echo "perf-k8s-run: $*" >&2
+    return 0
+}
 die() { log "error: $*"; exit 1; }
 usage_err() { log "$*"; log "run with --help for usage"; exit 2; }
 
@@ -88,6 +91,7 @@ Usage:
 
 Exit codes: 0 valid, 3 void, 1 error, 2 usage.
 EOF
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -101,7 +105,11 @@ opt_watermark="" opt_clear_outbox=0 opt_drop_seed=0 opt_base_rows="" opt_void_lo
 opt_facts="" opt_acu_warm=""
 opt_set_names=() opt_set_values=()
 
-need_value() { [[ $# -ge 2 && -n "${2-}" ]] || usage_err "$1 needs a value"; }
+need_value() { # FLAG VALUE
+    local flag="${1-}" value="${2-}"
+    [[ -n "$value" ]] || usage_err "$flag needs a value"
+    return 0
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -152,9 +160,9 @@ PSQL_TEMPLATE="$REPO_ROOT/loadtests/k8s/psql-job.yaml"
 # Test hook: the offline suite points this at a stub of the SQL generator.
 RESET_SCRIPT="${PERF_RESET_SCRIPT:-$SCRIPT_DIR/perf-reset-products.sh}"
 # shellcheck disable=SC2016 # literal ${NAME} tokens: envsubst's explicit variable list
-K6_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE} ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR} ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP}'
+K6_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE} ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR} ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP} ${K6_EPHEMERAL_REQUEST} ${K6_EPHEMERAL_LIMIT}'
 # shellcheck disable=SC2016
-PSQL_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER} ${DB_SECRET} ${PG_HOST_KEY} ${PG_PORT_KEY} ${PG_DB_KEY} ${PG_USER_KEY} ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP}'
+PSQL_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER} ${DB_SECRET} ${PG_HOST_KEY} ${PG_PORT_KEY} ${PG_DB_KEY} ${PG_USER_KEY} ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP} ${PSQL_EPHEMERAL_REQUEST} ${PSQL_EPHEMERAL_LIMIT}'
 K6_CPU_REQUEST_M=1000      # requests.cpu in k6-job.yaml
 K6_CPU_GATE_PCT=70         # k6cpu gate threshold, percent of the request
 RATE_TOLERANCE=0.01        # rate gate: |achieved - target| / target
@@ -170,19 +178,24 @@ SUMMARY_FILE_IN_POD=/tmp/perf-summary.json
 # Small helpers
 # ---------------------------------------------------------------------------
 
-lower() { tr '[:upper:]' '[:lower:]'; }
+lower() {
+    tr '[:upper:]' '[:lower:]'
+    return 0
+}
 
 # dns_name STRING MAXLEN -> DNS-1123 label fragment (lowercase alnum and '-')
 dns_name() {
-    local s
-    s="$(printf '%s' "$1" | lower | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
-    s="${s:0:$2}"
+    local text="$1" max="$2" s
+    s="$(printf '%s' "$text" | lower | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+    s="${s:0:$max}"
     printf '%s' "${s%-}"
+    return 0
 }
 
 sha256_stdin() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
     else shasum -a 256 | cut -d' ' -f1; fi
+    return 0
 }
 
 require_env() { # NAME... : unset or empty is a usage error
@@ -190,12 +203,26 @@ require_env() { # NAME... : unset or empty is a usage error
     for name in "$@"; do
         [[ -n "${!name:-}" ]] || usage_err "the env file must set $name (see loadtests/k8s/.env.example)"
     done
+    return 0
 }
 
-kc() { kubectl --context "$KCTX" --namespace "$NS" "$@"; }
+kc() {
+    kubectl --context "$KCTX" --namespace "$NS" "$@"
+    return $?
+}
 
 stamp() { # UTC stamp for unique names; the offline suite pins it
     if [[ -n "${PERF_K8S_RUN_STAMP:-}" ]]; then echo "$PERF_K8S_RUN_STAMP"; else date -u +%Y%m%dT%H%M%SZ; fi
+    return 0
+}
+
+# storage_quantity NAME DEFAULT -> the env value of NAME, or DEFAULT; refuses a non-quantity
+storage_quantity() {
+    local name="$1" default="$2" value
+    value="${!name:-$default}"
+    [[ "$value" =~ ^[0-9]+(Ki|Mi|Gi)$ ]] || usage_err "$name must be a storage quantity such as 256Mi, got '$value'"
+    printf '%s' "$value"
+    return 0
 }
 
 # render TEMPLATE VARLIST -> stdout. Refuses an empty variable from the list:
@@ -208,17 +235,21 @@ render() {
         export "${name?}"   # envsubst reads the values from its environment
     done
     # Drop the header comment block: after substitution it would echo values.
-    envsubst "$list" <"$template" | sed '/^#/d'
+    if ! envsubst "$list" <"$template" | sed '/^#/d'; then
+        return 1
+    fi
+    return 0
 }
 
 # set_value NAME -> the last --set value for NAME; returns 1 when not set.
 set_value() {
-    local i found=1 value=""
+    local name="$1" i found=1 value=""
     for ((i = 0; i < ${#opt_set_names[@]}; i++)); do
-        if [[ "${opt_set_names[$i]}" == "$1" ]]; then value="${opt_set_values[$i]}"; found=0; fi
+        if [[ "${opt_set_names[$i]}" == "$name" ]]; then value="${opt_set_values[$i]}"; found=0; fi
     done
     [[ $found -eq 0 ]] || return 1
     printf '%s' "$value"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -231,6 +262,7 @@ append_window() { # run_id scenario rep warm_start run_start run_end rc valid re
         printf 'run_id\tscenario\trep\twarm_start\trun_start\trun_end\trc\tvalid\treason\n' >"$file"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$file"
+    return 0
 }
 
 # void_in_window START_EPOCH END_EPOCH -> prints matching VOID lines; 0 if any.
@@ -255,8 +287,10 @@ void_in_window() {
 }
 
 facts_get() { # FILE KEY -> value, empty when absent. Parsed, never sourced.
-    [[ -f "$1" ]] || return 0
-    awk -v k="$2" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v }' "$1"
+    local file="$1" key="$2"
+    [[ -f "$file" ]] || return 0
+    awk -v k="$key" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v }' "$file"
+    return 0
 }
 
 # app_pod_facts SUFFIX -> pods_<s>= pod_<s>= restarts_<s>= node_<s>= lines
@@ -273,17 +307,18 @@ app_pod_facts() {
           "pod_\($s)=\($p | map(.metadata.uid) | sort | join(","))",
           "restarts_\($s)=\($p | map([.status.containerStatuses[]?.restartCount] | add // 0) | add // 0)",
           "node_\($s)=\($p | map(.spec.nodeName // "") | sort | join(","))"'
+    return 0
 }
 
 # acu_facts START_ISO END_ISO -> acu_min= acu_max= lines (CloudWatch, read-only)
 acu_facts() {
-    local json
+    local start="$1" end="$2" json
     [[ -n "${AURORA_CLUSTER:-}" ]] || { log "notice: AURORA_CLUSTER unset; acu gate not evaluated"; return 0; }
     command -v aws >/dev/null 2>&1 || { log "notice: aws CLI not found; acu gate not evaluated"; return 0; }
     if ! json="$(aws cloudwatch get-metric-statistics --namespace AWS/RDS \
         --metric-name ServerlessDatabaseCapacity \
         --dimensions "Name=DBClusterIdentifier,Value=$AURORA_CLUSTER" \
-        --start-time "$1" --end-time "$2" --period 60 \
+        --start-time "$start" --end-time "$end" --period 60 \
         --statistics Maximum Minimum --output json 2>/dev/null)"; then
         log "notice: CloudWatch ACU read failed; acu gate not evaluated"
         return 0
@@ -291,23 +326,18 @@ acu_facts() {
     printf '%s' "$json" | jq -r '
         if (.Datapoints | length) == 0 then empty
         else "acu_min=\([.Datapoints[].Minimum] | min)", "acu_max=\([.Datapoints[].Maximum] | max)" end'
+    return 0
 }
 
 G_DROPPED=0 G_RATE=0 G_429=0 G_5XX=0 G_VOID=0 G_POD=0 G_NODE=0 G_K6CPU=0 G_ACU=0 G_MISSING=0
 reasons() {
-    local out=""
-    add() { out="${out:+$out;}$1"; }
-    [[ $G_DROPPED -eq 0 ]] || add dropped
-    [[ $G_RATE -eq 0 ]] || add rate
-    [[ $G_429 -eq 0 ]] || add 429
-    [[ $G_5XX -eq 0 ]] || add 5xx
-    [[ $G_VOID -eq 0 ]] || add void
-    [[ $G_POD -eq 0 ]] || add pod
-    [[ $G_NODE -eq 0 ]] || add node
-    [[ $G_K6CPU -eq 0 ]] || add k6cpu
-    [[ $G_ACU -eq 0 ]] || add acu
-    [[ $G_MISSING -eq 0 ]] || add missing-summary
+    local out="" pair
+    for pair in "$G_DROPPED:dropped" "$G_RATE:rate" "$G_429:429" "$G_5XX:5xx" "$G_VOID:void" \
+        "$G_POD:pod" "$G_NODE:node" "$G_K6CPU:k6cpu" "$G_ACU:acu" "$G_MISSING:missing-summary"; do
+        [[ "${pair%%:*}" -eq 0 ]] || out="${out:+$out;}${pair#*:}"
+    done
     echo "$out"
+    return 0
 }
 
 # facts_gates FILE MODE -> pod and node gates; MODE k6 adds k6cpu and acu.
@@ -359,17 +389,19 @@ facts_gates() {
     else
         log "notice: acu gate not evaluated (needs ACU_WARM and CloudWatch datapoints)"
     fi
+    return 0
 }
 
 void_gate() { # START_ISO END_ISO
-    local s e lines
-    s="$(iso_to_epoch "$1")"; e="$(iso_to_epoch "$2")"
+    local start_iso="$1" end_iso="$2" s e lines
+    s="$(iso_to_epoch "$start_iso")"; e="$(iso_to_epoch "$end_iso")"
     if [[ -z "$s" || -z "$e" ]]; then log "notice: void gate not evaluated (window unknown)"; return 0; fi
     if lines="$(void_in_window "$s" "$e")"; then
-        log "gate void: watchdog VOID line(s) inside $1 .. $2:"
+        log "gate void: watchdog VOID line(s) inside $start_iso .. $end_iso:"
         printf '%s\n' "$lines" >&2
         G_VOID=1
     fi
+    return 0
 }
 
 archive_previous() { # PATH... -> moved into <out>/attempts/, so a re-run never overwrites
@@ -382,6 +414,7 @@ archive_previous() { # PATH... -> moved into <out>/attempts/, so a re-run never 
         mv "$p" "$opt_out/attempts/${base%.*}-$ts.$ext"
         log "moved the previous attempt's $base to attempts/"
     done
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -391,14 +424,15 @@ archive_previous() { # PATH... -> moved into <out>/attempts/, so a re-run never 
 K6_CPU_MAX="" JOB_STATE=""
 
 sample_k6_cpu() { # JOB -> raises K6_CPU_MAX from `kubectl top` (no-op without metrics-server)
-    local out m
-    out="$(kc top pod -l "job-name=$1" --containers --no-headers 2>/dev/null)" || return 0
+    local job="$1" out m
+    out="$(kc top pod -l "job-name=$job" --containers --no-headers 2>/dev/null)" || return 0
     m="$(printf '%s\n' "$out" | awk '
         { c = $3; if (c ~ /m$/) { sub(/m$/, "", c); v = c + 0 } else if (c ~ /^[0-9.]+$/) { v = c * 1000 } else next
           if (v > max) max = v; seen = 1 }
         END { if (seen) printf "%d", max }')"
     [[ -n "$m" ]] || return 0
     if [[ -z "$K6_CPU_MAX" ]] || ((m > K6_CPU_MAX)); then K6_CPU_MAX="$m"; fi
+    return 0
 }
 
 # wait_job JOB TIMEOUT_S SAMPLE_CPU(0|1) -> JOB_STATE = Complete|Failed|Deleted|Timeout
@@ -410,6 +444,7 @@ wait_job() {
             case " $conds " in
                 *" Complete "*) JOB_STATE=Complete; return 0 ;;
                 *" Failed "*) JOB_STATE=Failed; return 0 ;;
+                *) ;;   # still running
             esac
         elif printf '%s' "$conds" | grep -q NotFound; then
             JOB_STATE=Deleted; return 0
@@ -420,6 +455,7 @@ wait_job() {
         if (($(date +%s) - start >= timeout)); then JOB_STATE=Timeout; return 0; fi
         sleep "$POLL_S"
     done
+    return 0
 }
 
 # fetch_logs JOB CONTAINER PARTIAL DEST -> 0 when DEST ends up non-empty
@@ -434,6 +470,7 @@ fetch_logs() {
     else
         rm -f "$tmp"; return 1
     fi
+    return 0
 }
 
 # apply_and_wait MANIFEST JOB CONTAINER TIMEOUT SAMPLE_CPU DEST_LOG -> 1 when no log
@@ -472,6 +509,7 @@ configmap_json() { # NAME REF COMMIT DIGEST FILE... -> ConfigMap JSON, files key
         cm="$(printf '%s' "$cm" | jq -c --arg k "$(basename "$f")" --rawfile v "$f" '.data[$k] = $v')"
     done
     printf '%s\n' "$cm"
+    return 0
 }
 
 load_configmaps() {
@@ -529,6 +567,7 @@ validate_run_identity() {
     [[ "$opt_label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]] || usage_err "--label must match [A-Za-z0-9][A-Za-z0-9._-]{0,39}"
     [[ -n "$opt_rep" ]] || usage_err "--rep is required"
     [[ "$opt_rep" =~ ^[0-9]{1,3}$ ]] || usage_err "--rep must be a number"
+    return 0
 }
 
 # evaluate_k6 LOG JSON_OUT RUN_ID RC MEASURED_S STEPS -> sets the summary gate flags
@@ -617,6 +656,7 @@ evaluate_k6() {
             G_RATE=1
         fi
     fi
+    return 0
 }
 
 run_k6() {
@@ -655,7 +695,11 @@ run_k6() {
 
     # Container env: harness wiring first, then --set (a later NAME wins).
     local names=() values=() i pairs=()
-    add_env() { names+=("$1"); values+=("$2"); }
+    add_env() { # NAME VALUE
+        local name="$1" value="$2"
+        names+=("$name"); values+=("$value")
+        return 0
+    }
     add_env HOME /tmp
     add_env K6_NO_USAGE_REPORT true
     add_env K6_BASE_URL "$TARGET_URL"
@@ -704,8 +748,10 @@ run_k6() {
     K6_RUN_AS_USER="${K6_RUN_AS_USER:-12345}"
     SCRIPTS_CONFIGMAP="k6-scripts-$(dns_name "$HARNESS_TAG" 40)"
     TYPES_CONFIGMAP="k6-types-$(dns_name "$HARNESS_TAG" 40)"
+    K6_EPHEMERAL_REQUEST="$(storage_quantity K6_EPHEMERAL_REQUEST 256Mi)"
+    K6_EPHEMERAL_LIMIT="$(storage_quantity K6_EPHEMERAL_LIMIT 1Gi)"
     export JOB_NAME NAMESPACE RUN_ID_LABEL K6_IMAGE ACTIVE_DEADLINE_SECONDS K6_RUN_AS_USER \
-        K6_NODE_SELECTOR K6_AFFINITY K6_ENV SCRIPTS_CONFIGMAP TYPES_CONFIGMAP
+        K6_NODE_SELECTOR K6_AFFINITY K6_ENV SCRIPTS_CONFIGMAP TYPES_CONFIGMAP K6_EPHEMERAL_REQUEST K6_EPHEMERAL_LIMIT
 
     local manifest
     manifest="$(render "$K6_TEMPLATE" "$K6_TEMPLATE_VARS")"
@@ -788,7 +834,11 @@ run_k6() {
 # --kind reset
 # ---------------------------------------------------------------------------
 
-count_field() { printf '%s\n' "$1" | sed -E "s/.*(^| )$2=([^ ]*).*/\\2/"; }
+count_field() { # LINE KEY -> the value of KEY=value in LINE
+    local line="$1" key="$2"
+    printf '%s\n' "$line" | sed -E "s/.*(^| )$key=([^ ]*).*/\\2/"
+    return 0
+}
 
 run_reset() {
     require_env NS PSQL_IMAGE DB_SECRET PG_HOST_KEY PG_PORT_KEY PG_DB_KEY PG_USER_KEY PG_PASSWORD_KEY PG_CA_CONFIGMAP PG_CA_KEY
@@ -798,7 +848,9 @@ run_reset() {
     SQL_CONFIGMAP="perf-reset-sql-$(dns_name "$ts" 40)"
     NAMESPACE="$NS"
     PSQL_RUN_AS_USER="${PSQL_RUN_AS_USER:-70}"
-    export JOB_NAME SQL_CONFIGMAP NAMESPACE PSQL_RUN_AS_USER
+    PSQL_EPHEMERAL_REQUEST="$(storage_quantity PSQL_EPHEMERAL_REQUEST 64Mi)"
+    PSQL_EPHEMERAL_LIMIT="$(storage_quantity PSQL_EPHEMERAL_LIMIT 256Mi)"
+    export JOB_NAME SQL_CONFIGMAP NAMESPACE PSQL_RUN_AS_USER PSQL_EPHEMERAL_REQUEST PSQL_EPHEMERAL_LIMIT
     if [[ -n "$opt_rows" ]]; then [[ "$opt_rows" =~ ^[0-9]+$ ]] || usage_err "--rows must be a whole number"; fi
     if [[ -n "$opt_watermark" ]]; then is_iso "$opt_watermark" || usage_err "--watermark must be ISO-8601 UTC, e.g. 2026-01-01T00:00:00Z"; fi
 

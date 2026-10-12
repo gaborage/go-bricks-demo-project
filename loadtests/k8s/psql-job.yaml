@@ -19,7 +19,8 @@
 #
 #   envsubst '${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER}
 #     ${DB_SECRET} ${PG_HOST_KEY} ${PG_PORT_KEY} ${PG_DB_KEY} ${PG_USER_KEY}
-#     ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP}' \
+#     ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP}
+#     ${PSQL_EPHEMERAL_REQUEST} ${PSQL_EPHEMERAL_LIMIT}' \
 #     < loadtests/k8s/psql-job.yaml
 apiVersion: batch/v1
 kind: Job
@@ -86,9 +87,11 @@ spec:
             requests:
               cpu: 100m
               memory: 128Mi
+              ephemeral-storage: ${PSQL_EPHEMERAL_REQUEST}
             limits:
               cpu: 500m
               memory: 256Mi
+              ephemeral-storage: ${PSQL_EPHEMERAL_LIMIT}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

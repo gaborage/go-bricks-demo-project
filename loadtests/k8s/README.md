@@ -48,6 +48,7 @@ Pipe either command into `kubectl apply --dry-run=server -f -` for an admission 
 | `${K6_ENV}` | JSON env list. Every `$` is doubled, because the kubelet expands `$(VAR)` in env values |
 | `${SCRIPTS_CONFIGMAP}` | `k6-scripts-<HARNESS_TAG>`, mounted at `/scripts` |
 | `${TYPES_CONFIGMAP}` | `k6-types-<HARNESS_TAG>`, mounted at `/scripts/types` |
+| `${K6_EPHEMERAL_REQUEST}` / `${K6_EPHEMERAL_LIMIT}` | `K6_EPHEMERAL_REQUEST` / `K6_EPHEMERAL_LIMIT`: ephemeral-storage request and limit (defaults `256Mi` / `1Gi`) |
 
 The env list carries `K6_BASE_URL` (`TARGET_URL`), `K6_API_PREFIX` (`API_PREFIX`),
 `PERF_RUN_ID`, `PERF_HARNESS_TAG`, `PERF_RATE`, `PERF_DURATION`, `PERF_SUMMARY_STDOUT=1`,
@@ -55,7 +56,8 @@ The env list carries `K6_BASE_URL` (`TARGET_URL`), `K6_API_PREFIX` (`API_PREFIX`
 `HARNESS_WARM`, `HARNESS_WARM_RATE` and `HARNESS_K6_FLAGS`. The Job is fixed at
 `backoffLimit: 0`, `restartPolicy: Never` and `ttlSecondsAfterFinished: 86400`. It is
 labelled `app.kubernetes.io/part-of=k6-perf` and annotated `karpenter.sh/do-not-disrupt:
-"true"`. Resources are requests 1 CPU / 512Mi and limits 2 CPU / 1Gi. It runs as
+"true"`. Resources are requests 1 CPU / 512Mi and limits 2 CPU / 1Gi, plus the
+ephemeral-storage pair above. It runs as
 non-root with seccomp `RuntimeDefault` and a read-only root filesystem (`/tmp` is an
 `emptyDir`).
 
@@ -70,6 +72,7 @@ non-root with seccomp `RuntimeDefault` and a read-only root filesystem (`/tmp` i
 | `${DB_SECRET}` | `DB_SECRET`: the Secret the app imports, used here with `envFrom` |
 | `${PG_HOST_KEY}` `${PG_PORT_KEY}` `${PG_DB_KEY}` `${PG_USER_KEY}` `${PG_PASSWORD_KEY}` | Key names inside that Secret, mapped onto `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` and `PGPASSWORD` as `$(KEY)` references |
 | `${PG_CA_CONFIGMAP}` / `${PG_CA_KEY}` | The ConfigMap and key holding the database CA bundle (`PGSSLMODE=verify-full`) |
+| `${PSQL_EPHEMERAL_REQUEST}` / `${PSQL_EPHEMERAL_LIMIT}` | `PSQL_EPHEMERAL_REQUEST` / `PSQL_EPHEMERAL_LIMIT` (defaults `64Mi` / `256Mi`) |
 
 The SQL comes from `scripts/perf-reset-products.sh --print-sql --rows N --watermark TS
 [--clear-outbox] [--drop-seed]`. The runner stores it in a per-run ConfigMap. psql runs
@@ -108,6 +111,18 @@ a `perfMeta` block. The runner writes:
 `missing-summary`. The gates are listed in the runner's header. A gate whose input is
 missing (no `APP_SELECTOR`, no metrics-server, no `ACU_WARM`) is logged as not
 evaluated, and does not void the rep.
+
+**Idle window.** Record one per label, with no load running, before the measured reps:
+`--kind idle --label <label> --rep 0 --duration 10m` waits through the window and writes
+the row `<label>-idle-r0` with scenario `idle` and its `run_start`/`run_end`. No Job
+runs. The New Relic capture then queries that window like any other, and idle
+subtraction reads its `Q7` (app CPU) and `Q9` (allocations) files.
+
+**Re-runs.** No tool here re-queues a rep. Running a rep or an idle window again
+appends another row with the same `run_id`, and the last row per `run_id` is the one
+that counts, for the capture and for reporting. The staircase (`S5`) is read from its
+last attempt whether valid or void, because a k6 abort there marks the knee: do not
+re-queue a void staircase.
 
 ## Watchdog
 
@@ -150,3 +165,14 @@ scripts/perf-nrql.sh --queries loadtests/nrql/queries.yaml --windows results/bas
 
 The key only ever reaches curl through `--config -` on stdin, and the script refuses
 to run under `set -x`. `--print` shows the exact NRQL without sending it.
+
+The capture takes the last row per `run_id` (with a warning naming the rows it
+drops): rows with `valid=1`, plus the staircase `S5` whether valid or void. It refuses
+a `run_id` that is not a safe file name, and skips a row whose timestamps do not
+convert. Each response is the raw NerdGraph JSON,
+`{"data":{"actor":{"account":{"nrql":{"results":[...]}}}}}`, in `<out>/<id>-<run_id>.json`.
+The queries of one `group:` go out as one request, each aliased by its id under
+`account`: `Q18-<run_id>.json` holds `Q18a` (per-minute `rps`, `n`, `p95`, `pct5xx`) and
+`Q18b` (per-minute `mcores`, `throttle`). Every row carries `beginTimeSeconds` and
+`endTimeSeconds`. Downstream readers rely on these aliases: `Q2` `rps`/`n`, `Q7`
+`cpu_s`/`mcores`, `Q8` `throttle`/`ws_avg`/`ws_max`, `Q9` `bytes`/`objs`.

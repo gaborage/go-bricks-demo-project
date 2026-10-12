@@ -52,14 +52,34 @@ got="$(PATH="$FORBIDDEN_PATH" command -v kubectl || true)"
 [[ "$got" == "$TD/bin-forbidden/kubectl" ]] || { echo "test-perf-harness: the kubectl tripwire is not first on PATH" >&2; exit 1; }
 
 PASS=0 FAILED=0 SKIPPED=0
-ok() { PASS=$((PASS + 1)); echo "ok    $*"; }
-bad() { FAILED=$((FAILED + 1)); echo "FAIL  $*"; }
-skip() { SKIPPED=$((SKIPPED + 1)); echo "skip  $*"; }
-section() { echo; echo "== $*"; }
-show() { sed 's/^/      | /' "$1" | tail -n 25; }
+ok() {
+    PASS=$((PASS + 1)); echo "ok    $*"
+    return 0
+}
+bad() {
+    FAILED=$((FAILED + 1)); echo "FAIL  $*"
+    return 0
+}
+skip() {
+    SKIPPED=$((SKIPPED + 1)); echo "skip  $*"
+    return 0
+}
+section() {
+    echo; echo "== $*"
+    return 0
+}
+show() { # FILE -> its last 25 lines, indented
+    local file="$1"
+    sed 's/^/      | /' "$file" | tail -n 25
+    return 0
+}
 
 # yaml_json FILE -> one compact JSON document per YAML document (needs ruby)
-yaml_json() { ruby -ryaml -rjson -e 'YAML.load_stream(File.read(ARGV[0])).compact.each { |d| puts JSON.generate(d) }' "$1"; }
+yaml_json() {
+    local file="$1"
+    ruby -ryaml -rjson -e 'YAML.load_stream(File.read(ARGV[0])).compact.each { |d| puts JSON.generate(d) }' "$file"
+    return $?
+}
 
 run_runner() { # DIR ARGS... -> rc in RC; stdout/stderr in DIR
     local dir="$1"
@@ -68,9 +88,14 @@ run_runner() { # DIR ARGS... -> rc in RC; stdout/stderr in DIR
     PATH="$FAKE_PATH" FAKE_DIR="$dir" PERF_RESET_SCRIPT="$TD/bin-fake/perf-reset-products.sh" \
         PERF_K8S_RUN_STAMP=20261014T000000Z \
         "$TEST_BASH" scripts/perf-k8s-run.sh "$@" >"$dir/stdout" 2>"$dir/stderr" || RC=$?
+    return 0
 }
 
-last_row() { tail -n 1 "$1"; }
+last_row() { # FILE
+    local file="$1"
+    tail -n 1 "$file"
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 section "runner: validity gates on saved Job logs"
@@ -96,6 +121,7 @@ runner_case() {
     if grep -q ' delete ' "$dir/kubectl.calls" 2>/dev/null; then bad "runner $name: the runner deleted something"; return 0; fi
     if [[ -f "$dir/forbidden.calls" ]]; then bad "runner $name: reached a forbidden tool: $(cat "$dir/forbidden.calls")"; return 0; fi
     ok "runner $name -> exit $RC${want_reason:+ ($want_reason)}"
+    return 0
 }
 
 runner_case valid            valid.log            0 ""                    facts-clean.env ""
@@ -178,17 +204,22 @@ fi
 
 # Usage errors.
 usage_case() { # NAME ARGS...
-    local name="$1" dir="$WORK/usage-$1"
+    local name="$1"
+    local dir="$WORK/usage-$name"
     shift
     mkdir -p "$dir"
     run_runner "$dir" "$@"
     if [[ $RC -eq 2 ]]; then ok "runner usage: $name -> exit 2"; else bad "runner usage: $name -> exit $RC"; show "$dir/stderr"; fi
+    return 0
 }
 usage_case no-env --kind k6
 usage_case rate-zero-without-steps --env "$ENV_EXAMPLE" --kind k6 --label l --scenario S4 --rep 1 --script a.ts --rate 0 --warm 0 --duration 1m --render-only
 usage_case lowercase-set --env "$ENV_EXAMPLE" --kind k6 --set perf_rate=1
 usage_case bad-kind --env "$ENV_EXAMPLE" --kind nope
 usage_case bad-script --env "$ENV_EXAMPLE" --kind k6 --label l --scenario S4 --rep 1 --script ../x.ts --rate 1 --warm 0 --duration 1m --render-only
+bad_storage_env="$WORK/bad-storage.env"
+{ cat "$ENV_EXAMPLE"; echo 'export K6_EPHEMERAL_LIMIT=1GB'; } >"$bad_storage_env"
+usage_case bad-ephemeral-storage --env "$bad_storage_env" --kind k6 --label l --scenario S4 --rep 1 --script a.ts --rate 1 --warm 0 --duration 1m --render-only
 usage_case reset-bad-base-rows --env "$ENV_EXAMPLE" --kind reset --rows 10 --watermark 2026-01-01T00:00:00Z --out "$WORK/x" --base-rows abc
 
 # ---------------------------------------------------------------------------
@@ -196,16 +227,18 @@ section "runner: --kind reset and --kind idle"
 # ---------------------------------------------------------------------------
 
 reset_case() { # NAME LOG WANT_RC
-    local dir="$WORK/reset-$1"
+    local name="$1" log="$2" want_rc="$3"
+    local dir="$WORK/reset-$name"
     mkdir -p "$dir/out"
-    FAKE_LOG="$TD/runner/$2" run_runner "$dir" --env "$ENV_EXAMPLE" --kind reset --rows 250000 \
+    FAKE_LOG="$TD/runner/$log" run_runner "$dir" --env "$ENV_EXAMPLE" --kind reset --rows 250000 \
         --watermark 2026-01-01T00:00:00Z --clear-outbox --out "$dir/out"
-    if [[ $RC -ne $3 ]]; then bad "reset $1: exit $RC, want $3"; show "$dir/stderr"; return 0; fi
+    if [[ $RC -ne $want_rc ]]; then bad "reset $name: exit $RC, want $want_rc"; show "$dir/stderr"; return 0; fi
     if ! grep -q -- '-- perf-reset stub: --rows 250000 --watermark 2026-01-01T00:00:00Z --clear-outbox' "$dir/applied.yaml"; then
-        bad "reset $1: the SQL ConfigMap does not carry the generator output"; return 0
+        bad "reset $name: the SQL ConfigMap does not carry the generator output"; return 0
     fi
-    if [[ ! -s "$dir/out/reset-20261014T000000Z.log" ]]; then bad "reset $1: no reset-<ts>.log"; return 0; fi
-    ok "reset $1 -> exit $RC"
+    if [[ ! -s "$dir/out/reset-20261014T000000Z.log" ]]; then bad "reset $name: no reset-<ts>.log"; return 0; fi
+    ok "reset $name -> exit $RC"
+    return 0
 }
 reset_case counts-ok reset-ok.log 0
 reset_case counts-mismatch reset-mismatch.log 3
@@ -266,6 +299,7 @@ else
             and ([$p.volumes[] | .configMap.name // empty] == ["k6-scripts-perf-harness-v1", "k6-types-perf-harness-v1"])
             and $e.PERF_SUMMARY_STDOUT == "1" and $e.PERF_RUN_ID == "dryrun-S4-r0" and $e.PERF_RATE == "5"
             and $e.PERF_DURATION == "30s" and $e.HARNESS_WARM == "120s" and $e.HARNESS_WARM_RATE == "5"
+            and $c.resources.requests["ephemeral-storage"] == "256Mi" and $c.resources.limits["ephemeral-storage"] == "1Gi"
             and $e.K6_BASE_URL != null and $e.PERF_READ_MIX == "get" and $e.PERF_LITERAL == "a$$(b)"
             and ($j.metadata.name | test("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"))' "$dir/job.json" >/dev/null; then
             ok "render k6: Job shape (backoffLimit 0, deadline warm+dur+300, labels, resources, security, placement, mounts, env)"
@@ -294,7 +328,8 @@ elif [[ $HAVE_RUBY -eq 1 ]]; then
         and $e.PGSSLMODE == "verify-full" and $e.PGSSLROOTCERT == "/etc/perf-reset/ca/ca-bundle.pem"
         and ([$p.volumes[] | .configMap.name // empty] == [$cm.metadata.name, "db-ca-bundle"])
         and ($c.args | index("/sql/reset.sql") != null)
-        and $p.securityContext.runAsNonRoot == true' "$dir/docs.json" >/dev/null; then
+        and $p.securityContext.runAsNonRoot == true
+        and $c.resources.requests["ephemeral-storage"] == "64Mi" and $c.resources.limits["ephemeral-storage"] == "256Mi"' "$dir/docs.json" >/dev/null; then
         ok "render reset: SQL ConfigMap + psql Job (envFrom secret, PG* from DATABASE_* keys, verify-full CA)"
     else
         bad "render reset: shape"; jq . "$dir/docs.json" | head -80
@@ -378,7 +413,8 @@ fi
 # serve base.json: covers the reads, NotFound detection, sample assembly and the
 # delete call that --simulate replaces.
 watch_live() { # NAME [ENV=VALUE...]
-    local name="$1" dir="$WORK/watch-live-$1" pid n
+    local name="$1" pid n
+    local dir="$WORK/watch-live-$name"
     shift
     mkdir -p "$dir"
     env "$@" PATH="$TD/bin-watch:$TD/bin-fake:$PATH" FAKE_DIR="$dir" FAKE_WATCH_BASE="$TD/watchdog/base.json" \
@@ -395,6 +431,7 @@ watch_live() { # NAME [ENV=VALUE...]
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     : "$n"
+    return 0
 }
 watch_live healthy
 dir="$WORK/watch-live-healthy"
@@ -456,6 +493,7 @@ nrql() { # DIR ARGS... (stdin passes through)
     shift
     RC=0
     PATH="$FAKE_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-nrql.sh "$@" >"$dir/stdout" 2>"$dir/stderr" || RC=$?
+    return 0
 }
 
 dir="$WORK/nrql-golden"
@@ -465,6 +503,41 @@ if [[ $RC -eq 0 ]] && diff -u "$TD/nrql/golden-labela.tsv" "$dir/stdout" >"$dir/
     ok "nrql golden: rendered queries match golden-labela.tsv ($(wc -l <"$dir/stdout" | tr -d ' ') requests)"
 else
     bad "nrql golden (exit $RC)"; show "$dir/diff"; show "$dir/stderr"
+fi
+
+dir="$WORK/nrql-edge"
+mkdir -p "$dir"
+nrql "$dir" --queries "$Q" --windows "$TD/nrql/windows-edge.tsv" --vars "$VARS_A" --print
+idle_since="$(jq -n '"2026-10-13T23:41:00Z" | fromdateiso8601 * 1000')"
+if [[ $RC -eq 0 ]] \
+    && grep -q 'warning: labela-idle-r0: windows.tsv line 2 is superseded by line 4' "$dir/stderr" \
+    && [[ $(grep -c $'^Q7\tlabela-idle-r0\t' "$dir/stdout") -eq 1 ]] \
+    && grep -q $'^Q7\tlabela-idle-r0\t.*SINCE '"$idle_since"' ' "$dir/stdout" \
+    && grep -q $'^Q9\tlabela-idle-r0\t' "$dir/stdout"; then
+    ok "nrql: the last row per run_id wins, with a warning; the idle window gets Q7 and Q9"
+else
+    bad "nrql supersede (exit $RC)"; show "$dir/stderr"
+fi
+if grep -q "warning: skipping labela-S4-r3: run_start '2026-13-14T03:02:00Z'" "$dir/stderr" \
+    && ! grep -q 'labela-S4-r3' "$dir/stdout"; then
+    ok "nrql skips a row whose timestamps do not convert (month 13), with a warning"
+else
+    bad "nrql bad timestamp"; show "$dir/stderr"
+fi
+if grep -q $'^Q18/Q18a\tlabela-S5-r2\t' "$dir/stdout" && grep -q $'^Q18/Q18b\tlabela-S5-r2\t' "$dir/stdout" \
+    && grep -q 'labela-S5-r2 is void' "$dir/stderr" && ! grep -q 'labela-S1-r4' "$dir/stdout"; then
+    ok "nrql captures the last S5 attempt although void, and skips other void rows"
+else
+    bad "nrql void S5"; show "$dir/stderr"
+fi
+dir="$WORK/nrql-unsafe-run-id"
+mkdir -p "$dir"
+printf 'run_id\tscenario\trep\twarm_start\trun_start\trun_end\trc\tvalid\treason\n../evil\tS4\t1\t\t2026-10-14T00:02:07Z\t2026-10-14T00:12:09Z\t0\t1\t\n' >"$dir/windows.tsv"
+nrql "$dir" --queries "$Q" --windows "$dir/windows.tsv" --vars "$VARS_A" --print
+if [[ $RC -eq 2 ]] && grep -q "run_id '../evil' is not" "$dir/stderr"; then
+    ok "nrql refuses a run_id that is not a safe file name (exit 2)"
+else
+    bad "nrql unsafe run_id (exit $RC)"; show "$dir/stderr"
 fi
 
 dir="$WORK/nrql-labelb"
@@ -525,19 +598,24 @@ done
 KEY="fake-user-key-for-offline-tests-0123456789"   # not the real key shape: push protection scans for it
 KEY_FILE="$WORK/nr-key"
 printf '%s\n' "$KEY" >"$KEY_FILE"
-key_leaks() { # DIR -> 0 when the key is found anywhere it must not be
-    grep -rqF "$KEY" "$1/stdout" "$1/stderr" "$1/curl.argv" "$1/ps.txt" ${2:+"$2"} 2>/dev/null
+key_leaks() { # DIR [EXTRA_PATH] -> 0 when the key is found anywhere it must not be
+    local dir="$1" extra="${2-}"
+    if grep -rqF "$KEY" "$dir/stdout" "$dir/stderr" "$dir/curl.argv" "$dir/ps.txt" ${extra:+"$extra"} 2>/dev/null; then
+        return 0
+    fi
+    return 1
 }
 
 dir="$WORK/nrql-batch"
 mkdir -p "$dir"
 FAKE_CURL_RESPONSE="$TD/nrql/response-ok.json" nrql "$dir" --queries "$Q" \
     --windows "$TD/nrql/windows-labela.tsv" --vars "$VARS_A" --out "$dir/out" --account 1234567 --key-stdin <"$KEY_FILE"
-want_files="$(wc -l <"$TD/nrql/golden-labela.tsv" | tr -d ' ')"
+want_files="$(awk -F'\t' '{ split($1, id, "/"); print id[1] "\t" $2 }' "$TD/nrql/golden-labela.tsv" | sort -u | wc -l | tr -d ' ')"
 got_files="$(find "$dir/out" -name '*.json' | wc -l | tr -d ' ')"
 if [[ $RC -eq 0 && "$got_files" == "$want_files" && -f "$dir/out/Q0-labela-S4-r1.json" && -f "$dir/out/Q1a-session.json" \
-    && -f "$dir/out/Q18a-labela-S5-r1.json" && ! -e "$dir/out/Q18a-labela-S4-r1.json" && ! -e "$dir/out/Q0-labela-S1-r1.json" ]]; then
-    ok "nrql batch: one raw response per planned request, named <id>-<run_id>.json ($got_files files)"
+    && -f "$dir/out/Q18-labela-S5-r1.json" && ! -e "$dir/out/Q18a-labela-S5-r1.json" && ! -e "$dir/out/Q18-labela-S4-r1.json" \
+    && ! -e "$dir/out/Q0-labela-S1-r1.json" && -f "$dir/out/Q7-labela-idle-r0.json" && -f "$dir/out/Q9-labela-idle-r0.json" ]]; then
+    ok "nrql batch: one raw response per request, named <id>-<run_id>.json ($got_files files)"
 else
     bad "nrql batch (exit $RC, $got_files of $want_files files)"; show "$dir/stderr"
 fi
@@ -553,6 +631,14 @@ if head -n 1 "$dir/curl.bodies" | jq -e '.variables.accountId == 1234567
     ok "nrql sends NRQL as a GraphQL variable (no string splicing into the query)"
 else
     bad "nrql request body"; head -n 1 "$dir/curl.bodies"
+fi
+# shellcheck disable=SC2016 # literal GraphQL variable names
+if grep -F 'Q18a: nrql(query: $q0' "$dir/curl.bodies" | jq -e '
+    (.query | test("Q18b: nrql\\(query: \\$q1")) and (.variables.q0 | test("AS rps") and test("AS p95") and test("AS pct5xx"))
+    and (.variables.q1 | test("AS mcores") and test("AS throttle")) and (.variables.q0 | test("TIMESERIES 1 minute"))' >/dev/null; then
+    ok "nrql sends a group (Q18) as one request with each query aliased by its id"
+else
+    bad "nrql grouped Q18 request"; grep -F 'Q18a' "$dir/curl.bodies" | head -n 1
 fi
 
 dir="$WORK/nrql-errors"
@@ -604,7 +690,7 @@ if [[ $HAVE_RUBY -eq 1 ]]; then
     ruby -ryaml -e '
         d = YAML.load_file(ARGV[0])
         d["derived"].each { |k, v| puts ["D", k, v].join("\t") }
-        d["queries"].each { |q| puts ["Q", q["id"], q["scope"] || "window", (q["scenarios"] || "all").to_s, q["when"] || "-", q["nrql"]].join("\t") }
+        d["queries"].each { |q| puts ["Q", q["id"], q["scope"] || "window", (q["scenarios"] || "all").to_s, q["when"] || "-", q["group"] || "-", q["nrql"]].join("\t") }
     ' "$Q" >"$dir/ruby.tsv"
     if [[ $RC -eq 0 ]] && diff -u "$dir/ruby.tsv" "$dir/stdout" >"$dir/diff"; then
         ok "nrql: the awk parser reads queries.yaml exactly as a YAML parser does ($(grep -c '^Q' "$dir/stdout") queries)"

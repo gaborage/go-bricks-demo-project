@@ -68,7 +68,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=lib/perf-common.sh
 source "$SCRIPT_DIR/lib/perf-common.sh"
 
-log() { echo "perf-watchdog: $*" >&2; }
+log() {
+    echo "perf-watchdog: $*" >&2
+    return 0
+}
 die() { log "error: $*"; exit 1; }
 usage_err() { log "$*"; log "run with --help for usage"; exit 2; }
 
@@ -88,6 +91,7 @@ consecutive samples were at or below idle + margin millicores. Without
 metrics-server it logs a notice, waits a fixed 5 minutes and returns 0. A pod
 that does not exist is an error (exit 1), not a reason to wait.
 EOF
+    return 0
 }
 
 # --------------------------------------------------------------------------
@@ -95,10 +99,21 @@ EOF
 # --------------------------------------------------------------------------
 
 SIM_DIR="" VCLOCK=""
-clock_now() { if [[ -n "$SIM_DIR" ]]; then echo "$VCLOCK"; else date +%s; fi; }
-clock_sleep() { if [[ -n "$SIM_DIR" ]]; then VCLOCK=$((VCLOCK + $1)); else sleep "$1"; fi; }
+clock_now() {
+    if [[ -n "$SIM_DIR" ]]; then echo "$VCLOCK"; else date +%s; fi
+    return 0
+}
+clock_sleep() { # SECONDS
+    local seconds="$1"
+    if [[ -n "$SIM_DIR" ]]; then VCLOCK=$((VCLOCK + seconds)); else sleep "$seconds"; fi
+    return 0
+}
 
-need_value() { [[ $# -ge 2 && -n "${2-}" ]] || usage_err "$1 needs a value"; }
+need_value() { # FLAG VALUE
+    local flag="${1-}" value="${2-}"
+    [[ -n "$value" ]] || usage_err "$flag needs a value"
+    return 0
+}
 
 # ==========================================================================
 # wait-idle
@@ -110,18 +125,19 @@ FALLBACK_WAIT_S=300
 cmd_wait_idle() {
     local ctx="" ns="" pod="" idle="" margin="" samples="" min="" max=""
     while [[ $# -gt 0 ]]; do
-        case "$1" in
+        local arg="$1" val="${2-}"
+        case "$arg" in
             -h|--help) usage; exit 0 ;;
-            --context) need_value "$@"; ctx="$2"; shift 2 ;;
-            --namespace) need_value "$@"; ns="$2"; shift 2 ;;
-            --pod) need_value "$@"; pod="$2"; shift 2 ;;
-            --idle-millicores) need_value "$@"; idle="$2"; shift 2 ;;
-            --margin) need_value "$@"; margin="$2"; shift 2 ;;
-            --samples) need_value "$@"; samples="$2"; shift 2 ;;
-            --min) need_value "$@"; min="$2"; shift 2 ;;
-            --max) need_value "$@"; max="$2"; shift 2 ;;
-            --simulate) need_value "$@"; SIM_DIR="$2"; shift 2 ;;
-            *) usage_err "wait-idle: unknown argument: $1" ;;
+            --context) need_value "$arg" "$val"; ctx="$val"; shift 2 ;;
+            --namespace) need_value "$arg" "$val"; ns="$val"; shift 2 ;;
+            --pod) need_value "$arg" "$val"; pod="$val"; shift 2 ;;
+            --idle-millicores) need_value "$arg" "$val"; idle="$val"; shift 2 ;;
+            --margin) need_value "$arg" "$val"; margin="$val"; shift 2 ;;
+            --samples) need_value "$arg" "$val"; samples="$val"; shift 2 ;;
+            --min) need_value "$arg" "$val"; min="$val"; shift 2 ;;
+            --max) need_value "$arg" "$val"; max="$val"; shift 2 ;;
+            --simulate) need_value "$arg" "$val"; SIM_DIR="$val"; shift 2 ;;
+            *) usage_err "wait-idle: unknown argument: $arg" ;;
         esac
     done
     local f
@@ -147,8 +163,10 @@ cmd_wait_idle() {
     start="$(clock_now)"
     errf="$(mktemp "${TMPDIR:-/tmp}/perf-watchdog-top.XXXXXX")"
     report() { # RESULT
+        local result="$1"
         now="$(clock_now)"
-        echo "COOLDOWN pod=$pod start=$(epoch_to_iso "$start") end=$(epoch_to_iso "$now") waited_s=$((now - start)) result=$1 threshold_m=$threshold last_m=$last samples=$taken"
+        echo "COOLDOWN pod=$pod start=$(epoch_to_iso "$start") end=$(epoch_to_iso "$now") waited_s=$((now - start)) result=$result threshold_m=$threshold last_m=$last samples=$taken"
+        return 0
     }
     while :; do
         err=""
@@ -177,6 +195,7 @@ cmd_wait_idle() {
                     log "error: pod $pod not found: $err"
                     report error
                     return 1 ;;
+                *) ;;   # any other failure counts as a sample that is not idle
             esac
             streak=0
             log "notice: kubectl top pod failed (${err:-no CPU column}); counting the sample as not idle"
@@ -189,6 +208,7 @@ cmd_wait_idle() {
         if ((elapsed >= max_s)); then rm -f "$errf"; report timeout; return 1; fi
         clock_sleep "$IDLE_INTERVAL_S"
     done
+    return 1
 }
 
 # ==========================================================================
@@ -240,7 +260,10 @@ def mem_mi: if test("Ki$") then (sub("Ki$"; "") | tonumber / 1024)
 W_CTX="" W_NS="" W_DEPLOY="" W_POD="" W_NODE="" W_SEL="" W_CLUSTER="" W_ACU_CEIL="" W_BNS="" W_BPOD=""
 W_BMEM="" W_CPU_PCT="" W_INTERVAL="" W_END="" W_OUT="" W_VOID=""
 
-kc() { kubectl --context "$W_CTX" "$@"; }
+kc() {
+    kubectl --context "$W_CTX" "$@"
+    return $?
+}
 
 # fetch_json FILE CMD... -> FILE holds the JSON output, null on NotFound, or {"__error": ...}
 fetch_json() {
@@ -251,6 +274,7 @@ fetch_json() {
     elif grep -q NotFound "$err"; then echo null >"$file"
     else jq -cn --arg e "$(head -c 200 "$err")" '{__error: $e}' >"$file"; fi
     rm -f "$err"
+    return 0
 }
 
 # fetch_text FILE CMD... -> FILE holds a JSON string of the output, or {"__error": ...}
@@ -259,11 +283,12 @@ fetch_text() {
     shift
     if out="$("$@" 2>/dev/null)"; then jq -cn --arg s "$out" '$s' >"$file"
     else echo '{"__error":"command failed"}' >"$file"; fi
+    return 0
 }
 
 # collect_live NOW_ISO -> raw sample JSON on stdout
-collect_live() {
-    local d f
+collect_live() { # NOW_ISO
+    local now="$1" d f
     d="$(mktemp -d "${TMPDIR:-/tmp}/perf-watchdog.XXXXXX")"
     fetch_json "$d/deploy" kc --namespace "$W_NS" get deployment "$W_DEPLOY" -o json
     fetch_json "$d/hpa" kc --namespace "$W_NS" get hpa -o json
@@ -275,64 +300,74 @@ collect_live() {
     fetch_text "$d/top_broker" kc --namespace "$W_BNS" top pod "$W_BPOD" --no-headers
     fetch_json "$d/acu" aws cloudwatch get-metric-statistics --namespace AWS/RDS \
         --metric-name ServerlessDatabaseCapacity --dimensions "Name=DBClusterIdentifier,Value=$W_CLUSTER" \
-        --start-time "$(epoch_to_iso $(($(clock_now) - 300)))" --end-time "$1" \
+        --start-time "$(epoch_to_iso $(($(clock_now) - 300)))" --end-time "$now" \
         --period 60 --statistics Maximum --output json
     fetch_json "$d/jobs" kc --namespace "$W_NS" get jobs -l "$W_SEL" -o json
     for f in deploy hpa pod node events top_node top_broker acu jobs; do
         [[ -s "$d/$f" ]] || echo '{"__error":"empty"}' >"$d/$f"
     done
-    jq -cn --arg now "$1" \
+    jq -cn --arg now "$now" \
         --slurpfile deploy "$d/deploy" --slurpfile hpa "$d/hpa" --slurpfile pod "$d/pod" \
         --slurpfile node "$d/node" --slurpfile events "$d/events" --slurpfile top_node "$d/top_node" \
         --slurpfile top_broker "$d/top_broker" --slurpfile acu "$d/acu" --slurpfile jobs "$d/jobs" \
         '{now: $now, deploy: $deploy[0], hpa: $hpa[0], pod: $pod[0], node: $node[0], events: $events[0],
           top_node: $top_node[0], top_broker: $top_broker[0], acu: $acu[0], jobs: $jobs[0]}'
     rm -rf "$d"
+    return 0
 }
 
 kill_jobs() { # NOW_ISO REASONS
+    local now="$1" rules="$2"
     if [[ -n "$SIM_DIR" ]]; then
-        echo "KILL $1 kubectl --context $W_CTX --namespace $W_NS delete job -l $W_SEL --wait=false (simulated; rules: $2)"
+        echo "KILL $now kubectl --context $W_CTX --namespace $W_NS delete job -l $W_SEL --wait=false (simulated; rules: $rules)"
         return 0
     fi
-    log "killing load Jobs ($2): kubectl delete job -l $W_SEL"
+    log "killing load Jobs ($rules): kubectl delete job -l $W_SEL"
     kc --namespace "$W_NS" delete job -l "$W_SEL" --wait=false >&2 || log "warning: kubectl delete job failed"
+    return 0
 }
 
 void_line() { # NOW_ISO RULE SCOPE ACTION DETAIL
-    local line="VOID $1 rule=$2 scope=$3 action=$4 detail=$5"
+    local now="$1" rule="$2" scope="$3" action="$4" detail="$5"
+    local line="VOID $now rule=$rule scope=$scope action=$action detail=$detail"
     echo "$line" >>"$W_VOID"
     log "$line"
     [[ -z "$SIM_DIR" ]] || echo "$line"
+    return 0
 }
 
 cmd_watch() {
     while [[ $# -gt 0 ]]; do
-        case "$1" in
+        local arg="$1" val="${2-}"
+        case "$arg" in
             -h|--help) usage; exit 0 ;;
-            --context) need_value "$@"; W_CTX="$2"; shift 2 ;;
-            --namespace) need_value "$@"; W_NS="$2"; shift 2 ;;
-            --deployment) need_value "$@"; W_DEPLOY="$2"; shift 2 ;;
-            --pod) need_value "$@"; W_POD="$2"; shift 2 ;;
-            --node) need_value "$@"; W_NODE="$2"; shift 2 ;;
-            --job-selector) need_value "$@"; W_SEL="$2"; shift 2 ;;
-            --aurora-cluster) need_value "$@"; W_CLUSTER="$2"; shift 2 ;;
-            --acu-ceiling) need_value "$@"; W_ACU_CEIL="$2"; shift 2 ;;
-            --broker-namespace) need_value "$@"; W_BNS="$2"; shift 2 ;;
-            --broker-pod) need_value "$@"; W_BPOD="$2"; shift 2 ;;
-            --broker-mem-mi) need_value "$@"; W_BMEM="$2"; shift 2 ;;
-            --node-cpu-pct) need_value "$@"; W_CPU_PCT="$2"; shift 2 ;;
-            --interval) need_value "$@"; W_INTERVAL="$2"; shift 2 ;;
-            --session-end) need_value "$@"; W_END="$2"; shift 2 ;;
-            --out) need_value "$@"; W_OUT="$2"; shift 2 ;;
-            --void-log) need_value "$@"; W_VOID="$2"; shift 2 ;;
-            --simulate) need_value "$@"; SIM_DIR="$2"; shift 2 ;;
-            *) usage_err "watch: unknown argument: $1" ;;
+            --context) need_value "$arg" "$val"; W_CTX="$val"; shift 2 ;;
+            --namespace) need_value "$arg" "$val"; W_NS="$val"; shift 2 ;;
+            --deployment) need_value "$arg" "$val"; W_DEPLOY="$val"; shift 2 ;;
+            --pod) need_value "$arg" "$val"; W_POD="$val"; shift 2 ;;
+            --node) need_value "$arg" "$val"; W_NODE="$val"; shift 2 ;;
+            --job-selector) need_value "$arg" "$val"; W_SEL="$val"; shift 2 ;;
+            --aurora-cluster) need_value "$arg" "$val"; W_CLUSTER="$val"; shift 2 ;;
+            --acu-ceiling) need_value "$arg" "$val"; W_ACU_CEIL="$val"; shift 2 ;;
+            --broker-namespace) need_value "$arg" "$val"; W_BNS="$val"; shift 2 ;;
+            --broker-pod) need_value "$arg" "$val"; W_BPOD="$val"; shift 2 ;;
+            --broker-mem-mi) need_value "$arg" "$val"; W_BMEM="$val"; shift 2 ;;
+            --node-cpu-pct) need_value "$arg" "$val"; W_CPU_PCT="$val"; shift 2 ;;
+            --interval) need_value "$arg" "$val"; W_INTERVAL="$val"; shift 2 ;;
+            --session-end) need_value "$arg" "$val"; W_END="$val"; shift 2 ;;
+            --out) need_value "$arg" "$val"; W_OUT="$val"; shift 2 ;;
+            --void-log) need_value "$arg" "$val"; W_VOID="$val"; shift 2 ;;
+            --simulate) need_value "$arg" "$val"; SIM_DIR="$val"; shift 2 ;;
+            *) usage_err "watch: unknown argument: $arg" ;;
         esac
     done
-    local f
-    for f in W_CTX W_NS W_DEPLOY W_POD W_NODE W_SEL W_CLUSTER W_ACU_CEIL W_BNS W_BPOD W_BMEM W_CPU_PCT W_INTERVAL W_END W_OUT W_VOID; do
-        [[ -n "${!f}" ]] || usage_err "watch: every flag is required (missing --$(printf '%s' "${f#W_}" | tr '[:upper:]_' '[:lower:]-'))"
+    local f flag
+    for f in W_CTX:context W_NS:namespace W_DEPLOY:deployment W_POD:pod W_NODE:node W_SEL:job-selector \
+        W_CLUSTER:aurora-cluster W_ACU_CEIL:acu-ceiling W_BNS:broker-namespace W_BPOD:broker-pod \
+        W_BMEM:broker-mem-mi W_CPU_PCT:node-cpu-pct W_INTERVAL:interval W_END:session-end W_OUT:out \
+        W_VOID:void-log; do
+        flag="${f#*:}"; f="${f%%:*}"
+        [[ -n "${!f}" ]] || usage_err "watch: every flag is required (missing --$flag)"
     done
     [[ "$W_SEL" == *=* ]] || usage_err "--job-selector must be a label selector (key=value)"
     [[ "$W_ACU_CEIL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage_err "--acu-ceiling must be a number"
@@ -453,10 +488,15 @@ cmd_watch() {
         echo "$now_iso,$replicas,$hpa,$pod,$pod_ready,$restarts,$pod_node,$node,$cpu_pct,${pressure//,/|},${disruption//,/|},$broker_mi,$acu,$jobs,${viol:--},$killed" >>"$W_OUT"
         clock_sleep "$W_INTERVAL"
     done
+    return 0
 }
 
 FIRED=()
-fire() { FIRED+=("$1|$2|$3|$4"); }
+fire() { # RULE SCOPE ACTION DETAIL
+    local rule="$1" scope="$2" action="$3" detail="$4"
+    FIRED+=("$rule|$scope|$action|$detail")
+    return 0
+}
 
 # ==========================================================================
 
