@@ -111,13 +111,14 @@ MAX_CRITICAL="$(yaml_get pass_fail.max_critical_issues)"
 MAX_WARNINGS="$(yaml_get pass_fail.max_warnings)"
 # Both feed bash integer comparisons in the verdict. A decimal there is an
 # arithmetic error that falls through to PASS, and 0 critical issues would fail
-# every run, so refuse them up front.
+# every run, so refuse them up front. A leading zero is refused too: bash reads
+# 010 as octal 8 and 08 as an arithmetic error.
 [[ "$MAX_CRITICAL" =~ ^[1-9][0-9]*$ ]] || {
-    echo "❌ $THRESHOLDS: pass_fail.max_critical_issues must be a whole number >= 1 (got '$MAX_CRITICAL')" >&2
+    echo "❌ $THRESHOLDS: pass_fail.max_critical_issues must be a whole number >= 1 with no leading zero (got '$MAX_CRITICAL')" >&2
     exit 2
 }
-[[ "$MAX_WARNINGS" =~ ^[0-9]+$ ]] || {
-    echo "❌ $THRESHOLDS: pass_fail.max_warnings must be a whole number >= 0 (got '$MAX_WARNINGS')" >&2
+[[ "$MAX_WARNINGS" =~ ^(0|[1-9][0-9]*)$ ]] || {
+    echo "❌ $THRESHOLDS: pass_fail.max_warnings must be a whole number >= 0 with no leading zero (got '$MAX_WARNINGS')" >&2
     exit 2
 }
 
