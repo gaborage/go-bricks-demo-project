@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,15 +18,44 @@ const (
 // update rewrites the golden files: go test ./cmd/perf-report -run TestGolden -update
 var update = flag.Bool("update", false, "rewrite testdata/golden from the fixture series")
 
-// TestGolden renders the synthetic series under testdata/series and compares
-// both outputs byte for byte. The fixture covers three labels and an A/A
+// extractSeries expands testdata/series.txtar into a temporary series
+// directory. Each "-- <path> --" line starts a file; the lines after it, up to
+// the next marker, are its content. Text before the first marker is a comment.
+func extractSeries(t testing.TB) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "series.txtar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var path string
+	var body []string
+	flush := func() {
+		if path != "" {
+			writeFile(t, filepath.Join(dir, filepath.FromSlash(path)), strings.Join(body, "\n")+"\n")
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		if name, ok := strings.CutPrefix(line, "-- "); ok && strings.HasSuffix(name, " --") {
+			flush()
+			path, body = strings.TrimSuffix(name, " --"), nil
+			continue
+		}
+		body = append(body, line)
+	}
+	flush()
+	return dir
+}
+
+// TestGolden renders the synthetic series in testdata/series.txtar and
+// compares both outputs byte for byte. The fixture covers three labels and an A/A
 // label, a void rep re-run under the same run_id, a summary without p(99) or
 // dropped_iterations, a throttled rep that makes a P2 verdict
 // environment-limited, an nr-gap rep, a simulator route left out of the rate
 // gap, and a staircase with and without its Q18 series.
 func TestGolden(t *testing.T) {
 	out := t.TempDir()
-	if code := run([]string{flagSeries, filepath.Join("testdata", "series"), flagOut, out}, io.Discard, os.Stderr); code != exitOK {
+	if code := run([]string{flagSeries, extractSeries(t), flagOut, out}, io.Discard, os.Stderr); code != exitOK {
 		t.Fatalf("run exit = %d, want %d", code, exitOK)
 	}
 	for _, name := range []string{reportFile, runsFile} {
@@ -56,8 +86,9 @@ func TestGolden(t *testing.T) {
 // TestGoldenIsStable renders twice: the output must not depend on map order.
 func TestGoldenIsStable(t *testing.T) {
 	var first []byte
+	dir := extractSeries(t)
 	for i := 0; i < 5; i++ {
-		s, err := loadSeries(filepath.Join("testdata", "series"), 0)
+		s, err := loadSeries(dir, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
