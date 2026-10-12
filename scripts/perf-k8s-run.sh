@@ -35,9 +35,10 @@
 #                    perfMeta.rate differs from --rate (skipped for a PERF_STEPS staircase)
 #   429              http_reqs{status:429} > 0, or the submetric is absent
 #   5xx              5xx responses >= 0.1% of http_reqs, counted from the suite's
-#                    perf_http_5xx counter; without it, from any http_reqs{status:5NN}
-#                    submetrics; only then from http_req_failed, an upper bound that
-#                    also counts 4xx and network errors (logged as a warning).
+#                    perf_http_5xx counter; without it, from http_req_failed, an upper
+#                    bound that also counts 4xx and network errors (logged as a
+#                    warning). http_reqs{status:NNN} submetrics are never used: k6
+#                    only creates the ones a threshold names, so a set can be partial.
 #   void             a VOID line in --void-log (default <out>/void.log) inside
 #                    [warm or run start, run end or now]
 #   pod / node       app pod replaced, restarted or more than one / node changed,
@@ -406,14 +407,15 @@ void_gate() { # START_ISO END_ISO
 }
 
 archive_previous() { # PATH... -> moved into <out>/attempts/, so a re-run never overwrites
-    local p base ext ts
-    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    local p base ext ts dest
+    ts="$(stamp)"
     for p in "$@"; do
         [[ -e "$p" ]] || continue
         mkdir -p "$opt_out/attempts"
         base="$(basename "$p")"; ext="${base##*.}"
-        mv "$p" "$opt_out/attempts/${base%.*}-$ts.$ext"
-        log "moved the previous attempt's $base to attempts/"
+        dest="$(free_path "$opt_out/attempts/${base%.*}-$ts" "$ext")"
+        mv "$p" "$dest"
+        log "moved the previous attempt's $base to attempts/$(basename "$dest")"
     done
     return 0
 }
@@ -599,15 +601,13 @@ evaluate_k6() {
         G_MISSING=1
     fi
 
-    local fields dropped iters reqs n429 n5xx failed meta_run meta_rate
+    local fields dropped iters reqs n429 failed counter5xx meta_run meta_rate
     fields="$(jq -r '
         def cnt(k): (.metrics[k].values.count // "absent");
         [ cnt("dropped_iterations"), cnt("iterations"), cnt("http_reqs"), cnt("http_reqs{status:429}"),
-          ([.metrics | to_entries[] | select(.key | test("^http_reqs\\{status:5[0-9][0-9]\\}$")) | .value.values.count // 0]
-            | if length > 0 then add else "absent" end),
           (.metrics.http_req_failed.values.passes // "absent"), cnt("perf_http_5xx"),
           (.perfMeta.runId // "absent"), (.perfMeta.rate // "absent") ] | @tsv' "$json_file")"
-    IFS=$'\t' read -r dropped iters reqs n429 n5xx failed counter5xx meta_run meta_rate <<<"$fields"
+    IFS=$'\t' read -r dropped iters reqs n429 failed counter5xx meta_run meta_rate <<<"$fields"
 
     if [[ "$meta_run" != "$run_id" ]]; then
         log "gate missing-summary: perfMeta.runId is '$meta_run', this rep is '$run_id'"
@@ -630,16 +630,17 @@ evaluate_k6() {
     if [[ "$reqs" == absent ]] || ! fgt "$reqs" 0; then
         log "notice: 5xx gate not evaluated (no http_reqs)"
     else
-        # Sources in order: the suite's perf_http_5xx counter, any http_reqs{status:5NN}
-        # submetrics, and only then http_req_failed, which also counts 4xx.
+        # The suite's perf_http_5xx counter, else http_req_failed: a superset that
+        # never under-counts 5xx. http_reqs{status:NNN} submetrics are not used:
+        # k6 creates one only for a status a threshold names, so a partial set
+        # (500 without 503) would pass for a complete count.
         local bad="$counter5xx" source="perf_http_5xx"
-        if [[ "$bad" == absent ]]; then bad="$n5xx"; source="http_reqs{status:5NN}"; fi
         if [[ "$bad" == absent && "$failed" != absent ]]; then
             bad="$failed"; source="http_req_failed"
             log "warning: 5xx gate fell back to http_req_failed, which also counts 4xx and network errors (no perf_http_5xx in the summary)"
         fi
         if [[ "$bad" == absent ]]; then
-            log "notice: 5xx gate not evaluated (no 5xx submetric and no http_req_failed)"
+            log "notice: 5xx gate not evaluated (no perf_http_5xx and no http_req_failed)"
         elif fge "$(awk -v b="$bad" -v r="$reqs" 'BEGIN { printf "%.6f", b * 100 / r }')" "$MAX_5XX_PCT"; then
             log "gate 5xx: $bad of $reqs requests ($source); the limit is below ${MAX_5XX_PCT}%"
             G_5XX=1

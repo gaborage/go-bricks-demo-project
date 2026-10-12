@@ -59,6 +59,20 @@ duration_s() {
     return 0
 }
 
+# free_path STEM EXT -> STEM.EXT, or the first of STEM-1.EXT, STEM-2.EXT, ... that
+# does not exist yet. Archive names carry a one-second stamp; this keeps two
+# archives made in the same second from overwriting each other.
+free_path() {
+    local stem="$1" ext="$2" path n=0
+    path="$stem.$ext"
+    while [[ -e "$path" ]]; do
+        n=$((n + 1))
+        path="$stem-$n.$ext"
+    done
+    printf '%s' "$path"
+    return 0
+}
+
 # fgt A B -> 0 when A > B; fge A B -> 0 when A >= B (floating point)
 fgt() {
     local a="$1" b="$2"

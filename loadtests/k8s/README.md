@@ -104,6 +104,7 @@ a `perfMeta` block. The runner writes:
 <out>/facts/<scenario>-r<n>.env  inputs of the cluster-state gates
 <out>/reset-<stamp>.log          reset counts
 <out>/attempts/                  an earlier attempt of the same rep, moved aside on re-run
+                                 (<name>-<stamp>[-N].<ext>; -N avoids a same-second clash)
 ```
 
 `run_id` is `<label>-<scenario>-r<n>`. `reason` is empty, or `;`-joined codes from
@@ -114,9 +115,10 @@ evaluated, and does not void the rep.
 
 The `5xx` gate voids a rep at 0.1% of `http_reqs` or more. It reads the 5xx count from
 the suite's `perf_http_5xx` counter, which the k6 scripts add whenever `PERF_RATE` or
-`PERF_STEPS` is set. Without that counter it sums any `http_reqs{status:5NN}`
-submetrics. Only when neither is present does it fall back to `http_req_failed`, and
-it logs a warning, because that count also includes 4xx responses and network errors.
+`PERF_STEPS` is set. Without that counter it falls back to `http_req_failed` and logs a
+warning: that count also includes 4xx responses and network errors, so it can void a
+run with no 5xx, but it never under-counts them. `http_reqs{status:NNN}` submetrics
+are not used, because k6 only creates the ones a threshold names.
 
 **Idle window.** Record one per label, with no load running, before the measured reps:
 `--kind idle --label <label> --rep 0 --duration 10m` waits through the window and writes
@@ -178,7 +180,8 @@ a `run_id` that is not a safe file name, and skips a row whose timestamps do not
 convert. Each response is the raw NerdGraph JSON,
 `{"data":{"actor":{"account":{"nrql":{"results":[...]}}}}}`, in `<out>/<id>-<run_id>.json`.
 A failed request leaves `<id>-<run_id>.json.err` instead, and moves any earlier
-`.json` for the same id and run into `<out>/attempts/`. A later success removes the
+`.json` for the same id and run into `<out>/attempts/<id>-<run_id>-<stamp>.json`, with a
+`-1`, `-2`, ... suffix when that name is already taken. A later success removes the
 `.err`, so a result and an error never sit side by side.
 The queries of one `group:` go out as one request, each aliased by its id under
 `account`: `Q18-<run_id>.json` holds `Q18a` (per-minute `rps`, `n`, `p95`, `pct5xx`) and

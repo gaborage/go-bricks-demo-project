@@ -128,7 +128,7 @@ runner_case valid            valid.log            0 ""                    facts-
 runner_case dropped          dropped.log          3 "dropped"             facts-clean.env ""
 runner_case 429              429.log              3 "rate;429"            facts-clean.env ""
 runner_case rate             rate.log             3 "rate"                facts-clean.env ""
-runner_case 5xx-submetric    5xx.log              3 "5xx"                 facts-clean.env ""
+runner_case 5xx-partial-submetric 5xx-partial-submetric.log 3 "5xx"     facts-clean.env ""
 runner_case 5xx-fallback     failed-fallback.log  3 "5xx"                 facts-clean.env ""
 runner_case 5xx-counter      5xx-counter.log      3 "5xx"                 facts-clean.env ""
 runner_case 4xx-only         4xx-only.log         0 ""                    facts-clean.env ""
@@ -144,8 +144,10 @@ FAKE_PODS_JSON="$TD/runner/pods.json" runner_case live-facts valid.log 0 "" "" "
 if grep -q 'gate 5xx: 120 of 90000 requests (perf_http_5xx)' "$WORK/runner-5xx-counter/stderr" \
     && ! grep -q 'fell back' "$WORK/runner-5xx-counter/stderr" \
     && grep -q 'warning: 5xx gate fell back to http_req_failed' "$WORK/runner-5xx-fallback/stderr" \
+    && grep -q 'gate 5xx: 190 of 90000 requests (http_req_failed)' "$WORK/runner-5xx-partial-submetric/stderr" \
+    && grep -q 'warning: 5xx gate fell back to http_req_failed' "$WORK/runner-5xx-partial-submetric/stderr" \
     && ! grep -q 'fell back' "$WORK/runner-4xx-only/stderr"; then
-    ok "runner 5xx source order: perf_http_5xx, then http_reqs{status:5NN}, then http_req_failed with a warning"
+    ok "runner 5xx source: perf_http_5xx, else http_req_failed with a warning; a partial http_reqs{status:5NN} set is ignored"
 else
     bad "runner 5xx source order"; show "$WORK/runner-5xx-counter/stderr"
 fi
@@ -210,7 +212,17 @@ FAKE_LOG="$TD/runner/dropped.log" run_runner "$dir" --env "$ENV_EXAMPLE" --kind 
 if [[ $RC -eq 3 && $(find "$dir/out/attempts" -name 'S4-r1-*.log' | wc -l) -eq 1 && $(wc -l <"$dir/out/windows.tsv") -eq 3 ]]; then
     ok "runner re-run archives the earlier attempt and appends a second row"
 else
-    bad "runner re-run (exit $RC)"; ls -R "$dir/out"
+    bad "runner re-run (exit $RC)"; find "$dir/out" | head -n 20
+fi
+# A third run in the same (pinned) second must not overwrite the first archive.
+FAKE_LOG="$TD/runner/rate.log" run_runner "$dir" --env "$ENV_EXAMPLE" --kind k6 --label labela --scenario S4 --rep 1 \
+    --script products-read-only.ts --rate 150 --warm 2m --duration 10m --out "$dir/out" --facts "$TD/runner/facts-clean.env"
+first="$dir/out/attempts/S4-r1-20261014T000000Z.log" second="$dir/out/attempts/S4-r1-20261014T000000Z-1.log"
+if [[ $RC -eq 3 && -f "$first" && -f "$second" ]] && grep -q '"dropped_iterations":{[^}]*"values":{"count":0' "$first" \
+    && grep -q '"dropped_iterations":{[^}]*"values":{"count":412' "$second"; then
+    ok "runner archives made in the same second get -1, -2, ... instead of overwriting"
+else
+    bad "runner archive collision (exit $RC)"; find "$dir/out/attempts" | head -n 20
 fi
 
 # Usage errors.
@@ -679,15 +691,19 @@ else
 fi
 
 # Result and error never coexist. Direction 1: an earlier .json, then a failure.
+# An archive from the same (pinned) second already exists: the move must not
+# overwrite it.
 dir="$WORK/nrql-stale"
-mkdir -p "$dir/out"
+mkdir -p "$dir/out/attempts"
 cp "$TD/nrql/stale-result.json" "$dir/out/Q0-labela-S4-r1.json"
-FAKE_CURL_RESPONSE="$TD/nrql/response-errors.json" nrql "$dir" --queries "$Q" \
+cp "$TD/nrql/archived-result.json" "$dir/out/attempts/Q0-labela-S4-r1-20261014T000000Z.json"
+PERF_NRQL_STAMP=20261014T000000Z FAKE_CURL_RESPONSE="$TD/nrql/response-errors.json" nrql "$dir" --queries "$Q" \
     --windows "$TD/nrql/windows-labela.tsv" --vars "$VARS_A" --out "$dir/out" --account 1234567 --key-stdin <"$KEY_FILE"
-moved="$(find "$dir/out/attempts" -name 'Q0-labela-S4-r1-*.json' 2>/dev/null | head -n 1)"
-if [[ $RC -eq 1 && ! -e "$dir/out/Q0-labela-S4-r1.json" && -f "$dir/out/Q0-labela-S4-r1.json.err" \
-    && -n "$moved" ]] && grep -q 'stale-capture-marker' "$moved"; then
-    ok "nrql failure moves an earlier result to attempts/ before writing .err"
+moved="$dir/out/attempts/Q0-labela-S4-r1-20261014T000000Z-1.json"
+if [[ $RC -eq 1 && ! -e "$dir/out/Q0-labela-S4-r1.json" && -f "$dir/out/Q0-labela-S4-r1.json.err" && -f "$moved" ]] \
+    && grep -q 'stale-capture-marker' "$moved" \
+    && grep -q 'earlier-archive-marker' "$dir/out/attempts/Q0-labela-S4-r1-20261014T000000Z.json"; then
+    ok "nrql failure moves an earlier result to attempts/ (with -1 when the name is taken) before writing .err"
 else
     bad "nrql stale result on failure (exit $RC)"; find "$dir/out" | head -n 20
 fi

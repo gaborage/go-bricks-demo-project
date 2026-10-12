@@ -41,7 +41,8 @@
 # Exit codes: 0 every request succeeded, 1 a request failed (HTTP error or a
 # GraphQL `errors` member; batch mode carries on, writes the response to
 # <file>.err and moves an earlier <file> for the same id and run into
-# <out>/attempts/, so a result and an error never coexist; a success removes a
+# <out>/attempts/<id>-<run_id>-<UTC stamp>[-N].json, the -N added when that name
+# is taken, so a result and an error never coexist; a success removes a
 # stale <file>.err), 2 usage (including an unresolved placeholder, caught before
 # any request is sent).
 
@@ -201,6 +202,11 @@ nrql_body() { # NRQL BODY_FILE
     local nrql="$1" body="$2"
     jq -cn --argjson acct "$opt_account" --arg q "$nrql" --arg gql "$NRQL_GRAPHQL" \
         '{ query: $gql, variables: { accountId: $acct, nrql: $q } }' >"$body"
+    return 0
+}
+
+archive_stamp() { # UTC stamp for archive names; the offline suite pins it
+    if [[ -n "${PERF_NRQL_STAMP:-}" ]]; then echo "$PERF_NRQL_STAMP"; else date -u +%Y%m%dT%H%M%SZ; fi
     return 0
 }
 
@@ -513,7 +519,7 @@ for ((r = 0; r < ${#REQ_FILES[@]}; r++)); do
         failures=$((failures + 1))
         if [[ -e "$dest" ]]; then
             mkdir -p "$opt_out/attempts"
-            stale="$opt_out/attempts/$(basename "$dest" .json)-$(date -u +%Y%m%dT%H%M%SZ).json"
+            stale="$(free_path "$opt_out/attempts/$(basename "$dest" .json)-$(archive_stamp)" json)"
             mv "$dest" "$stale"
             log "moved the earlier $(basename "$dest") to attempts/ ($(basename "$stale"))"
         fi
