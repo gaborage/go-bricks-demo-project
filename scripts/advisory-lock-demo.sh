@@ -29,7 +29,9 @@
 # winner finishes its run instead of being cancelled mid-report.
 #
 # The app on APP_URL (make run), if it is up, is a third replica: it takes the
-# same lock on its own ticks, and its skips land in its own log, not here.
+# same lock on its own ticks, and its skips land in its own log, not here. If
+# its tick holds the key when a round fires, both replicas here skip, no runner
+# is elected, and the run fails: stop make run and rerun.
 #
 # Prerequisites:
 #   make docker-up && make migrate   # postgres + broker the replicas boot against
@@ -220,13 +222,28 @@ check_released() {
     fi
 }
 
+# double_skip LABEL — neither replica got the key, so this tick elected no
+# runner. Something outside the pair held it: the app on APP_URL if it is up,
+# otherwise a key left held, the leak this demo exists to catch.
+double_skip() {
+    if [[ -n "$APP_UP" ]]; then
+        echo "❌ $1: both replicas skipped — the app on $APP_URL may have held the key on its own tick; stop it and rerun" >&2
+    else
+        echo "❌ $1: both replicas skipped and nothing else should hold the key — was it left held? See $LOG_DIR" >&2
+    fi
+    FAILED=1
+}
+
 # trigger PORT — POST the manual trigger; prints the HTTP status ("000" when
-# nothing answered — curl's -w still prints it on a connection failure).
+# nothing answered — curl's -w still prints it on a connection failure or a
+# timeout). The scheduler answers 202 before the job runs, so 10s is ample;
+# without a bound a replica that accepts the connection and never answers
+# would stall the round forever.
 # 127.0.0.1 on purpose: /_sys is behind the scheduler's CIDR middleware, which
 # admits only loopback callers when scheduler.security.cidrallowlist is empty.
 trigger() {
     local port="$1"
-    curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    curl -sS -o /dev/null --max-time 10 -w '%{http_code}' -X POST \
         "http://127.0.0.1:${port}${API_BASE_PATH}/_sys/job/$JOB_ID" 2>/dev/null || true
 }
 
@@ -333,9 +350,7 @@ for round in $(seq 1 "$ROUNDS"); do
             || fail "round $round: the winner never logged the release — see $LOG_DIR"
         check_released "round $round"
     elif (( acquired == 0 )); then
-        # Both skipped: something outside this pair held the key — typically
-        # the app on APP_URL, whose own tick landed in this instant.
-        echo "round $round: both replicas skipped — a third holder had the key (the app on $APP_URL ticking?)"
+        double_skip "round $round"
     else
         echo "❌ round $round: $acquired replicas ran the report at once — the lock did not exclude" >&2
         FAILED=1
@@ -370,19 +385,20 @@ elif (( sched_acquired >= 2 )); then
     echo "❌ scheduled tick: both replicas ran — their first ticks were more than $HOLD apart (startup skew); rerun with a larger HOLD" >&2
     FAILED=1
 else
-    echo "scheduled tick: both replicas skipped — a third holder had the key (the app on $APP_URL ticking?)"
+    double_skip "scheduled tick"
 fi
 
 # --- verdict --------------------------------------------------------------
 
 section "Verdict"
 
+# The more specific message first: every tick skipped on both replicas.
 manual_acquired="$(total manual "$MSG_ACQUIRED")"
-if (( FAILED != 0 )); then
-    fail "at least one tick did not elect exactly one runner — replica logs kept in $LOG_DIR"
-fi
 if (( manual_acquired + sched_acquired == 0 )); then
     fail "no replica ever acquired the lock — is something else holding key $LOCK_OBJID? Logs in $LOG_DIR"
 fi
-echo "✅ $ROUNDS_RUN manual round(s) and the first scheduled tick each ran the report on at most one replica"
+if (( FAILED != 0 )); then
+    fail "at least one tick did not elect exactly one runner — replica logs kept in $LOG_DIR"
+fi
+echo "✅ $ROUNDS_RUN manual round(s) and the first scheduled tick each ran the report on exactly one replica"
 echo "   replica logs: $LOG_DIR"
