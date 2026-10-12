@@ -20,6 +20,9 @@
 # style), so optional blocks render as {} and the env list needs no indentation
 # handling. The shell is static: everything it varies on arrives as env vars.
 #
+# The warm-up runs with --no-thresholds and without the PERF_SUMMARY_* env, so
+# it prints no summary markers (k6 2.x has no --no-summary flag).
+#
 # The wrapper prints these lines, each on its own line (k6 scripts never do):
 #   WARM_START=<ISO-8601 UTC>   only when HARNESS_WARM is not 0
 #   WARM_RC=<k6 exit code>      only when HARNESS_WARM is not 0
@@ -81,7 +84,7 @@ spec:
                   PERF_DURATION="$HARNESS_WARM"
                   PERF_RATE="$HARNESS_WARM_RATE"
                   export PERF_DURATION PERF_RATE
-                  exec k6 run --no-thresholds --no-summary "/scripts/$HARNESS_SCRIPT"
+                  exec k6 run --no-thresholds "/scripts/$HARNESS_SCRIPT"
                 )
                 echo "WARM_RC=$?"
               fi

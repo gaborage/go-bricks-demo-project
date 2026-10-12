@@ -40,7 +40,7 @@ Pipe either command into `kubectl apply --dry-run=server -f -` for an admission 
 | `${JOB_NAME}` | `k6-<run id>-<UTC stamp>`, lowercased and cut to 63 characters |
 | `${NAMESPACE}` | `NS` |
 | `${RUN_ID_LABEL}` | `<label>-<scenario>-r<rep>` (also the `perf-run-id` label) |
-| `${K6_IMAGE}` | `K6_IMAGE`: pin a digest that ships `/bin/sh` and native TypeScript (k6 1.3 or later) |
+| `${K6_IMAGE}` | `K6_IMAGE`: pin a k6 2.x digest (tested with 2.3.0); the image must ship `/bin/sh` |
 | `${ACTIVE_DEADLINE_SECONDS}` | warm + duration + 300. For a `PERF_STEPS` staircase the duration is the sum of the step durations plus a 15s ramp per step |
 | `${K6_RUN_AS_USER}` | `K6_RUN_AS_USER` (default `12345`, the UID of the k6 image) |
 | `${K6_NODE_SELECTOR}` | JSON. `K6_NODEPOOL` sets `karpenter.sh/nodepool` and `K6_ZONE` sets `topology.kubernetes.io/zone`; with neither, `{}` |
@@ -92,8 +92,10 @@ scripts/perf-k8s-run.sh --env my.env --kind reset --rows 250000 --watermark 2026
 scripts/perf-k8s-run.sh --env my.env --kind idle --label base --rep 0 --duration 10m --out results/base
 ```
 
-The Job's wrapper prints `WARM_START=` (only with a warm-up), `WARM_RC=`, `RUN_START=`,
-`RUN_END=` and `RC=` on lines of their own. The k6 summary sits between
+The Job's wrapper prints `WARM_START=` and `WARM_RC=` (both only when there is a
+warm-up), then `RUN_START=`, `RUN_END=` and `RC=`, each on a line of its own. The
+warm-up runs with `--no-thresholds` and without the `PERF_SUMMARY_*` env, so it prints
+no summary markers. The k6 summary sits between
 `---PERF-SUMMARY-BEGIN---` and `---PERF-SUMMARY-END---` as one compact JSON line, with
 a `perfMeta` block. The runner writes:
 
@@ -108,8 +110,10 @@ a `perfMeta` block. The runner writes:
 ```
 
 `run_id` is `<label>-<scenario>-r<n>`. `reason` is empty, or `;`-joined codes from
-`dropped`, `rate`, `429`, `5xx`, `void`, `pod`, `node`, `k6cpu`, `acu` and
-`missing-summary`. The gates are listed in the runner's header. A gate whose input is
+`dropped`, `rate`, `429`, `5xx`, `void`, `pod`, `node`, `k6cpu`, `acu`,
+`missing-summary` and `warmup`. `warmup` means a warm-up started but its `WARM_RC` is
+missing or not 0, so the measured run started cold; `--warm 0` skips the warm-up and
+the gate. The gates are listed in the runner's header. A gate whose input is
 missing (no `APP_SELECTOR`, no metrics-server, no `ACU_WARM`) is logged as not
 evaluated, and does not void the rep.
 

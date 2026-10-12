@@ -47,6 +47,8 @@
 #   acu              Aurora ACU left ACU_WARM +/- 1 inside the window (CloudWatch)
 #   missing-summary  no single summary line after RUN_START=, no RC=, or a
 #                    perfMeta.runId that is not this rep's run id
+#   warmup           a warm-up started (WARM_START=) but WARM_RC= is missing or not
+#                    0, so the measured run started cold. No warm-up (--warm 0) is fine.
 # A gate whose input is missing (no APP_SELECTOR, no metrics-server, no
 # ACU_WARM) is logged as not evaluated. --facts <file> supplies the cluster-state
 # inputs directly, which is how the gates are tested offline. A failing k6 SLO
@@ -269,7 +271,7 @@ append_window() { # run_id scenario rep warm_start run_start run_end rc valid re
 
 # void_in_window START_EPOCH END_EPOCH -> prints matching VOID lines; 0 if any.
 # Line format, written by perf-watchdog.sh:
-#   VOID <ISO-8601 UTC> rule=<rule> scope=<rep|session> action=<kill|stop|none> detail=<text>
+#   VOID <ISO-8601 UTC> rule=<rule> scope=<rep|session> action=<kill|stop> detail=<text>
 void_in_window() {
     local start="$1" end="$2" line ts epoch hit=1
     if [[ ! -f "$opt_void_log" ]]; then
@@ -331,11 +333,12 @@ acu_facts() {
     return 0
 }
 
-G_DROPPED=0 G_RATE=0 G_429=0 G_5XX=0 G_VOID=0 G_POD=0 G_NODE=0 G_K6CPU=0 G_ACU=0 G_MISSING=0
+G_DROPPED=0 G_RATE=0 G_429=0 G_5XX=0 G_VOID=0 G_POD=0 G_NODE=0 G_K6CPU=0 G_ACU=0 G_MISSING=0 G_WARMUP=0
 reasons() {
     local out="" pair
     for pair in "$G_DROPPED:dropped" "$G_RATE:rate" "$G_429:429" "$G_5XX:5xx" "$G_VOID:void" \
-        "$G_POD:pod" "$G_NODE:node" "$G_K6CPU:k6cpu" "$G_ACU:acu" "$G_MISSING:missing-summary"; do
+        "$G_POD:pod" "$G_NODE:node" "$G_K6CPU:k6cpu" "$G_ACU:acu" "$G_MISSING:missing-summary" \
+        "$G_WARMUP:warmup"; do
         [[ "${pair%%:*}" -eq 0 ]] || out="${out:+$out;}${pair#*:}"
     done
     echo "$out"
@@ -390,6 +393,21 @@ facts_gates() {
         fi
     else
         log "notice: acu gate not evaluated (needs ACU_WARM and CloudWatch datapoints)"
+    fi
+    return 0
+}
+
+# warmup_gate SEEN WARM_RC -> G_WARMUP when a warm-up started (SEEN=1) and its
+# WARM_RC is missing or not 0: the measured run then started cold.
+warmup_gate() {
+    local seen="$1" warm_rc="$2"
+    [[ "$seen" -eq 1 ]] || return 0   # no warm-up (--warm 0)
+    if [[ -z "$warm_rc" ]]; then
+        log "gate warmup: WARM_START= without WARM_RC= (the warm-up did not finish)"
+        G_WARMUP=1
+    elif [[ "$warm_rc" != 0 ]]; then
+        log "gate warmup: the warm-up exited $warm_rc, so the measured run started cold"
+        G_WARMUP=1
     fi
     return 0
 }
@@ -788,7 +806,9 @@ run_k6() {
     fi
     finished_at="$(now_iso)"
 
-    local warm_start run_start run_end rc
+    local warm_start run_start run_end rc warm_seen=0 warm_rc
+    grep -q -E '^WARM_START=' "$log_file" && warm_seen=1
+    warm_rc="$(grep -E '^WARM_RC=[0-9]+$' "$log_file" | tail -n 1 | cut -d= -f2- || true)"
     warm_start="$(grep -E '^WARM_START=' "$log_file" | tail -n 1 | cut -d= -f2- || true)"
     run_start="$(grep -E '^RUN_START=' "$log_file" | tail -n 1 | cut -d= -f2- || true)"
     run_end="$(grep -E '^RUN_END=' "$log_file" | tail -n 1 | cut -d= -f2- || true)"
@@ -800,6 +820,7 @@ run_k6() {
     if [[ $opt_discard -eq 1 ]]; then
         log "discarded run $run_id: log saved to $log_file (RC=${rc:-none}); no summary, gates or windows.tsv row"
         [[ "$rc" == "0" ]] || die "discarded run ended with RC=${rc:-none}"
+        [[ $warm_seen -eq 0 || "$warm_rc" == "0" ]] || die "discarded run's warm-up ended with WARM_RC=${warm_rc:-none}"
         exit 0
     fi
 
@@ -825,6 +846,7 @@ run_k6() {
     evaluate_k6 "$log_file" "$json_file" "$expect_run_id" "$rc" "$measured_s" "$steps"
     void_gate "${warm_start:-${run_start:-$applied_at}}" "${run_end:-$finished_at}"
     facts_gates "$facts" k6
+    warmup_gate "$warm_seen" "$warm_rc"
 
     local reason valid=1
     reason="$(reasons)"

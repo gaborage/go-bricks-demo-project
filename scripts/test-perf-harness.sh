@@ -132,6 +132,8 @@ runner_case 5xx-partial-submetric 5xx-partial-submetric.log 3 "5xx"     facts-cl
 runner_case 5xx-fallback     failed-fallback.log  3 "5xx"                 facts-clean.env ""
 runner_case 5xx-counter      5xx-counter.log      3 "5xx"                 facts-clean.env ""
 runner_case 4xx-only         4xx-only.log         0 ""                    facts-clean.env ""
+runner_case warm-rc-nonzero  warm-rc-nonzero.log  3 "warmup"              facts-clean.env ""
+runner_case warm-rc-missing  warm-rc-missing.log  3 "warmup"              facts-clean.env ""
 runner_case missing-marker   missing-marker.log   3 "missing-summary"     facts-clean.env ""
 runner_case wrong-run-id     wrong-runid.log      3 "missing-summary"     facts-clean.env ""
 runner_case slo-threshold    slo-threshold.log    0 ""                    facts-clean.env ""
@@ -142,6 +144,7 @@ JOB_STATE=Deleted runner_case killed-job killed.log 3 "void;missing-summary" fac
 FAKE_PODS_JSON="$TD/runner/pods.json" runner_case live-facts valid.log 0 "" "" ""
 
 if grep -q 'gate 5xx: 120 of 90000 requests (perf_http_5xx)' "$WORK/runner-5xx-counter/stderr" \
+    && ! grep -q 'fell back' "$WORK/runner-valid/stderr" \
     && ! grep -q 'fell back' "$WORK/runner-5xx-counter/stderr" \
     && grep -q 'warning: 5xx gate fell back to http_req_failed' "$WORK/runner-5xx-fallback/stderr" \
     && grep -q 'gate 5xx: 190 of 90000 requests (http_req_failed)' "$WORK/runner-5xx-partial-submetric/stderr" \
@@ -299,7 +302,7 @@ if [[ $RC -ne 0 ]]; then
 else
     if grep -Eq '\$\{[A-Z0-9_]+\}' "$dir/stdout"; then bad "render k6: an unsubstituted \${VAR} is left"; else ok "render k6: every listed placeholder substituted"; fi
     # shellcheck disable=SC2016 # literal Job shell text, which must not have been expanded
-    if grep -Fq 'echo "RUN_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"' "$dir/stdout" && grep -Fq 'echo "RC=$rc"' "$dir/stdout"; then
+    if grep -Fq 'echo "RUN_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"' "$dir/stdout" && grep -Fq 'echo "RC=$rc"' "$dir/stdout" && ! grep -q -- '--no-summary' "$dir/stdout"; then
         ok "render k6: \$(date ...) and \$rc survive envsubst"
     else
         bad "render k6: the Job shell was altered by envsubst"
