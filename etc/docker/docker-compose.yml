@@ -129,8 +129,10 @@ services:
 
   # ========== OBSERVABILITY STACKS ==========
   # Use docker-compose profiles to switch between New Relic and Prometheus stacks
-  # New Relic:  docker-compose --profile newrelic up -d
-  # Prometheus: docker-compose --profile local up -d
+  # New Relic:  make docker-up-newrelic
+  # Prometheus: make docker-up-local
+  # (from the repository root; the targets pass --env-file .env, which every
+  # compose command needs because NEW_RELIC_LICENSE_KEY below is required)
 
   # OpenTelemetry Collector - New Relic variant (exports to New Relic Cloud)
   otel-collector-newrelic:

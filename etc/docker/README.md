@@ -22,45 +22,56 @@ etc/docker/
 
 ### Start Services
 
-All docker-compose commands must be run from this directory (`etc/docker/`):
+Run every command from the repository root, through the make targets or with
+`-f etc/docker/docker-compose.yml --env-file .env`, as the Makefile does. A bare
+`docker-compose` run from this directory fails before it does anything: the New
+Relic collector declares `NEW_RELIC_LICENSE_KEY` as required, and compose
+interpolates the whole file for every profile and command, so it needs the
+root `.env` (see [Environment Variables](#environment-variables)).
 
 ```bash
-cd etc/docker
-
 # Start local observability stack (Prometheus + Grafana + Tempo + Loki)
-docker-compose --profile local up -d
+make docker-up-local
+# Or manually:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile local up -d
 
-# Start New Relic observability stack (requires NEW_RELIC_LICENSE_KEY in .env)
-docker-compose --profile newrelic up -d
+# Start New Relic observability stack (requires a real NEW_RELIC_LICENSE_KEY in .env)
+make docker-up-newrelic
+# Or manually:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile newrelic up -d
 
-# Start database migrations
-docker-compose --profile migrations up flyway
+# Run database migrations (main database, then the analytics one)
+make migrate
+make migrate-analytics
+# Or manually:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway migrate
 ```
 
 ### Stop Services
 
 ```bash
-cd etc/docker
-docker-compose down
+# Keeps the volumes. `make docker-down` stops the services and deletes the volumes.
+docker-compose -f etc/docker/docker-compose.yml --env-file .env down
 ```
 
 ### View Logs
 
 ```bash
-cd etc/docker
-docker-compose logs -f <service-name>
+make logs   # every service
+
+# One service:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env logs -f <service-name>
 
 # Examples:
-docker-compose logs -f otel-collector-local
-docker-compose logs -f prometheus
-docker-compose logs -f grafana
+docker-compose -f etc/docker/docker-compose.yml --env-file .env logs -f grafana-alloy
+docker-compose -f etc/docker/docker-compose.yml --env-file .env logs -f prometheus
+docker-compose -f etc/docker/docker-compose.yml --env-file .env logs -f grafana
 ```
 
 ### Service Status
 
 ```bash
-cd etc/docker
-docker-compose ps
+make status
 ```
 
 ## Available Profiles
@@ -143,34 +154,34 @@ docker-compose ps
 ### Restart a Single Service
 
 ```bash
-cd etc/docker
-docker-compose restart <service-name>
+docker-compose -f etc/docker/docker-compose.yml --env-file .env restart <service-name>
 
 # Examples:
-docker-compose restart prometheus
-docker-compose restart otel-collector-local
+docker-compose -f etc/docker/docker-compose.yml --env-file .env restart prometheus
+docker-compose -f etc/docker/docker-compose.yml --env-file .env restart grafana-alloy
 ```
 
 ### Rebuild and Restart
 
 ```bash
-cd etc/docker
-docker-compose --profile local up -d --force-recreate
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile local up -d --force-recreate
 ```
 
 ### Clean Everything
 
 ```bash
-cd etc/docker
-docker-compose down -v  # -v removes volumes (WARNING: deletes data!)
+make docker-down  # runs `down -v`: removes the volumes (WARNING: deletes data!)
 ```
 
 ## Environment Variables
 
-Create a `.env` file in the project root (not in `etc/docker/`) with:
+Create a `.env` file in the project root (not in `etc/docker/`), for example
+with `cp .env.example .env`. Every compose command needs `NEW_RELIC_LICENSE_KEY`
+set, whatever the profile, because compose interpolates the whole file; the
+placeholder from `.env.example` is enough unless you run `--profile newrelic`:
 
 ```bash
-# New Relic (required for --profile newrelic)
+# New Relic (a real key only for --profile newrelic)
 NEW_RELIC_LICENSE_KEY=your_license_key_here
 NEW_RELIC_REGION=US  # or EU
 ```
@@ -180,25 +191,21 @@ NEW_RELIC_REGION=US  # or EU
 ### From Local to New Relic
 
 ```bash
-cd etc/docker
-
-# Stop local stack
-docker-compose down
+# Stop local stack (keeps the volumes)
+docker-compose -f etc/docker/docker-compose.yml --env-file .env down
 
 # Start New Relic stack
-docker-compose --profile newrelic up -d
+make docker-up-newrelic
 ```
 
 ### From New Relic to Local
 
 ```bash
-cd etc/docker
-
-# Stop New Relic stack
-docker-compose down
+# Stop New Relic stack (keeps the volumes)
+docker-compose -f etc/docker/docker-compose.yml --env-file .env down
 
 # Start local stack
-docker-compose --profile local up -d
+make docker-up-local
 ```
 
 **Note**: The application doesn't need to be restarted when switching stacks. It always sends telemetry to `localhost:4317`, and whichever OTel Collector is running will receive it.
@@ -210,16 +217,14 @@ docker-compose --profile local up -d
 If you see "port already allocated" errors:
 
 ```bash
-cd etc/docker
-
 # Stop all containers
-docker-compose down
+docker-compose -f etc/docker/docker-compose.yml --env-file .env down
 
 # Remove any orphaned containers
 docker ps -a | grep go-bricks | awk '{print $1}' | xargs docker rm -f
 
 # Start again
-docker-compose --profile local up -d
+make docker-up-local
 ```
 
 ### Volume Permissions
@@ -227,17 +232,14 @@ docker-compose --profile local up -d
 If you encounter permission errors with volumes:
 
 ```bash
-cd etc/docker
-docker-compose down -v
+make docker-down   # down -v: deletes the volumes
 docker volume prune -f
-docker-compose --profile local up -d
+make docker-up-local
 ```
 
 ### Check Service Health
 
 ```bash
-cd etc/docker
-
 # Check if Prometheus is scraping targets
 curl http://localhost:9090/api/v1/targets | jq .
 
