@@ -127,7 +127,7 @@ relay cannot set the flag anyway (upstream #1819).
 
 | Item | Decision | Before deploy |
 |------|----------|---------------|
-| `GO_BRICKS_REF` (migrate CLI source) | Bumped to `v0.69.0` after the upgrade, so it matches `go.mod` again. Neither hop lists a migrate change, so a CLI built at `v0.67.0` behaves the same. | Rebuild an installed `go-bricks-migrate` with `make migrate-multitenant-install` to keep one version. |
+| `GO_BRICKS_REF` (migrate CLI source) | Bumped to `v0.69.0` after the upgrade, so it matches `go.mod` again. Neither hop lists a migrate change, so a CLI built at `v0.67.0` behaves the same. | Rebuild an installed `go-bricks-migrate` with `make migrate-multitenant-install` to keep one version. With `GO_BRICKS_PATH` set, the target builds that checkout as it is and never checks out `GO_BRICKS_REF`: unset it, or check out `v0.69.0` there first. |
 | `SEAL_EVENT_VERSION` | No pin to bump: the scripts read the version from `go.mod`, so `seal-event` and `open-event` now install at v0.69.0. | The first run needs module-proxy access to install the v0.69.0 CLIs. |
 
 ### CI (`.github/workflows/ci.yml`, `security.yml`) and Dependabot
