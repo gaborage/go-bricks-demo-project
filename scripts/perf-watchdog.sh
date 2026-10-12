@@ -85,7 +85,8 @@ Usage:
 
 wait-idle samples every 15s and returns once DUR --min has passed and N
 consecutive samples were at or below idle + margin millicores. Without
-metrics-server it logs a notice, waits a fixed 5 minutes and returns 0.
+metrics-server it logs a notice, waits a fixed 5 minutes and returns 0. A pod
+that does not exist is an error (exit 1), not a reason to wait.
 EOF
 }
 
@@ -142,39 +143,50 @@ cmd_wait_idle() {
         VCLOCK=1767225600   # 2026-01-01T00:00:00Z
     fi
 
-    local threshold=$((idle + margin)) start now elapsed taken=0 streak=0 last="?" out m
+    local threshold=$((idle + margin)) start now elapsed taken=0 streak=0 last="?" out err m errf
     start="$(clock_now)"
+    errf="$(mktemp "${TMPDIR:-/tmp}/perf-watchdog-top.XXXXXX")"
     report() { # RESULT
         now="$(clock_now)"
         echo "COOLDOWN pod=$pod start=$(epoch_to_iso "$start") end=$(epoch_to_iso "$now") waited_s=$((now - start)) result=$1 threshold_m=$threshold last_m=$last samples=$taken"
     }
     while :; do
+        err=""
         if [[ -n "$SIM_DIR" ]]; then
             [[ $taken -lt ${#lines[@]} ]] || die "simulation ran out of samples after $taken"
             out="${lines[$taken]}"
-            [[ "$out" != ERROR* ]] || out=""
-        else
-            out="$(kubectl --context "$ctx" --namespace "$ns" top pod "$pod" --no-headers 2>/dev/null)" || out=""
+            if [[ "$out" == ERROR* ]]; then err="${out#ERROR }"; out=""; fi
+        elif ! out="$(kubectl --context "$ctx" --namespace "$ns" top pod "$pod" --no-headers 2>"$errf")"; then
+            out=""; err="$(head -c 300 "$errf")"; err="${err:-kubectl top pod failed}"
         fi
         taken=$((taken + 1))
         m="$(printf '%s\n' "$out" | awk 'NF >= 2 { c = $2; if (c ~ /m$/) { sub(/m$/, "", c); printf "%d", c } else if (c ~ /^[0-9.]+$/) printf "%d", c * 1000; exit }')"
         if [[ -z "$m" ]]; then
-            if [[ $taken -eq 1 ]]; then
-                echo "NOTICE metrics-server unavailable (kubectl top pod failed); falling back to a fixed $((FALLBACK_WAIT_S / 60))-minute wait"
-                log "metrics-server unavailable; waiting a fixed $((FALLBACK_WAIT_S / 60)) minutes"
-                clock_sleep "$FALLBACK_WAIT_S"
-                report fallback-fixed-wait
-                return 0
-            fi
+            case "$err" in
+                *"Metrics API not available"*|*metrics.k8s.io*)
+                    if [[ $taken -eq 1 ]]; then
+                        rm -f "$errf"
+                        echo "NOTICE metrics-server unavailable ($err); falling back to a fixed $((FALLBACK_WAIT_S / 60))-minute wait"
+                        log "metrics-server unavailable; waiting a fixed $((FALLBACK_WAIT_S / 60)) minutes"
+                        clock_sleep "$FALLBACK_WAIT_S"
+                        report fallback-fixed-wait
+                        return 0
+                    fi ;;
+                *NotFound*|*"not found"*)
+                    rm -f "$errf"
+                    log "error: pod $pod not found: $err"
+                    report error
+                    return 1 ;;
+            esac
             streak=0
-            log "notice: kubectl top pod failed; counting the sample as not idle"
+            log "notice: kubectl top pod failed (${err:-no CPU column}); counting the sample as not idle"
         else
             last="$m"
             if ((m <= threshold)); then streak=$((streak + 1)); else streak=0; fi
         fi
         now="$(clock_now)"; elapsed=$((now - start))
-        if ((elapsed >= min_s && streak >= samples)); then report idle; return 0; fi
-        if ((elapsed >= max_s)); then report timeout; return 1; fi
+        if ((elapsed >= min_s && streak >= samples)); then rm -f "$errf"; report idle; return 0; fi
+        if ((elapsed >= max_s)); then rm -f "$errf"; report timeout; return 1; fi
         clock_sleep "$IDLE_INTERVAL_S"
     done
 }

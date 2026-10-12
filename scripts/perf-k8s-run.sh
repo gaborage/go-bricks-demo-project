@@ -312,7 +312,16 @@ reasons() {
 
 # facts_gates FILE MODE -> pod and node gates; MODE k6 adds k6cpu and acu.
 facts_gates() {
-    local f="$1" mode="$2" v1 v2 r1 r2 n1 n2 cpu warm amin amax
+    local f="$1" mode="$2" v1 v2 r1 r2 n1 n2 cpu warm amin amax k
+    # Values feed shell arithmetic: refuse a facts file with non-numbers in them.
+    for k in pods_before pods_after restarts_before restarts_after k6_cpu_max_m; do
+        v1="$(facts_get "$f" "$k")"
+        [[ -z "$v1" || "$v1" =~ ^[0-9]+$ ]] || die "facts $f: $k must be a whole number, got '$v1'"
+    done
+    for k in acu_warm acu_min acu_max; do
+        v1="$(facts_get "$f" "$k")"
+        [[ -z "$v1" || "$v1" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "facts $f: $k must be a number, got '$v1'"
+    done
     v1="$(facts_get "$f" pod_before)"; v2="$(facts_get "$f" pod_after)"
     if [[ -n "$v1" && -n "$v2" ]]; then
         r1="$(facts_get "$f" restarts_before)"; r2="$(facts_get "$f" restarts_after)"
