@@ -19,7 +19,18 @@ import type { RefinedResponse, ResponseType } from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
-import { config, getURL, headers, loadProfiles, maybeSleep, resolveScenario, summaryOutputs } from './config.ts';
+import {
+  config,
+  getURL,
+  headers,
+  loadProfiles,
+  maybeSleep,
+  perfSetupData,
+  resolveScenario,
+  summaryOutputs,
+  withPerfKnobs,
+} from './config.ts';
+import type { PerfSetupData } from './config.ts';
 import type { RelayResponse } from './types/index.ts';
 
 // Test PANs — all Luhn-valid (the service rejects invalid PANs at
@@ -84,6 +95,8 @@ export function errorCode(response: RefinedResponse<ResponseType | undefined>): 
 
 /** What distinguishes one relay endpoint from another. */
 export interface RelaySpec {
+  /** The script's file name, recorded in the summary's perfMeta. */
+  script: string;
   /** Route under the API prefix, e.g. '/tokens/mle-relay'. */
   path: string;
   /** k6 `endpoint` tag value; also scopes the per-endpoint latency threshold. */
@@ -100,7 +113,7 @@ export interface RelaySpec {
 export interface RelayScenario {
   options: Options;
   run: () => void;
-  setup: () => void;
+  setup: () => PerfSetupData;
   handleSummary: (data: any) => Record<string, string>;
 }
 
@@ -119,9 +132,10 @@ export function relayScenario(spec: RelaySpec): RelayScenario {
 
   // Sustained VU stages by default — JOSE is CPU-bound, so the 10-minute hold at
   // 50 VUs surfaces GC pressure. PERF_RATE switches to a controlled
-  // constant-arrival-rate scenario (see resolveScenario in config.ts).
+  // constant-arrival-rate scenario, PERF_STEPS to a staircase (see
+  // resolveScenario in config.ts); withPerfKnobs adds the other perf knobs.
   const steady = resolveScenario();
-  const options: Options = {
+  const options: Options = withPerfKnobs({
     ...(steady ? { scenarios: { steady } } : { stages: loadProfiles.sustained.stages }),
     thresholds: {
       // One budget for every relay: each call is 2 seal + 2 open. Tune against
@@ -134,7 +148,7 @@ export function relayScenario(spec: RelaySpec): RelayScenario {
     // p(99) is not a default summary stat; the summary box below prints it.
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     discardResponseBodies: false,
-  };
+  });
 
   function run(): void {
     totalRequests.add(1);
@@ -162,8 +176,9 @@ export function relayScenario(spec: RelaySpec): RelayScenario {
   }
 
   // Fail fast: a broken keystore or an unregistered simulator would otherwise
-  // burn a 12-minute run on errors.
-  function setup(): void {
+  // burn a 12-minute run on errors. The return value carries the run's start
+  // time to handleSummary (perfMeta.startedAt).
+  function setup(): PerfSetupData {
     console.log(`🚀 Starting ${spec.title} load test`);
     console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}${spec.path}`);
     spec.banner.forEach((line) => console.log(`🔐 ${line}`));
@@ -179,6 +194,7 @@ export function relayScenario(spec: RelaySpec): RelayScenario {
       throw new Error(`${spec.path} probe failed: status=${probe.status} code=${errorCode(probe)}`);
     }
     console.log('✅ Probe succeeded — JOSE pipeline healthy');
+    return perfSetupData();
   }
 
   function handleSummary(data: any): Record<string, string> {
@@ -196,7 +212,7 @@ P95 Response Time:       ${(httpDuration['p(95)'] || 0).toFixed(2)}ms
 P99 Response Time:       ${(httpDuration['p(99)'] || 0).toFixed(2)}ms
 ═══════════════════════════════════════════════════════════
 `;
-    return summaryOutputs(data, summary);
+    return summaryOutputs(data, summary, { script: spec.script, scenario: steady });
   }
 
   return { options, run, setup, handleSummary };

@@ -14,12 +14,35 @@
 // Usage:
 //   k6 run loadtests/products-read-only.ts
 //   k6 run --vus 100 --duration 5m loadtests/products-read-only.ts
+//   PERF_RATE=150 PERF_READ_MIX=get PERF_SEED_ROWS=250000 k6 run loadtests/products-read-only.ts
+//
+// PERF_READ_MIX (get | list | mixed) and PERF_SEED_ROWS are opt-in perf knobs;
+// see config.ts. Gets pick seed ids only with PERF_SEED_ROWS set, which needs
+// the seed from scripts/perf-reset-products.sh in the database.
 
 import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
-import { config, getURL, getRandomPage, getSeededProductID, headers, loadProfiles, resolveScenario, summaryOutputs, summaryTrendStats, maybeSleep } from './config.ts';
+import {
+  config,
+  getURL,
+  getRandomPage,
+  getSeededProductID,
+  headers,
+  loadProfiles,
+  resolveScenario,
+  resolveReadMix,
+  perfSeedRows,
+  randomSeedProductID,
+  perfSetupData,
+  withPerfKnobs,
+  summaryOutputs,
+  summaryTrendStats,
+  formatRate,
+  maybeSleep,
+} from './config.ts';
+import type { PerfSetupData } from './config.ts';
 import type { ProductResponse, ProductListResponse, Product } from './types/index.ts';
 
 // Custom metrics
@@ -29,10 +52,16 @@ const listProductsDuration = new Trend('list_products_duration');
 const getProductDuration = new Trend('get_product_duration');
 const totalRequests = new Counter('total_requests');
 
+// Opt-in perf knobs (config.ts): null when unset, which keeps the default
+// 70/30 mix and the discovered/fixture ids for gets.
+const readMix = resolveReadMix();
+const seedRows = perfSeedRows();
+
 // Test configuration - sustained VU stages by default; controlled
-// constant-arrival-rate when PERF_RATE is set (see resolveScenario in config.ts).
+// constant-arrival-rate when PERF_RATE is set, or a staircase when PERF_STEPS
+// is (see resolveScenario in config.ts).
 const readScenario = resolveScenario();
-export const options: Options = {
+export const options: Options = withPerfKnobs({
   ...(readScenario
     ? { scenarios: { steady: readScenario } }
     : { stages: loadProfiles.sustained.stages }),
@@ -52,7 +81,7 @@ export const options: Options = {
   batch: 15,
   // Adds p(99), which the summary prints, to k6's default trend stats.
   summaryTrendStats,
-};
+});
 
 // Store product IDs discovered during list operations
 const knownProductIDs: string[] = [];
@@ -61,8 +90,7 @@ const knownProductIDs: string[] = [];
 export default function (): void {
   totalRequests.add(1);
 
-  // 70% list, 30% get
-  if (Math.random() < 0.7) {
+  if (pickList()) {
     listProducts();
   } else {
     getProduct();
@@ -71,6 +99,14 @@ export default function (): void {
   // Shorter think time for read-only workload (0.2-1 seconds); suppressed in
   // controlled A/B mode so the arrival-rate scenario drives the offered load.
   maybeSleep(Math.random() * 0.8 + 0.2, readScenario !== null);
+}
+
+// 70% list, 30% get by default and under PERF_READ_MIX=mixed; one operation
+// only under get or list.
+function pickList(): boolean {
+  if (readMix === 'get') return false;
+  if (readMix === 'list') return true;
+  return Math.random() < 0.7;
 }
 
 function listProducts(): void {
@@ -128,7 +164,10 @@ function listProducts(): void {
 function getProduct(): void {
   let productID: string;
 
-  if (knownProductIDs.length > 0) {
+  if (seedRows !== null) {
+    // A uniform pick from the deterministic seed (PERF_SEED_ROWS).
+    productID = randomSeedProductID(seedRows);
+  } else if (knownProductIDs.length > 0) {
     // Use a known product ID from list operations
     productID = knownProductIDs[Math.floor(Math.random() * knownProductIDs.length)];
   } else {
@@ -172,13 +211,21 @@ function getProduct(): void {
   getProductDuration.add(response.timings.duration);
 }
 
-// Setup function
-export function setup(): void {
+// Setup function. Its return value carries the run's start time to
+// handleSummary (perfMeta.startedAt); the default function ignores it.
+export function setup(): PerfSetupData {
   console.log('🚀 Starting Read-Only Load Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('📈 Operation Distribution:');
-  console.log('   - List: 70%');
-  console.log('   - Get:  30%');
+  if (readMix === 'get' || readMix === 'list') {
+    console.log(`   - ${readMix === 'get' ? 'Get:  ' : 'List: '}100% (PERF_READ_MIX=${readMix})`);
+  } else {
+    console.log('   - List: 70%');
+    console.log('   - Get:  30%');
+  }
+  if (seedRows !== null) {
+    console.log(`   - Gets pick from ${seedRows} seed rows (PERF_SEED_ROWS)`);
+  }
   console.log('');
   console.log('💡 This test establishes baseline read performance');
   console.log('   Use results to compare against CRUD mix tests');
@@ -197,6 +244,12 @@ export function setup(): void {
 
   console.log('✅ Health check passed');
   console.log('');
+
+  // Seed-id gets never read knownProductIDs, so skip the warm-up lists: they
+  // would only add requests outside the configured mix.
+  if (seedRows !== null) {
+    return perfSetupData();
+  }
 
   // Warm up - do a few list requests to populate knownProductIDs
   console.log('🔥 Warming up - fetching initial product IDs...');
@@ -221,6 +274,7 @@ export function setup(): void {
 
   console.log(`✅ Warmed up with ${knownProductIDs.length} product IDs`);
   console.log('');
+  return perfSetupData();
 }
 
 // Teardown function
@@ -237,8 +291,6 @@ export function teardown(): void {
 
 // Custom summary
 export function handleSummary(data: any): Record<string, string> {
-  const listSuccess = data.metrics.list_products_success?.values?.rate || 0;
-  const getSuccess = data.metrics.get_product_success?.values?.rate || 0;
   const avgDuration = data.metrics.http_req_duration?.values?.avg || 0;
   const p95Duration = data.metrics.http_req_duration?.values['p(95)'] || 0;
   const p99Duration = data.metrics.http_req_duration?.values['p(99)'] || 0;
@@ -249,8 +301,8 @@ export function handleSummary(data: any): Record<string, string> {
                    READ-ONLY TEST SUMMARY
 ═══════════════════════════════════════════════════════════
 Total Requests:          ${totalReqs}
-List Success Rate:       ${(listSuccess * 100).toFixed(2)}%
-Get Success Rate:        ${(getSuccess * 100).toFixed(2)}%
+List Success Rate:       ${formatRate(data.metrics.list_products_success)}
+Get Success Rate:        ${formatRate(data.metrics.get_product_success)}
 Avg Response Time:       ${avgDuration.toFixed(2)}ms
 P95 Response Time:       ${p95Duration.toFixed(2)}ms
 P99 Response Time:       ${p99Duration.toFixed(2)}ms
@@ -259,5 +311,10 @@ P99 Response Time:       ${p99Duration.toFixed(2)}ms
 
   console.log(summary);
 
-  return summaryOutputs(data, summary);
+  return summaryOutputs(data, summary, {
+    script: 'products-read-only.ts',
+    scenario: readScenario,
+    readMix,
+    seedRows,
+  });
 }

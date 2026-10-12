@@ -11,6 +11,14 @@
 //   k6 run loadtests/products-crud.ts
 //   k6 run --vus 50 --duration 5m loadtests/products-crud.ts
 //   K6_BASE_URL=http://prod.example.com:8080 k6 run loadtests/products-crud.ts
+//   PERF_RATE=40 PERF_DURATION=10m k6 run loadtests/products-crud.ts
+//
+// Data the run leaves behind: creates insert rows stamped with the current
+// time, deletes remove only rows this VU created, and an update falls back to
+// the six V1 fixture rows while the VU has created nothing yet (it changes
+// their name, price and description, never their count). Gets pick seed rows
+// when PERF_SEED_ROWS is set (see config.ts); updates and deletes never do, so
+// scripts/perf-reset-products.sh restores the row count exactly.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -25,13 +33,17 @@ import {
   headers,
   loadProfiles,
   resolveScenario,
+  perfSeedRows,
+  randomSeedProductID,
+  perfSetupData,
+  withPerfKnobs,
   summaryOutputs,
   summaryTrendStats,
   formatMs,
   formatRate,
   maybeSleep,
 } from './config.ts';
-import type { SummaryMetric } from './config.ts';
+import type { PerfSetupData, SummaryMetric } from './config.ts';
 import type { ProductResponse, ProductListResponse, CreateProductInput, UpdateProductInput, ReadyResponse } from './types/index.ts';
 
 // Custom metrics
@@ -52,10 +64,14 @@ const deleteProductDuration = new Trend('delete_product_duration');
 // report this total.
 const productsCreated = new Counter('products_created');
 
+// Opt-in perf knob (config.ts): with PERF_SEED_ROWS set, gets pick seed rows.
+const seedRows = perfSeedRows();
+
 // Test configuration - rampUp VU stages by default; controlled
-// constant-arrival-rate when PERF_RATE is set (see resolveScenario in config.ts).
+// constant-arrival-rate when PERF_RATE is set, or a staircase when PERF_STEPS
+// is (see resolveScenario in config.ts).
 const crudScenario = resolveScenario();
-export const options: Options = {
+export const options: Options = withPerfKnobs({
   ...(crudScenario
     ? { scenarios: { steady: crudScenario } }
     : { stages: loadProfiles.rampUp.stages }),
@@ -66,7 +82,7 @@ export const options: Options = {
   batch: 10,
   // Don't throw errors on failed HTTP requests
   discardResponseBodies: false,
-};
+});
 
 // Product IDs this VU created, for its own later get/update/delete operations.
 // Module state is per VU: never read it for a run-wide total.
@@ -129,7 +145,11 @@ function getProduct(): void {
   // Try to get a product we created, otherwise use a random ID
   let productID: string;
 
-  if (createdProductIDs.length > 0) {
+  if (seedRows !== null) {
+    // A uniform pick from the deterministic seed (PERF_SEED_ROWS). Reads only:
+    // updates and deletes never target seed rows.
+    productID = randomSeedProductID(seedRows);
+  } else if (createdProductIDs.length > 0) {
     // Pick a random product ID from our created products
     productID = createdProductIDs[Math.floor(Math.random() * createdProductIDs.length)];
   } else {
@@ -284,8 +304,9 @@ function deleteProduct(): void {
   deleteProductDuration.add(response.timings.duration);
 }
 
-// Setup function - runs once before the test starts
-export function setup(): void {
+// Setup function - runs once before the test starts. Its return value carries
+// the run's start time to handleSummary (perfMeta.startedAt).
+export function setup(): PerfSetupData {
   console.log('🚀 Starting CRUD Mix Load Test');
   console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}`);
   console.log('📈 Operation Distribution:');
@@ -333,6 +354,7 @@ export function setup(): void {
     console.warn(`⚠️  /ready answered ${ready.status} — the service is out of rotation; CRUD results may not reflect a healthy instance`);
   }
   console.log('');
+  return perfSetupData();
 }
 
 // Teardown function - runs once after the test completes
@@ -371,5 +393,9 @@ Success Rate by Operation:
 
   console.log(summary);
 
-  return summaryOutputs(data, summary);
+  return summaryOutputs(data, summary, {
+    script: 'products-crud.ts',
+    scenario: crudScenario,
+    seedRows,
+  });
 }
