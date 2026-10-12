@@ -56,9 +56,8 @@ FRAMEWORK_MODULE="github.com/gaborage/go-bricks"
 OUR_KID="tokensour"
 PEER_KID="tokenspeer"
 
-# Key files written by `make generate-keys`. The peer public key is also
-# inlined into config.development.yaml (the keystore's value: source); this is
-# the same key on disk.
+# Key files written by `make generate-keys`, the same DER files
+# config.development.yaml points the keystore at.
 OUR_PUBLIC_KEY="certs/tokens_our_public.der"
 PEER_PRIVATE_KEY="certs/tokens_peer_private.der"
 PEER_PUBLIC_KEY="certs/tokens_peer_public.der"

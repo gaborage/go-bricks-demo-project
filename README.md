@@ -122,7 +122,7 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
 #### Walkthrough
 
 ```bash
-# 1. Generate keypairs and patch the inline base64 into config.development.yaml.
+# 1. Generate the keypairs into certs/ (gitignored).
 make generate-keys
 
 # 2. Start the app.
@@ -173,10 +173,12 @@ framework's
 [jose.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli)
 for every flag.
 
-The keystore exercises both source styles for a single keypair: `tokensour` is
-file-backed (production pattern for Kubernetes secret mounts), and
-`tokenspeer` mixes file-backed private with inline base64 public (the
-`value:` style typical of secret-manager projection).
+In development every keystore half is file-backed (`file:`, the DER files
+`make generate-keys` writes to `certs/`), the pattern for Kubernetes secret
+mounts. The `value:` source, base64 DER typical of secret-manager projection, is
+how a non-development deploy delivers keys:
+`KEYSTORE_KEYS_<NAME>_{PUBLIC,PRIVATE}_VALUE`, listed in
+[wiki/DEPLOYING.md](wiki/DEPLOYING.md).
 
 ### Payments (Sealed AMQP Messages Example)
 A `seal:`-tagged event type: the framework encrypts the one declared Subject
