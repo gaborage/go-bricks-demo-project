@@ -59,27 +59,33 @@ func TestGolden(t *testing.T) {
 		t.Fatalf("run exit = %d, want %d", code, exitOK)
 	}
 	for _, name := range []string{reportFile, runsFile} {
-		got, err := os.ReadFile(filepath.Join(out, name))
-		if err != nil {
+		compareGolden(t, filepath.Join(out, name), filepath.Join("testdata", "golden", name))
+	}
+}
+
+// compareGolden checks a rendered file against its golden copy, or rewrites
+// the golden copy under -update.
+func compareGolden(t *testing.T, rendered, golden string) {
+	t.Helper()
+	got, err := os.ReadFile(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(golden), 0o750); err != nil {
 			t.Fatal(err)
 		}
-		golden := filepath.Join("testdata", "golden", name)
-		if *update {
-			if err := os.MkdirAll(filepath.Dir(golden), 0o750); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(golden, got, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			continue
+		if err := os.WriteFile(golden, got, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		want, err := os.ReadFile(golden)
-		if err != nil {
-			t.Fatalf("%v (run with -update to create it)", err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("%s differs from %s; run with -update and review the diff", name, golden)
-		}
+		return
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s differs from %s; run with -update and review the diff", filepath.Base(rendered), golden)
 	}
 }
 

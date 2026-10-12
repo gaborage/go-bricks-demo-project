@@ -66,13 +66,8 @@ func (s *series) dynamicDefs(scenario string) []metricDef {
 	seen := map[string]bool{}
 	for _, reps := range s.reps {
 		for _, r := range reps {
-			if r.w.scenario != scenario {
-				continue
-			}
-			for k := range r.vals {
-				if isDynamicKey(k) {
-					seen[k] = true
-				}
+			if r.w.scenario == scenario {
+				addDynamicKeys(seen, r.vals)
 			}
 		}
 	}
@@ -86,6 +81,14 @@ func (s *series) dynamicDefs(scenario string) []metricDef {
 		defs = append(defs, metricDef{key: k, name: dynamicName(k), decimals: 2, p99: strings.Contains(k, "p99")})
 	}
 	return defs
+}
+
+func addDynamicKeys(seen map[string]bool, vals map[string]float64) {
+	for k := range vals {
+		if isDynamicKey(k) {
+			seen[k] = true
+		}
+	}
 }
 
 func isDynamicKey(k string) bool {

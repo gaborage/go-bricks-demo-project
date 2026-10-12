@@ -323,7 +323,19 @@ func (s *series) writeTitle(b *strings.Builder) {
 	if title == "" {
 		title = "Perf comparison: " + strings.Join(s.m.labels, " vs ")
 	}
-	var first, last time.Time
+	first, last := s.span()
+	dates := "no reps yet"
+	if !first.IsZero() {
+		dates = first.Format(dayLayout)
+		if last.Format(dayLayout) != dates {
+			dates += " to " + last.Format(dayLayout)
+		}
+	}
+	fmt.Fprintf(b, "# %s (%s)\n\n", title, dates)
+}
+
+// span is the earliest RUN_START and the latest RUN_END over every rep.
+func (s *series) span() (first, last time.Time) {
 	for _, label := range s.m.allLabels() {
 		for _, r := range s.reps[label] {
 			if !r.w.runStart.IsZero() && (first.IsZero() || r.w.runStart.Before(first)) {
@@ -334,14 +346,7 @@ func (s *series) writeTitle(b *strings.Builder) {
 			}
 		}
 	}
-	dates := "no reps yet"
-	if !first.IsZero() {
-		dates = first.Format(dayLayout)
-		if last.Format(dayLayout) != dates {
-			dates += " to " + last.Format(dayLayout)
-		}
-	}
-	fmt.Fprintf(b, "# %s (%s)\n\n", title, dates)
+	return first, last
 }
 
 func (s *series) writeVerdict(b *strings.Builder) {
@@ -406,40 +411,53 @@ func (s *series) repExtensionText() string {
 // largestMoves lists the three largest |delta| among the efficiency metrics,
 // per consecutive pairing, outside the two primaries.
 func (s *series) largestMoves() string {
-	type move struct {
-		text string
-		abs  float64
-	}
 	var hops []string
 	for _, c := range s.comparisons() {
 		if !c.hop {
 			continue
 		}
-		var moves []move
-		for _, sc := range s.scenarios() {
-			for _, def := range moveDefs {
-				if sc == scenarioP2 && def.key == primaryP2.key {
-					continue
-				}
-				a := s.assess(sc, def, c, false)
-				if a.hasDelta {
-					moves = append(moves, move{text: sc + " " + def.name + " " + signedPct(a.delta), abs: math.Abs(a.delta)})
-				}
-			}
-		}
-		sort.SliceStable(moves, func(i, j int) bool { return moves[i].abs > moves[j].abs })
-		if len(moves) > 3 {
-			moves = moves[:3]
-		}
-		texts := make([]string, 0, len(moves))
-		for _, m := range moves {
-			texts = append(texts, m.text)
-		}
-		if len(texts) > 0 {
+		if texts := s.hopMoves(c); len(texts) > 0 {
 			hops = append(hops, c.String()+": "+strings.Join(texts, ", "))
 		}
 	}
 	return strings.Join(hops, "; ")
+}
+
+// move is one efficiency metric's delta in one scenario.
+type move struct {
+	text string
+	abs  float64
+}
+
+// hopMoves returns the three largest moves of one pairing, largest first;
+// ties keep scenario order, then moveDefs order.
+func (s *series) hopMoves(c comparison) []string {
+	var moves []move
+	for _, sc := range s.scenarios() {
+		moves = append(moves, s.scenarioMoves(sc, c)...)
+	}
+	sort.SliceStable(moves, func(i, j int) bool { return moves[i].abs > moves[j].abs })
+	if len(moves) > 3 {
+		moves = moves[:3]
+	}
+	texts := make([]string, 0, len(moves))
+	for _, m := range moves {
+		texts = append(texts, m.text)
+	}
+	return texts
+}
+
+func (s *series) scenarioMoves(sc string, c comparison) []move {
+	var out []move
+	for _, def := range moveDefs {
+		if sc == scenarioP2 && def.key == primaryP2.key {
+			continue
+		}
+		if a := s.assess(sc, def, c, false); a.hasDelta {
+			out = append(out, move{text: sc + " " + def.name + " " + signedPct(a.delta), abs: math.Abs(a.delta)})
+		}
+	}
+	return out
 }
 
 func (s *series) writePrimary(b *strings.Builder) {

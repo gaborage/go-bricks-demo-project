@@ -20,6 +20,22 @@ func writeFile(t testing.TB, path, content string) {
 	}
 }
 
+// expectErr checks err against the substring a case expects ("" for none) and
+// reports whether the case expected an error, so the caller can stop there.
+func expectErr(t *testing.T, err error, want string) bool {
+	t.Helper()
+	if want == "" {
+		if err != nil {
+			t.Fatal(err)
+		}
+		return false
+	}
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+	return true
+}
+
 func TestLoadManifest(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -51,16 +67,9 @@ func TestLoadManifest(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, filepath.Join(dir, manifestFile), tt.body)
 			m, err := loadManifest(dir)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
-				}
-				return
+			if !expectErr(t, err, tt.wantErr) {
+				tt.check(t, m)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			tt.check(t, m)
 		})
 	}
 }
@@ -86,14 +95,11 @@ func TestLoadWindows(t *testing.T) {
 			path := filepath.Join(t.TempDir(), windowsFile)
 			writeFile(t, path, tt.body)
 			rows, found, err := loadWindows(path)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
-				}
+			if expectErr(t, err, tt.wantErr) {
 				return
 			}
-			if err != nil || !found || len(rows) != tt.wantN {
-				t.Fatalf("rows = %v, found = %v, err = %v", rows, found, err)
+			if !found || len(rows) != tt.wantN {
+				t.Fatalf("rows = %v, found = %v", rows, found)
 			}
 		})
 	}

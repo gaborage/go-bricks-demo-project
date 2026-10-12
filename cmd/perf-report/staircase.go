@@ -115,25 +115,10 @@ func readBuckets(rows []map[string]any) []bucket {
 		}
 		b := byBegin[int64(begin)]
 		if b == nil {
-			end, okEnd := asNum(row[fieldEnd])
-			if !okEnd {
-				end = begin + minuteSeconds
-			}
-			b = &bucket{begin: int64(begin), end: int64(end), rps: math.NaN(), p95: math.NaN(),
-				pct5xx: math.NaN(), mcores: math.NaN(), throttle: math.NaN()}
+			b = newBucket(begin, row)
 			byBegin[b.begin] = b
 		}
-		b.rps = addNaN(b.rps, row[fieldRPS])
-		b.mcores = addNaN(b.mcores, row["mcores"])
-		if v, ok := percentile(row, "95"); ok {
-			b.p95 = maxNaN(b.p95, v)
-		}
-		if v, ok := asNum(row["pct5xx"]); ok {
-			b.pct5xx = maxNaN(b.pct5xx, v)
-		}
-		if v, ok := asNum(row["throttle"]); ok {
-			b.throttle = maxNaN(b.throttle, v)
-		}
+		b.merge(row)
 	}
 	out := make([]bucket, 0, len(byBegin))
 	for _, b := range byBegin {
@@ -141,6 +126,32 @@ func readBuckets(rows []map[string]any) []bucket {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].begin < out[j].begin })
 	return out
+}
+
+// newBucket starts the minute that begins at begin; a row without
+// endTimeSeconds spans one minute.
+func newBucket(begin float64, row map[string]any) *bucket {
+	end, ok := asNum(row[fieldEnd])
+	if !ok {
+		end = begin + minuteSeconds
+	}
+	return &bucket{begin: int64(begin), end: int64(end), rps: math.NaN(), p95: math.NaN(),
+		pct5xx: math.NaN(), mcores: math.NaN(), throttle: math.NaN()}
+}
+
+// merge folds one facet row of the minute into the bucket.
+func (b *bucket) merge(row map[string]any) {
+	b.rps = addNaN(b.rps, row[fieldRPS])
+	b.mcores = addNaN(b.mcores, row["mcores"])
+	if v, ok := percentile(row, "95"); ok {
+		b.p95 = maxNaN(b.p95, v)
+	}
+	if v, ok := asNum(row["pct5xx"]); ok {
+		b.pct5xx = maxNaN(b.pct5xx, v)
+	}
+	if v, ok := asNum(row["throttle"]); ok {
+		b.throttle = maxNaN(b.throttle, v)
+	}
 }
 
 func addNaN(acc float64, v any) float64 {

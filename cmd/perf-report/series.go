@@ -51,6 +51,12 @@ const (
 	prefixNRRoute = "nr_"
 )
 
+// k6Duration is the k6 request-duration trend. quantiles are the percentiles
+// read from it, its submetrics and the NR latency rows.
+const k6Duration = "http_req_duration"
+
+var quantiles = []string{"50", "95", "99"}
+
 // Inputs the report reads per rep, named as in the notes it writes.
 const (
 	inK6  = "k6 summary"
@@ -182,31 +188,18 @@ func (s *series) loadLabel(label string) error {
 func (s *series) loadIdle(label string, rows []windowRow) (idleLevel, error) {
 	var mc, bps, ops []float64
 	for i := range rows {
-		row := &rows[i]
-		if !row.valid {
+		if !rows[i].valid {
 			continue
 		}
-		q7, err := s.nrRows(label, inQ7, row.runID)
+		smp, err := s.idleSample(label, &rows[i])
 		if err != nil {
 			return idleLevel{}, err
 		}
-		q9, err := s.nrRows(label, inQ9, row.runID)
-		if err != nil {
-			return idleLevel{}, err
-		}
-		cpuS, okCPU := sumField(q7, "cpu_s")
-		mcores, okM := sumField(q7, "mcores")
-		if !okM {
+		if math.IsNaN(smp.mcores) {
 			continue
 		}
-		mc = append(mc, mcores)
-		window := s.window(row, math.NaN(), math.NaN(), cpuS, okCPU, mcores)
-		if b, ok := sumField(q9, "bytes"); ok && window > 0 {
-			bps = append(bps, b/window)
-		}
-		if o, ok := sumField(q9, "objs"); ok && window > 0 {
-			ops = append(ops, o/window)
-		}
+		// The median drops a NaN rate just as it would an absent one.
+		mc, bps, ops = append(mc, smp.mcores), append(bps, smp.bytesPerS), append(ops, smp.objsPerS)
 	}
 	lvl := idleLevel{mcores: medianOrNaN(mc), bytesPerS: medianOrNaN(bps), objsPerS: medianOrNaN(ops)}
 	if math.IsNaN(lvl.mcores) {
@@ -214,6 +207,37 @@ func (s *series) loadIdle(label string, rows []windowRow) (idleLevel, error) {
 			"%s: no valid idle window with Q7 mcores, so its CPU and allocations per request are not idle-subtracted.", label))
 	}
 	return lvl, nil
+}
+
+// idleSample reads one idle window. A field the window lacks stays NaN, and
+// without Q7 mcores the allocation rates are not read either.
+func (s *series) idleSample(label string, row *windowRow) (idleLevel, error) {
+	smp := idleLevel{mcores: math.NaN(), bytesPerS: math.NaN(), objsPerS: math.NaN()}
+	q7, err := s.nrRows(label, inQ7, row.runID)
+	if err != nil {
+		return smp, err
+	}
+	q9, err := s.nrRows(label, inQ9, row.runID)
+	if err != nil {
+		return smp, err
+	}
+	cpuS, okCPU := sumField(q7, "cpu_s")
+	mcores, okM := sumField(q7, "mcores")
+	if !okM {
+		return smp, nil
+	}
+	smp.mcores = mcores
+	window := s.window(row, math.NaN(), math.NaN(), cpuS, okCPU, mcores)
+	if window <= 0 {
+		return smp, nil
+	}
+	if b, ok := sumField(q9, "bytes"); ok {
+		smp.bytesPerS = b / window
+	}
+	if o, ok := sumField(q9, "objs"); ok {
+		smp.objsPerS = o / window
+	}
+	return smp, nil
 }
 
 func medianOrNaN(values []float64) float64 {
@@ -267,14 +291,9 @@ func (s *series) loadRep(r *rep) error {
 
 // readK6 pulls the C2 summary fields. Each metric is optional.
 func readK6(r *rep, doc jsonDoc) {
-	dur := func(sub, stat string) (float64, bool) { return doc.num("metrics", sub, "values", stat) }
-	p50, ok := dur("http_req_duration", "p(50)")
-	if !ok {
-		p50, ok = dur("http_req_duration", "med")
-	}
-	r.set(mK6P50, p50, ok)
-	r.put(mK6P95)(dur("http_req_duration", "p(95)"))
-	r.put(mK6P99)(dur("http_req_duration", "p(99)"))
+	r.put(mK6P50)(k6Percentile(doc, k6Duration, "50"))
+	r.put(mK6P95)(k6Percentile(doc, k6Duration, "95"))
+	r.put(mK6P99)(k6Percentile(doc, k6Duration, "99"))
 	r.put(mK6Reqs)(doc.num("metrics", "http_reqs", "values", "count"))
 	r.put(mK6RPS)(doc.num("metrics", "http_reqs", "values", "rate"))
 	r.put(mDropped)(doc.num("metrics", "dropped_iterations", "values", "count"))
@@ -282,24 +301,37 @@ func readK6(r *rep, doc jsonDoc) {
 	if rate, ok := doc.num("metrics", "http_req_failed", "values", "rate"); ok {
 		r.set(mErrPct, rate*100, true)
 	}
-	if metrics, ok := doc.path("metrics").(map[string]any); ok {
-		for name := range metrics {
-			tags, isSub := strings.CutPrefix(name, "http_req_duration{")
-			if !isSub {
-				continue
-			}
-			tags = "{" + tags
-			for _, q := range []string{"50", "95", "99"} {
-				v, ok := dur(name, "p("+q+")")
-				if !ok && q == "50" {
-					v, ok = dur(name, "med")
-				}
-				r.set("k6_p"+q+"_ms"+tags, v, ok)
-			}
-		}
-	}
+	readK6Submetrics(r, doc)
 	r.meta = readPerfMeta(doc)
 	r.set(mOffered, r.meta.rate, true)
+}
+
+// k6Percentile reads percentile q of a k6 trend metric; the median falls back
+// to k6's own "med" stat when "p(50)" is not in the summary.
+func k6Percentile(doc jsonDoc, metric, q string) (float64, bool) {
+	v, ok := doc.num("metrics", metric, "values", "p("+q+")")
+	if !ok && q == "50" {
+		v, ok = doc.num("metrics", metric, "values", "med")
+	}
+	return v, ok
+}
+
+// readK6Submetrics stores p50, p95 and p99 of every tagged http_req_duration
+// submetric, keyed like "k6_p95_ms{endpoint:x}".
+func readK6Submetrics(r *rep, doc jsonDoc) {
+	metrics, ok := doc.path("metrics").(map[string]any)
+	if !ok {
+		return
+	}
+	for name := range metrics {
+		tags, isSub := strings.CutPrefix(name, k6Duration+"{")
+		if !isSub {
+			continue
+		}
+		for _, q := range quantiles {
+			r.put("k6_p" + q + "_ms{" + tags)(k6Percentile(doc, name, q))
+		}
+	}
 }
 
 func readPerfMeta(doc jsonDoc) perfMeta {
@@ -372,7 +404,7 @@ func readRoutes(r *rep, rows []map[string]any) {
 		if route == "" {
 			route = "all routes"
 		}
-		for _, q := range []string{"50", "95", "99"} {
+		for _, q := range quantiles {
 			r.put(prefixNRRoute + "p" + q + "_ms " + route)(percentile(row, q))
 		}
 	}
