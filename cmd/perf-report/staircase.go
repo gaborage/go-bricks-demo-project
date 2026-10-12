@@ -144,17 +144,35 @@ func newBucket(begin float64, row map[string]any) *bucket {
 }
 
 // merge folds one facet row of the minute into the bucket. TIMESERIES
-// zero-fills a minute that has no server data (n 0, rps 0, p95 0), so a row
-// with n = 0 leaves rps, p95 and 5xx unknown instead of reading as a real 0.
-// Container rows (Q18b) carry no n and always merge.
+// zero-fills a minute that has no data, so a zero count leaves that row's
+// values unknown instead of reading as a real 0: a server row (Q18a) with
+// n = 0 (rps 0, p95 0) leaves rps, p95 and 5xx unknown, and a container row
+// (Q18b) with pts = 0 (mcores 0, throttle null) leaves mcores and throttle
+// unknown. Each row carries only its own count; a row without one, such as a
+// Q18b row captured before pts existed, always merges.
 func (b *bucket) merge(row map[string]any) {
+	if !zeroCount(row, fieldPts) {
+		b.mergeContainer(row)
+	}
+	if !zeroCount(row, fieldN) {
+		b.mergeServer(row)
+	}
+}
+
+// zeroCount reports whether row carries the count field key and it is 0.
+func zeroCount(row map[string]any, key string) bool {
+	n, ok := asNum(row[key])
+	return ok && n == 0
+}
+
+func (b *bucket) mergeContainer(row map[string]any) {
 	b.mcores = addNaN(b.mcores, row["mcores"])
 	if v, ok := asNum(row["throttle"]); ok {
 		b.throttle = maxNaN(b.throttle, v)
 	}
-	if n, ok := asNum(row[fieldN]); ok && n == 0 {
-		return
-	}
+}
+
+func (b *bucket) mergeServer(row map[string]any) {
 	b.rps = addNaN(b.rps, row[fieldRPS])
 	if v, ok := percentile(row, "95"); ok {
 		b.p95 = maxNaN(b.p95, v)

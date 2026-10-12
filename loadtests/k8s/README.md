@@ -204,7 +204,7 @@ A failed request leaves `<id>-<run_id>.json.err` instead, and moves any earlier
 `.err`, so a result and an error never sit side by side.
 The queries of one `group:` go out as one request, each aliased by its id under
 `account`: `Q18-<run_id>.json` holds `Q18a` (per-minute `rps`, `n`, `p95`, `pct5xx`) and
-`Q18b` (per-minute `mcores`, `throttle`). Every row carries `beginTimeSeconds` and
+`Q18b` (per-minute `mcores`, `throttle`, `pts`). Every row carries `beginTimeSeconds` and
 `endTimeSeconds`. Downstream readers rely on these aliases: `Q2` `rps`/`n`, `Q3`
 `p50`/`p95`/`p99`, `Q7` `cpu_s`/`mcores`, `Q8` `throttle`/`ws_avg`/`ws_max`, `Q9`
 `bytes`/`objs`.

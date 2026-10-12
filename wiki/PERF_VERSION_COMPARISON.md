@@ -252,7 +252,8 @@ only, and the same files always produce the same bytes.
   only if NR saw at least 99% of its offered rate. `TIMESERIES` zero-fills a
   minute with no server data (`n` 0, `p95` 0); perf-report reads it as no
   data, not as a 0 ms minute, and a first step with no server p95 leaves the
-  knee `n/a`.
+  knee `n/a`. A container minute with no CPU point (Q18b `pts` 0, `mcores` 0)
+  is no data too, so a missed scrape does not lower the step's mean CPU.
 - **Not computed.** Stationarity, database capacity, neighbour and other-tenant
   flags need data perf-report does not read, and so does the Q17a
   dropped-data-point rule: mark such a rep void in `windows.tsv`. Leak slopes
@@ -317,7 +318,7 @@ The watchdog enforces these, and deleting the k6 Jobs is the kill switch.
 | Broker memory above its limit, or a queue the app consumes keeps growing | Kill and void the rep. |
 | k6 sees a 429, an error rate above 2% (1% in the staircase), or a staircase p95 above 1000 ms | k6 aborts by itself. Void the rep. In the staircase the abort marks the knee, and the run is still read. |
 | Dropped iterations above 0, or an achieved rate more than 1% off target | Void the rep. |
-| Q17a shows dropped data points (`dropped` above 0) on a metric the report reads: `http.server.request.duration`, `go.memory.allocated`, `go.memory.allocations`, `container_cpu_*` or `container_memory_working_set_bytes` | Void the rep: NR undercounted. Integration errors are account-wide, so a row that only reports modified data (`dropped` 0), or drops on other metrics, does not void it. |
+| Q17a shows a row with dropped data points (`dropped` above 0) that may hold a metric the report reads: `http.server.request.duration` (histogram), `go.memory.allocated` or `go.memory.allocations` (monotonic counters), `container_cpu_*` (counters) or `container_memory_working_set_bytes` (gauge) | Void the rep: NR undercounted. `metricName` lists at most three names per event, so it never clears a row alone. A DeltaConversion row names its one metric in the message: void only if that metric is one of these. A row for non-monotonic sums with delta temporality cannot hold any of them, by instrument type, so it does not void the rep; integration errors are account-wide, and another workload can emit that row throughout. Any other dropping row voids the rep. |
 | The collector's memory 50% above its baseline | Void the rep: NR may have undercounted. |
 | Wall clock past the planned session end | Stop. |
 | Fingerprint, service version or environment fingerprint mismatch | Do not start the session. |

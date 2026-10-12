@@ -59,7 +59,8 @@
 #
 # Result files read by name downstream: Q2 (rps, n), Q3 (p50, p95, p99 per
 # route and method), Q7 (cpu_s, mcores), Q8 (throttle, ws_avg, ws_max), Q9
-# (bytes, objs) and Q18 (per-minute rps, n, p95, pct5xx, mcores, throttle).
+# (bytes, objs) and Q18 (per-minute rps, n, p95, pct5xx, mcores, throttle,
+# pts).
 # Keep those ids and aliases stable. Q7 and Q9 are also captured for the idle
 # window, which idle subtraction needs.
 
@@ -150,9 +151,12 @@ queries:
       FROM Metric SELECT rate(count(http.server.request.duration),1 second) AS rps,
       count(http.server.request.duration) AS n,
       percentile(http.server.request.duration,95)*1000 AS p95
-      WHERE {S} AND {R} {W} TIMESERIES 1 minute
+      WHERE {S} AND {R} AND http.route NOT LIKE '%/__sim/%' {W} TIMESERIES 1 minute
     notes: >-
-      Per minute, rps in requests per second and p95 in ms, like Q18a. Every
+      Per minute, rps in requests per second and p95 in ms, like Q18a. The
+      /__sim/ routes are left out here only: a relay scenario records each k6
+      request twice, once on the relay route and once on its in-process peer
+      simulator, so with them the rate would read twice the offered rate. Every
       minute must have n above 0 and rps within 5% of the offered rate. A gap
       means a restart or a dropped cumulative point; void the rep.
 
@@ -178,7 +182,8 @@ queries:
       WHERE {CNS}='{NS}' AND {CCT}='{CONTAINER}' AND {CPOD}='{POD}' {W}
     notes: >-
       Version-independent: it comes from the collector, not the app. CPU-ms per
-      request = 1000 x (cpu_s - idle_cores x window_s) / Q2 n.
+      request = 1000 x (cpu_s - idle_cores x window_s) / Q2 n, with n summed
+      over the route facets k6 calls (/__sim/ rows excluded).
 
   - id: Q7b
     purpose: App CPU (fallback attribute set)
@@ -216,8 +221,8 @@ queries:
       FROM Metric SELECT sum(go.memory.allocated) AS bytes, sum(go.memory.allocations) AS objs
       WHERE {S} {W}
     notes: >-
-      Monotonic counters, valid under either temporality. Divide by Q2 n after
-      idle subtraction.
+      Monotonic counters, valid under either temporality. Divide by Q2 n
+      (route facets k6 calls; /__sim/ rows excluded) after idle subtraction.
 
   - id: Q10
     purpose: Runtime gauges
@@ -361,13 +366,23 @@ queries:
     scenarios: all
     nrql: >-
       FROM NrIntegrationError SELECT count(*) AS n, sum(droppedDataPointCount) AS dropped,
-      uniques(metricName, 20) AS metrics FACET newRelicFeature, category, message {W}
+      uniques(metricName, 20) AS metrics WHERE droppedDataPointCount > 0
+      FACET newRelicFeature, category, message {W} LIMIT MAX
     notes: >-
-      NrIntegrationError is account-wide and has no service attribute, so other
-      workloads add rows that only report modified data (dropped 0). Void the
-      rep only when a row has dropped above 0 on a metric the report reads:
-      http.server.request.duration, go.memory.allocated, go.memory.allocations,
-      container_cpu_* or container_memory_working_set_bytes.
+      Only rows that dropped data points; rows that only report modified data
+      carry no droppedDataPointCount and are left out. LIMIT MAX, because the
+      void rule needs every row and the dropping rows rank last by n.
+      NrIntegrationError is account-wide and has no service attribute, so a row
+      may come from another workload. The report reads
+      http.server.request.duration (histogram), go.memory.allocated and
+      go.memory.allocations (monotonic counters), container_cpu_* (counters)
+      and container_memory_working_set_bytes (gauge). metricName lists at most
+      three names per event, so it cannot clear a row on its own. A
+      DeltaConversion row names its one metric in the message: void the rep if
+      that metric is one the report reads. A row dropped because New Relic does
+      not support non-monotonic sums with delta temporality cannot hold any of
+      them, by instrument type: keep the rep. Any other row with dropped above
+      0 voids the rep.
 
   - id: Q17b
     purpose: Telemetry collector memory
@@ -396,8 +411,10 @@ queries:
       aliased by its id under account. Every row is one minute with
       beginTimeSeconds and endTimeSeconds; no FACET, so a minute is one row.
       TIMESERIES zero-fills a minute without data (n 0, rps 0, p95 0), and
-      perf-report reads a row with n 0 as no data. Per-minute server data is
-      primary for the staircase, because the k6 summary aggregates every step.
+      perf-report reads a row with n 0 as no data. Q18b's pts counts container
+      CPU points; a minute with pts 0 (mcores 0, throttle null) is no data too.
+      Per-minute server data is primary for the staircase, because the k6
+      summary aggregates every step.
 
   - id: Q18b
     purpose: Staircase per minute, app container
@@ -406,5 +423,6 @@ queries:
     group: Q18
     nrql: >-
       FROM Metric SELECT rate(sum(container_cpu_usage_seconds_total),1 second)*1000 AS mcores,
-      sum(container_cpu_cfs_throttled_periods_total)/sum(container_cpu_cfs_periods_total) AS throttle
+      sum(container_cpu_cfs_throttled_periods_total)/sum(container_cpu_cfs_periods_total) AS throttle,
+      count(container_cpu_usage_seconds_total) AS pts
       WHERE {CNS}='{NS}' AND {CCT}='{CONTAINER}' AND {CPOD}='{POD}' {W} TIMESERIES 1 minute

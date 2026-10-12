@@ -18,6 +18,7 @@ const (
 	fieldResults = "results"
 	fieldRPS     = "rps"
 	fieldN       = "n"
+	fieldPts     = "pts"
 	fieldBegin   = "beginTimeSeconds"
 	fieldEnd     = "endTimeSeconds"
 	fieldFacet   = "facet"

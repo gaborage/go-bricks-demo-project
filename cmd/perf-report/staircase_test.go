@@ -111,7 +111,8 @@ func TestStaircaseAnchorAndRampFromPerfMeta(t *testing.T) {
 
 // q18Minute is one Q18 minute as NerdGraph returns it: a server row (Q18a)
 // and a container row (Q18b) with the same beginTimeSeconds. n = 0 is the
-// zero-filled minute TIMESERIES emits when the server sent nothing.
+// zero-filled minute TIMESERIES emits when the server sent nothing; the
+// container row has one CPU point (pts 1).
 func q18Minute(begin int64, n, p95, mcores float64) []map[string]any {
 	server := map[string]any{fieldBegin: float64(begin), fieldEnd: float64(begin + minuteSeconds),
 		fieldN: n, fieldRPS: n / minuteSeconds, aliasP95: p95, "pct5xx": 0.0}
@@ -119,8 +120,36 @@ func q18Minute(begin int64, n, p95, mcores float64) []map[string]any {
 		server["pct5xx"] = nil
 	}
 	container := map[string]any{fieldBegin: float64(begin), fieldEnd: float64(begin + minuteSeconds),
-		aliasMcores: mcores, "throttle": 0.0}
+		aliasMcores: mcores, "throttle": 0.0, fieldPts: 1.0}
 	return []map[string]any{server, container}
+}
+
+// TestStaircaseContainerMinuteWithoutPoints: the container CPU counter is
+// scraped about once a minute, so a minute inside a step can hold no point.
+// TIMESERIES zero-fills it as mcores 0, throttle null, pts 0, which is no
+// data, not an idle minute: it must not lower the step's mean mcores. A Q18b
+// row without pts (captured before the alias existed) still merges.
+func TestStaircaseContainerMinuteWithoutPoints(t *testing.T) {
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	t0 := start.Unix()
+	rows := make([]map[string]any, 0, 6)
+	for i, mc := range []float64{100, 0, 140} {
+		rows = append(rows, q18Minute(t0+int64(i*minuteSeconds), 3000, 8, mc)...)
+	}
+	missed := rows[3] // minute 2's container row
+	missed[fieldPts], missed["throttle"] = 0.0, nil
+
+	got := stepStats([]step{{50, 3 * time.Minute}}, start, 0, readBuckets(rows))
+	if st := got[0]; st.buckets != 3 || !near(st.mcores, 120) || !near(st.throttle, 0) || !near(st.rps, 50) {
+		t.Errorf("step 1 = %+v; want mcores 120 and throttle 0 from the two scraped minutes, rps 50 from all three", st)
+	}
+
+	delete(missed, fieldPts)
+	missed["throttle"] = 0.0
+	got = stepStats([]step{{50, 3 * time.Minute}}, start, 0, readBuckets(rows))
+	if st := got[0]; !near(st.mcores, 80) {
+		t.Errorf("mcores = %v, want 80: a row without pts merges as before", st.mcores)
+	}
 }
 
 // TestStaircaseZeroFilledMinutes: a zero-filled minute (n 0, rps 0, p95 0) is
