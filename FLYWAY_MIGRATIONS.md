@@ -583,11 +583,12 @@ docker exec oracle-tenant3 healthcheck.sh
 chmod 644 migrations/*.sql             # flyway (main database)
 chmod 644 migrations-analytics/*.sql   # flyway-analytics
 
-# Re-run the migration that failed. The Flyway containers are one-shot
-# (`run --rm`), so each run mounts the files afresh and nothing needs
-# restarting. The compose file has no Oracle Flyway service.
-make migrate              # main database
-make migrate-analytics    # analytics database
+# Re-run only the target for the database that failed. The Flyway containers
+# are one-shot (`run --rm`), so each run mounts the files afresh and nothing
+# needs restarting. The compose file has no Oracle Flyway service.
+make migrate              # if the main database failed
+# or
+make migrate-analytics    # if the analytics database failed
 ```
 
 ### Issue 6: Validation Failed in Production
