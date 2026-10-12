@@ -24,7 +24,10 @@
 #                    container / pod / node, or k8s.namespace.name and friends).
 #                    Discover them with a keyset() query before the first session.
 #   {JOSE_METRIC}    optional: the JOSE duration metric name; a query with
-#                    `when: JOSE_METRIC` is skipped until it is known
+#                    `when: JOSE_METRIC` is skipped until it is known. For
+#                    go-bricks it is jose.operation.duration, in seconds. It
+#                    reaches New Relic only once the JOSE routes see traffic,
+#                    so set it rather than wait for Q1a to list it.
 # Derived, never set directly:
 #   {S}  the service filter below      {R}  the route filter below
 #   {W}  SINCE <ms> UNTIL <ms>: the rep window trimmed by --trim (default 1m) at
@@ -37,6 +40,15 @@
 #     upgrades rename or drop them. Q0 reads otel.library.* only to fingerprint.
 #   - http.server.request.duration is in seconds; multiply by 1000 for ms.
 #   - Status mix comes from status codes, never from span error flags.
+#   - A reserved word as one segment of a dotted metric name breaks the parse:
+#     NRQL reads the `limit` in go.processor.limit as the LIMIT keyword. Quote
+#     such a name in backticks: latest(`go.processor.limit`).
+#   - NRQL rejects arithmetic on a multi-value percentile:
+#     percentile(x,50,95,99)*1000 fails with "we don't support math on that".
+#     Write one aliased percentile per quantile instead:
+#     percentile(x,50)*1000 AS p50, percentile(x,95)*1000 AS p95, ...
+#   - A FACET returns 10 rows unless the query says otherwise. A query whose
+#     facet rows are summed downstream ends in LIMIT MAX.
 #
 # Format (perf-nrql.sh parses a strict subset of YAML): two-space indents, one
 # `- id:` per query, `nrql:` and `notes:` as folded `>-` blocks with no blank
@@ -45,10 +57,11 @@
 # Queries with the same `group` go out as one request, each aliased by its id
 # under account, saved as <group>-<run_id>.json (Q18).
 #
-# Result files read by name downstream: Q2 (rps, n), Q7 (cpu_s, mcores),
-# Q8 (throttle, ws_avg, ws_max), Q9 (bytes, objs) and Q18 (per-minute rps, n,
-# p95, pct5xx, mcores, throttle). Keep those ids and aliases stable. Q7 and Q9
-# are also captured for the idle window, which idle subtraction needs.
+# Result files read by name downstream: Q2 (rps, n), Q3 (p50, p95, p99 per
+# route and method), Q7 (cpu_s, mcores), Q8 (throttle, ws_avg, ws_max), Q9
+# (bytes, objs) and Q18 (per-minute rps, n, p95, pct5xx, mcores, throttle).
+# Keep those ids and aliases stable. Q7 and Q9 are also captured for the idle
+# window, which idle subtraction needs.
 
 version: 1
 
@@ -63,7 +76,7 @@ queries:
     scenarios: all
     nrql: >-
       FROM Metric SELECT uniques(service.version), uniques(otel.library.name),
-      uniques(otel.library.version), latest(go.processor.limit)
+      uniques(otel.library.version), latest(`go.processor.limit`)
       WHERE service.name = '{SERVICE}' {W}
     notes: >-
       More than one service.version voids the rep. The instrumentation scope
@@ -78,8 +91,8 @@ queries:
       FROM Metric SELECT uniques(metricName, 1000) WHERE {S} SINCE 1 day ago
     notes: >-
       Confirms that the runtime and pool gauges arrive under the cumulative
-      profile on every version, and gives the JOSE and httpclient metric names
-      that Q15 needs.
+      profile on every version. The JOSE and httpclient metrics that Q15 reads
+      appear only after S3 traffic, so an earlier session may not list them.
 
   - id: Q1b
     purpose: Discovery, integration errors
@@ -95,11 +108,13 @@ queries:
     nrql: >-
       FROM Metric SELECT rate(count(http.server.request.duration),1 second) AS rps,
       count(http.server.request.duration) AS n
-      WHERE {S} AND {R} FACET http.route, http.request.method {W}
+      WHERE {S} AND {R} FACET http.route, http.request.method {W} LIMIT MAX
     notes: >-
       {R} is mandatory because older versions record the probes and newer ones
       skip them. A relay scenario yields a relay row plus a simulator row per
-      k6 request. Gate: rps within 2% of the offered rate.
+      k6 request; perf-report leaves the /__sim/ rows out of the rate gap and
+      of the per-request divisor. LIMIT MAX, because perf-report sums every
+      facet row. Gate: rps within 2% of the offered rate.
 
   - id: Q3
     purpose: Server latency
@@ -107,11 +122,14 @@ queries:
     scenarios: all
     nrql: >-
       FROM Metric SELECT average(http.server.request.duration)*1000,
-      percentile(http.server.request.duration,50,95,99)*1000
-      WHERE {S} AND {R} FACET http.route {W}
+      percentile(http.server.request.duration,50)*1000 AS p50,
+      percentile(http.server.request.duration,95)*1000 AS p95,
+      percentile(http.server.request.duration,99)*1000 AS p99
+      WHERE {S} AND {R} FACET http.route, http.request.method {W} LIMIT MAX
     notes: >-
-      Exponential histograms on every version under the telemetry profile;
-      without it, explicit buckets are interpolated.
+      p50, p95 and p99 in ms, per route and method, so a GET and a PUT on one
+      route template stay apart. Exponential histograms on every version under
+      the telemetry profile; without it, explicit buckets are interpolated.
 
   - id: Q4
     purpose: Status mix
@@ -129,11 +147,13 @@ queries:
     scope: window
     scenarios: all
     nrql: >-
-      FROM Metric SELECT count(http.server.request.duration),
-      percentile(http.server.request.duration,95)
+      FROM Metric SELECT rate(count(http.server.request.duration),1 second) AS rps,
+      count(http.server.request.duration) AS n,
+      percentile(http.server.request.duration,95)*1000 AS p95
       WHERE {S} AND {R} {W} TIMESERIES 1 minute
     notes: >-
-      Every minute must be non-zero and within 5% of the offered rate. A gap
+      Per minute, rps in requests per second and p95 in ms, like Q18a. Every
+      minute must have n above 0 and rps within 5% of the offered rate. A gap
       means a restart or a dropped cumulative point; void the rep.
 
   - id: Q6
@@ -204,20 +224,27 @@ queries:
     scope: window
     scenarios: all
     nrql: >-
-      FROM Metric SELECT average(go.memory.used)/1e6, max(go.memory.used)/1e6,
-      average(go.memory.gc.goal)/1e6, average(go.goroutine.count), max(go.goroutine.count),
-      latest(go.processor.limit), latest(go.config.gogc)
+      FROM Metric SELECT filter(average(go.memory.used), WHERE go.memory.type = 'other')/1e6 AS mem_other_avg_mb,
+      filter(max(go.memory.used), WHERE go.memory.type = 'other')/1e6 AS mem_other_max_mb,
+      filter(average(go.memory.used), WHERE go.memory.type = 'stack')/1e6 AS mem_stack_avg_mb,
+      average(go.memory.gc.goal)/1e6 AS gc_goal_avg_mb,
+      average(go.goroutine.count) AS goroutines_avg, max(go.goroutine.count) AS goroutines_max,
+      latest(`go.processor.limit`) AS gomaxprocs, latest(go.config.gogc) AS gogc
       WHERE {S} {W}
     notes: >-
-      Present on every version under cumulative temporality. Under delta, a
-      version may not export them: report n/a, never 0.
+      go.memory.used is two series, go.memory.type other and stack; one
+      aggregate over both blends them, so each type is selected on its own.
+      Memory is in MB (1e6 bytes), where Q8 uses MiB. Present on every version
+      under cumulative temporality. Under delta, a version may not export
+      them: report n/a, never 0.
 
   - id: Q11
     purpose: Scheduler latency (stands in for GC)
     scope: window
     scenarios: all
     nrql: >-
-      FROM Metric SELECT percentile(go.schedule.duration,50,99)*1e6 AS us WHERE {S} {W}
+      FROM Metric SELECT percentile(go.schedule.duration,50)*1e6 AS p50_us,
+      percentile(go.schedule.duration,99)*1e6 AS p99_us WHERE {S} {W}
 
   - id: Q12a
     purpose: DB spans by operation
@@ -261,8 +288,10 @@ queries:
     scope: window
     scenarios: S2
     nrql: >-
-      FROM Metric SELECT percentile(messaging.client.operation.duration,50,95,99)*1000,
-      count(messaging.client.operation.duration)
+      FROM Metric SELECT percentile(messaging.client.operation.duration,50)*1000 AS p50,
+      percentile(messaging.client.operation.duration,95)*1000 AS p95,
+      percentile(messaging.client.operation.duration,99)*1000 AS p99,
+      count(messaging.client.operation.duration) AS n
       WHERE {S} AND messaging.operation.name='publish' FACET messaging.destination.name {W}
 
   - id: Q14b
@@ -287,16 +316,25 @@ queries:
     scenarios: S3
     when: JOSE_METRIC
     nrql: >-
-      FROM Metric SELECT percentile({JOSE_METRIC},50,95,99) WHERE {S} {W}
+      FROM Metric SELECT percentile({JOSE_METRIC},50)*1000 AS p50,
+      percentile({JOSE_METRIC},95)*1000 AS p95,
+      percentile({JOSE_METRIC},99)*1000 AS p99,
+      count({JOSE_METRIC}) AS n
+      WHERE {S} FACET operation {W}
     notes: >-
-      Take the metric name from Q1a; skipped until JOSE_METRIC is set.
+      For go-bricks the metric is jose.operation.duration, in seconds, so the
+      percentiles are multiplied to ms. Its operation attribute splits
+      decode_request (inbound decrypt and verify) from encode_response
+      (outbound sign and encrypt). Skipped until JOSE_METRIC is set.
 
   - id: Q15b
     purpose: Outbound HTTP latency
     scope: window
     scenarios: S3
     nrql: >-
-      FROM Metric SELECT percentile(http.client.request.duration,50,95,99)*1000 WHERE {S} {W}
+      FROM Metric SELECT percentile(http.client.request.duration,50)*1000 AS p50,
+      percentile(http.client.request.duration,95)*1000 AS p95,
+      percentile(http.client.request.duration,99)*1000 AS p99 WHERE {S} {W}
 
   - id: Q16a
     purpose: Neighbours on the app node
@@ -304,8 +342,9 @@ queries:
     scenarios: all
     nrql: >-
       FROM Metric SELECT rate(sum(container_cpu_usage_seconds_total),1 second)*1000
-      WHERE {CNODE}='{NODE}' FACET {CNS}, {CPOD} {W} LIMIT 20
+      WHERE {CNODE}='{NODE}' AND {CPOD} != '{POD}' FACET {CNS}, {CPOD} {W} LIMIT 20
     notes: >-
+      The app pod is left out: under load it alone would cross the limit.
       Neighbours above 100m in total flag the rep as contended.
 
   - id: Q16b
@@ -321,9 +360,14 @@ queries:
     scope: window
     scenarios: all
     nrql: >-
-      FROM NrIntegrationError SELECT count(*) FACET category, message {W}
+      FROM NrIntegrationError SELECT count(*) AS n, sum(droppedDataPointCount) AS dropped,
+      uniques(metricName, 20) AS metrics FACET newRelicFeature, category, message {W}
     notes: >-
-      Any error in the window voids the rep: the backend may have undercounted.
+      NrIntegrationError is account-wide and has no service attribute, so other
+      workloads add rows that only report modified data (dropped 0). Void the
+      rep only when a row has dropped above 0 on a metric the report reads:
+      http.server.request.duration, go.memory.allocated, go.memory.allocations,
+      container_cpu_* or container_memory_working_set_bytes.
 
   - id: Q17b
     purpose: Telemetry collector memory
@@ -351,8 +395,9 @@ queries:
       Q18a and Q18b go out as one request saved as Q18-<run_id>.json, each
       aliased by its id under account. Every row is one minute with
       beginTimeSeconds and endTimeSeconds; no FACET, so a minute is one row.
-      Per-minute server data is primary for the staircase, because the k6
-      summary aggregates every step.
+      TIMESERIES zero-fills a minute without data (n 0, rps 0, p95 0), and
+      perf-report reads a row with n 0 as no data. Per-minute server data is
+      primary for the staircase, because the k6 summary aggregates every step.
 
   - id: Q18b
     purpose: Staircase per minute, app container

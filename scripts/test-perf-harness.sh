@@ -583,6 +583,16 @@ else
     bad "nrql golden (exit $RC)"; show "$dir/diff"; show "$dir/stderr"
 fi
 
+dir="$WORK/nrql-when"
+mkdir -p "$dir"
+nrql "$dir" --queries "$Q" --windows "$TD/nrql/windows-labela.tsv" --vars "${VARS_A/,JOSE_METRIC=jose.operation.duration/}" --print
+if [[ $RC -eq 0 ]] && grep -q 'skipping Q15a: JOSE_METRIC is not set' "$dir/stderr" \
+    && grep -v $'^Q15a\t' "$TD/nrql/golden-labela.tsv" | diff -q - "$dir/stdout" >/dev/null; then
+    ok "nrql skips a when: query until its placeholder is set, and renders the rest unchanged"
+else
+    bad "nrql when: skip (exit $RC)"; show "$dir/stderr"
+fi
+
 dir="$WORK/nrql-edge"
 mkdir -p "$dir"
 nrql "$dir" --queries "$Q" --windows "$TD/nrql/windows-edge.tsv" --vars "$VARS_A" --print

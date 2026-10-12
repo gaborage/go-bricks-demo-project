@@ -143,18 +143,24 @@ func newBucket(begin float64, row map[string]any) *bucket {
 		pct5xx: math.NaN(), mcores: math.NaN(), throttle: math.NaN()}
 }
 
-// merge folds one facet row of the minute into the bucket.
+// merge folds one facet row of the minute into the bucket. TIMESERIES
+// zero-fills a minute that has no server data (n 0, rps 0, p95 0), so a row
+// with n = 0 leaves rps, p95 and 5xx unknown instead of reading as a real 0.
+// Container rows (Q18b) carry no n and always merge.
 func (b *bucket) merge(row map[string]any) {
-	b.rps = addNaN(b.rps, row[fieldRPS])
 	b.mcores = addNaN(b.mcores, row["mcores"])
+	if v, ok := asNum(row["throttle"]); ok {
+		b.throttle = maxNaN(b.throttle, v)
+	}
+	if n, ok := asNum(row[fieldN]); ok && n == 0 {
+		return
+	}
+	b.rps = addNaN(b.rps, row[fieldRPS])
 	if v, ok := percentile(row, "95"); ok {
 		b.p95 = maxNaN(b.p95, v)
 	}
 	if v, ok := asNum(row["pct5xx"]); ok {
 		b.pct5xx = maxNaN(b.pct5xx, v)
-	}
-	if v, ok := asNum(row["throttle"]); ok {
-		b.throttle = maxNaN(b.throttle, v)
 	}
 }
 
@@ -227,10 +233,11 @@ func meanNaN(values []float64) float64 {
 }
 
 // findKnee returns the index of the knee step, or -1 when even the first step
-// fails. A step with no p95 fails; a missing 5xx or throttle value is not
-// checked. totalDropped is the run's k6 dropped_iterations (NaN if unknown).
+// fails or has no usable p95 to scale from (NaN, or 0 from minutes without
+// server data). A step with no p95 fails; a missing 5xx or throttle value is
+// not checked. totalDropped is the run's k6 dropped_iterations (NaN if unknown).
 func findKnee(steps []stepStat, totalDropped float64) int {
-	if len(steps) == 0 || math.IsNaN(steps[0].p95) {
+	if len(steps) == 0 || !hasBaseP95(&steps[0]) {
 		return -1
 	}
 	limit := kneeP95Factor * steps[0].p95
@@ -246,6 +253,12 @@ func findKnee(steps []stepStat, totalDropped float64) int {
 		knee = i
 	}
 	return knee
+}
+
+// hasBaseP95 reports whether the first step's p95 can anchor the knee limit:
+// a limit of twice 0, or of twice NaN, would place the knee anywhere.
+func hasBaseP95(first *stepStat) bool {
+	return !math.IsNaN(first.p95) && first.p95 > 0
 }
 
 // belowOrUnknown passes a value under the limit, and a value the series lacks.
