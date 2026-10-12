@@ -36,8 +36,9 @@
 # apply to it.
 #
 # Exit code: 0 = pass (warnings are reported, not fatal), 1 = required-check FAIL
-# count reached pass_fail.max_critical_issues, 2 = usage, unreadable input, or no required
-# check had any samples to judge (an advisory peak alone never makes a verdict).
+# count reached pass_fail.max_critical_issues, 2 = usage, unreadable input, a
+# pass_fail limit that is not a whole number (or a max_critical_issues of 0), or no
+# required check had any samples to judge (an advisory peak alone never makes a verdict).
 
 set -euo pipefail
 
@@ -108,6 +109,17 @@ REC_M="$(yaml_get leak_detection.spike_recovery.memory.max_final_percent_of_base
 REC_C="$(yaml_get leak_detection.spike_recovery.connections.max_final_percent_of_baseline)"
 MAX_CRITICAL="$(yaml_get pass_fail.max_critical_issues)"
 MAX_WARNINGS="$(yaml_get pass_fail.max_warnings)"
+# Both feed bash integer comparisons in the verdict. A decimal there is an
+# arithmetic error that falls through to PASS, and 0 critical issues would fail
+# every run, so refuse them up front.
+[[ "$MAX_CRITICAL" =~ ^[1-9][0-9]*$ ]] || {
+    echo "❌ $THRESHOLDS: pass_fail.max_critical_issues must be a whole number >= 1 (got '$MAX_CRITICAL')" >&2
+    exit 2
+}
+[[ "$MAX_WARNINGS" =~ ^[0-9]+$ ]] || {
+    echo "❌ $THRESHOLDS: pass_fail.max_warnings must be a whole number >= 0 (got '$MAX_WARNINGS')" >&2
+    exit 2
+}
 
 # stat <column> <max|mean|count> [phases] [from] [to]
 # Non-empty values of <column> on rows whose phase is in the comma-separated
