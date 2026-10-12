@@ -313,6 +313,7 @@ P99 Response Time:       ${p99Duration.toFixed(2)}ms
 
   return summaryOutputs(data, summary, {
     script: 'products-read-only.ts',
+    perfKnobs: true,
     scenario: readScenario,
     readMix,
     seedRows,

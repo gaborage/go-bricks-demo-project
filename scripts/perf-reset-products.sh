@@ -16,7 +16,8 @@
 #   1. Refuses to run when the watermark would delete rows it must keep (see
 #      "Guards" below).
 #   2. Deletes every product whose created_date is later than the watermark:
-#      everything a load test created after the seed.
+#      everything a load test created after the seed. Also deletes seed rows
+#      with g > N, left by an earlier reset with more rows.
 #   3. Inserts the seed rows g = 1..N that are missing, ON CONFLICT DO NOTHING:
 #        id           = md5('perf-seed-' || g)::uuid
 #        name         = 'Seed Product ' || g
@@ -24,7 +25,8 @@
 #      and a description, price and image URL that also depend only on g.
 #      loadtests/config.ts (seedProductID) derives the same ids, so a k6 run
 #      with PERF_SEED_ROWS=N reads only rows that exist.
-#      With --drop-seed it deletes the seed rows g = 1..N instead.
+#      With --drop-seed it deletes the seed rows g = 1..N instead, so no seed
+#      row is left.
 #   4. With --clear-outbox, deletes the outbox rows already published. Pending
 #      and failed rows stay: they are still owed to the broker.
 # Then, outside the transaction, a best-effort ANALYZE products (a role that
@@ -47,6 +49,8 @@
 #     fixed date chosen before the database was migrated) would delete them and
 #     the count gate could never pass again. Take the watermark after the
 #     migrations and after the first seed.
+#   - The gobricks_outbox table must exist (migration V3), so the count line
+#     cannot fail after the reset has committed.
 #
 # Why load tests cannot break the count: loadtests/products-crud.ts deletes
 # only rows its own VU created, updates fall back to the six V1 rows (their
@@ -165,6 +169,9 @@ DECLARE
     last_seed timestamptz := timestamptz '2025-01-01 00:00:00+00'
                              + current_setting('perf_reset.rows')::bigint * interval '1 minute';
 BEGIN
+    IF to_regclass('gobricks_outbox') IS NULL THEN
+        RAISE EXCEPTION 'table gobricks_outbox is missing: run the migrations first';
+    END IF;
 SQL
 
     if [[ $drop_seed -eq 0 ]]; then
@@ -191,6 +198,12 @@ $guard$;
 
 -- Everything a load test created after the seed.
 DELETE FROM products WHERE created_date > :'watermark'::timestamptz;
+
+-- Seed rows beyond 1..N, left by an earlier reset with more rows. A name that
+-- is not 'Seed Product <g>' yields NULL here, and NULL deletes nothing.
+DELETE FROM products
+WHERE substring(name FROM '^Seed Product ([0-9]{1,18})$')::bigint > :rows
+  AND id = md5('perf-seed-' || substring(name FROM '^Seed Product ([0-9]{1,18})$'))::uuid;
 SQL
 
     if [[ $drop_seed -eq 1 ]]; then

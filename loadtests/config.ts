@@ -236,6 +236,10 @@ export function perfSteps(): PerfStep[] | null {
   });
 }
 
+// The PERF_STEPS value behind each staircase scenario, so perfMeta reports
+// steps only for a run that really executes one.
+const staircaseSteps = new WeakMap<object, string>();
+
 /** The PERF_STEPS staircase as one ramping-arrival-rate scenario. */
 function staircaseScenario(steps: PerfStep[]): Scenario {
   const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 300);
@@ -244,7 +248,7 @@ function staircaseScenario(steps: PerfStep[]): Scenario {
     if (i > 0) stages.push({ target: step.rate, duration: PERF_STEP_RAMP });
     stages.push({ target: step.rate, duration: step.duration });
   });
-  return {
+  const scenario = {
     executor: 'ramping-arrival-rate',
     startRate: steps[0].rate,
     timeUnit: '1s',
@@ -253,6 +257,8 @@ function staircaseScenario(steps: PerfStep[]): Scenario {
     stages,
     gracefulStop: '5s',
   } as Scenario;
+  staircaseSteps.set(scenario, steps.map((step) => `${step.rate}:${step.duration}`).join(','));
+  return scenario;
 }
 
 /**
@@ -429,6 +435,16 @@ export function resolveReadMix(): ReadMix | null {
   throw new Error(`PERF_READ_MIX must be get, list or mixed, got "${raw}"`);
 }
 
+/** PERF_ABORT_ERROR_RATE, or null when unset. */
+function perfAbortErrorRate(): number | null {
+  return perfNumber('PERF_ABORT_ERROR_RATE', (n) => n > 0 && n <= 1, 'a fraction in (0, 1]');
+}
+
+/** PERF_ABORT_P95_MS, or null when unset. */
+function perfAbortP95Ms(): number | null {
+  return perfNumber('PERF_ABORT_P95_MS', (n) => n > 0, 'a positive number of milliseconds');
+}
+
 /** Abort guard: fail fast, but only judge after the first minute. */
 function abortThreshold(expression: string): Threshold {
   return { threshold: expression, abortOnFail: true, delayAbortEval: '60s' };
@@ -446,11 +462,11 @@ function perfThresholds(): Record<string, Threshold[]> {
   } else if (controlled) {
     extra['http_reqs{status:429}'] = ['count<1'];
   }
-  const errorRate = perfNumber('PERF_ABORT_ERROR_RATE', (n) => n > 0 && n <= 1, 'a fraction in (0, 1]');
+  const errorRate = perfAbortErrorRate();
   if (errorRate !== null) {
     extra['http_req_failed'] = [abortThreshold(`rate<${errorRate}`)];
   }
-  const p95Ms = perfNumber('PERF_ABORT_P95_MS', (n) => n > 0, 'a positive number of milliseconds');
+  const p95Ms = perfAbortP95Ms();
   if (p95Ms !== null) {
     extra['http_req_duration'] = [abortThreshold(`p(95)<${p95Ms}`)];
   }
@@ -495,7 +511,12 @@ export function perfSetupData(): PerfSetupData {
 export interface PerfSummaryContext {
   /** The script's file name, e.g. 'products-read-only.ts'. */
   script: string;
-  /** The controlled scenario the script runs, or null in native VU mode. */
+  /** True when the script's options went through withPerfKnobs, so its abort guards apply. */
+  perfKnobs?: boolean;
+  /**
+   * The scenario a perf knob selected (PERF_RATE, PERF_STEPS, the controlled
+   * spike), or null when the run uses the script's own load shape.
+   */
   scenario?: Scenario | null;
   /** The script's PERF_READ_MIX, when it reads one. */
   readMix?: ReadMix | null;
@@ -503,19 +524,33 @@ export interface PerfSummaryContext {
   seedRows?: number | null;
 }
 
-/** Run identity and knob values, added to the summary JSON as `perfMeta`. */
+/**
+ * Run identity and the load the run actually executed, added to the summary
+ * JSON as `perfMeta`. Load-shape fields come from the selected scenario and
+ * abort fields from the guards the script applied, not from the environment
+ * alone, so a knob the script ignores reads as null (or false).
+ */
 export interface PerfMeta {
   runId: string | null;
   script: string | null;
+  /**
+   * The selected scenario's executor: constant-arrival-rate (PERF_RATE),
+   * ramping-arrival-rate (PERF_STEPS, or the controlled spike), or null for the
+   * script's own load shape.
+   */
+  executor: string | null;
   readMix: ReadMix | null;
+  /** The constant arrival rate, or null for any other load shape. */
   rate: number | null;
+  /** The staircase as rate:duration steps, or null when none runs. */
   steps: string | null;
   seedRows: number | null;
-  /** null in native VU mode, which has no arrival-rate VU pool. */
+  /** null without a selected scenario: native VU mode has no arrival-rate VU pool. */
   preAllocatedVUs: number | null;
   maxVUs: number | null;
   baseUrl: string;
   apiPrefix: string;
+  /** The abort guards the script applied (false/null for a script without withPerfKnobs). */
   abortOn429: boolean;
   abortErrorRate: number | null;
   abortP95Ms: number | null;
@@ -527,21 +562,24 @@ export interface PerfMeta {
 
 function perfMeta(data: unknown, ctx: PerfSummaryContext | undefined): PerfMeta {
   const setupData = (data as { setup_data?: { perfStartedAt?: unknown } } | null)?.setup_data;
-  const pool = (ctx?.scenario || {}) as { preAllocatedVUs?: number; maxVUs?: number };
+  const scenario = ctx?.scenario || null;
+  const shape = (scenario || {}) as { executor?: string; rate?: number; preAllocatedVUs?: number; maxVUs?: number };
+  const knobs = ctx?.perfKnobs === true;
   return {
     runId: (__ENV.PERF_RUN_ID || '').trim() || null,
     script: ctx?.script ?? null,
+    executor: shape.executor ?? null,
     readMix: ctx?.readMix ?? null,
-    rate: positiveIntOr(__ENV.PERF_RATE, 0) || null,
-    steps: (__ENV.PERF_STEPS || '').trim() || null,
+    rate: shape.executor === 'constant-arrival-rate' ? shape.rate ?? null : null,
+    steps: scenario ? staircaseSteps.get(scenario) ?? null : null,
     seedRows: ctx?.seedRows ?? null,
-    preAllocatedVUs: pool.preAllocatedVUs ?? null,
-    maxVUs: pool.maxVUs ?? null,
+    preAllocatedVUs: shape.preAllocatedVUs ?? null,
+    maxVUs: shape.maxVUs ?? null,
     baseUrl: config.baseURL,
     apiPrefix: config.apiPrefix,
-    abortOn429: perfFlag('PERF_ABORT_ON_429'),
-    abortErrorRate: perfNumber('PERF_ABORT_ERROR_RATE', (n) => n > 0 && n <= 1, 'a fraction in (0, 1]'),
-    abortP95Ms: perfNumber('PERF_ABORT_P95_MS', (n) => n > 0, 'a positive number of milliseconds'),
+    abortOn429: knobs && perfFlag('PERF_ABORT_ON_429'),
+    abortErrorRate: knobs ? perfAbortErrorRate() : null,
+    abortP95Ms: knobs ? perfAbortP95Ms() : null,
     harnessTag: (__ENV.PERF_HARNESS_TAG || '').trim() || null,
     startedAt: typeof setupData?.perfStartedAt === 'string' ? setupData.perfStartedAt : null,
     endedAt: new Date().toISOString(),

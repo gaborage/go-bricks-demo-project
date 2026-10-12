@@ -141,6 +141,18 @@ function listProducts(): void {
   listProductsDuration.add(response.timings.duration);
 }
 
+/** A get response body that carries a product with an id, a name and a price. */
+function hasValidProduct(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as ProductResponse;
+    // go-bricks wraps response in data object
+    const product = parsed.data || parsed;
+    return !!(product.id && product.name && product.price !== undefined);
+  } catch (e) {
+    return false;
+  }
+}
+
 function getProduct(): void {
   // Try to get a product we created, otherwise use a random ID
   let productID: string;
@@ -164,20 +176,17 @@ function getProduct(): void {
     tags: { endpoint: 'get_product' },
   });
 
-  const success = check(response, {
-    'get: status is 200 or 404': (r) => r.status === 200 || r.status === 404,
-    'get: has valid response': (r) => {
-      if (r.status === 404) return true;
-      try {
-        const body = JSON.parse(r.body as string) as ProductResponse;
-        // go-bricks wraps response in data object
-        const product = body.data || body;
-        return !!(product.id && product.name && product.price !== undefined);
-      } catch (e) {
-        return false;
-      }
-    },
-  });
+  // A 404 is accepted for the default ids, but never for a seed id: the reset
+  // inserts every seed row this run can pick, so a missing one is a failure.
+  const success = seedRows === null
+    ? check(response, {
+      'get: status is 200 or 404': (r) => r.status === 200 || r.status === 404,
+      'get: has valid response': (r) => r.status === 404 || hasValidProduct(r.body as string),
+    })
+    : check(response, {
+      'get: status is 200': (r) => r.status === 200,
+      'get: has valid response': (r) => hasValidProduct(r.body as string),
+    });
 
   getProductRate.add(success ? 1 : 0);
   getProductDuration.add(response.timings.duration);
@@ -395,6 +404,7 @@ Success Rate by Operation:
 
   return summaryOutputs(data, summary, {
     script: 'products-crud.ts',
+    perfKnobs: true,
     scenario: crudScenario,
     seedRows,
   });

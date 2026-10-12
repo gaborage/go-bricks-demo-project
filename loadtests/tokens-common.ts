@@ -212,7 +212,7 @@ P95 Response Time:       ${(httpDuration['p(95)'] || 0).toFixed(2)}ms
 P99 Response Time:       ${(httpDuration['p(99)'] || 0).toFixed(2)}ms
 ═══════════════════════════════════════════════════════════
 `;
-    return summaryOutputs(data, summary, { script: spec.script, scenario: steady });
+    return summaryOutputs(data, summary, { script: spec.script, perfKnobs: true, scenario: steady });
   }
 
   return { options, run, setup, handleSummary };
