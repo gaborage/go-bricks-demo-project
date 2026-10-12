@@ -215,8 +215,12 @@ export interface PerfStep {
   duration: string;
 }
 
-/** Linear ramp between two PERF_STEPS steps; part of the staircase's length. */
-export const PERF_STEP_RAMP = '15s';
+/**
+ * Linear ramp between two PERF_STEPS steps; part of the staircase's length.
+ * Reported as perfMeta.stepRampSeconds, so a reader can time the steps.
+ */
+export const PERF_STEP_RAMP_SECONDS = 15;
+const PERF_STEP_RAMP = `${PERF_STEP_RAMP_SECONDS}s`;
 
 /** A k6 duration such as "30s", "3m" or "1m30s", and not all zeros. */
 function isK6Duration(value: string): boolean {
@@ -609,6 +613,8 @@ export interface PerfMeta {
   rate: number | null;
   /** The staircase as rate:duration steps, or null when none runs. */
   steps: string | null;
+  /** The linear ramp between two staircase steps, in seconds, or null when no staircase runs. */
+  stepRampSeconds: number | null;
   seedRows: number | null;
   /** null without a selected scenario: native VU mode has no arrival-rate VU pool. */
   preAllocatedVUs: number | null;
@@ -630,13 +636,15 @@ function perfMeta(data: unknown, ctx: PerfSummaryContext | undefined): PerfMeta 
   const scenario = ctx?.scenario || null;
   const shape = (scenario || {}) as { executor?: string; rate?: number; preAllocatedVUs?: number; maxVUs?: number };
   const knobs = ctx?.perfKnobs === true;
+  const steps = scenario ? staircaseSteps.get(scenario) ?? null : null;
   return {
     runId: (__ENV.PERF_RUN_ID || '').trim() || null,
     script: ctx?.script ?? null,
     executor: shape.executor ?? null,
     readMix: ctx?.readMix ?? null,
     rate: shape.executor === 'constant-arrival-rate' ? shape.rate ?? null : null,
-    steps: scenario ? staircaseSteps.get(scenario) ?? null : null,
+    steps,
+    stepRampSeconds: steps !== null ? PERF_STEP_RAMP_SECONDS : null,
     seedRows: ctx?.seedRows ?? null,
     preAllocatedVUs: shape.preAllocatedVUs ?? null,
     maxVUs: shape.maxVUs ?? null,
