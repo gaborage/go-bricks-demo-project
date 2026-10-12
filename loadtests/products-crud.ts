@@ -297,7 +297,7 @@ export function setup(): void {
   console.log('');
 
   // Verify the API is accessible
-  const healthURL = `${config.baseURL}${config.apiPrefix}/health`;
+  const healthURL = getURL('/health');
   const response = http.get(healthURL);
 
   if (response.status !== 200) {
@@ -314,7 +314,7 @@ export function setup(): void {
   // so the run records just the status. A 503 is reported, not fatal — this
   // test measures CRUD, not the probe — and expectedStatuses keeps it out of
   // http_req_failed.
-  const readyURL = `${config.baseURL}${config.apiPrefix}/ready`;
+  const readyURL = getURL('/ready');
   const ready = http.get(readyURL, {
     tags: { endpoint: 'ready' },
     responseCallback: http.expectedStatuses(200, 503),

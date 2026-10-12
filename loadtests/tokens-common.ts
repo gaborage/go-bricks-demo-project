@@ -168,7 +168,7 @@ export function relayScenario(spec: RelaySpec): RelayScenario {
     console.log(`📊 Target: ${config.baseURL}${config.apiPrefix}${spec.path}`);
     spec.banner.forEach((line) => console.log(`🔐 ${line}`));
 
-    const health = http.get(`${config.baseURL}${config.apiPrefix}/health`);
+    const health = http.get(getURL('/health'));
     if (health.status !== 200) {
       throw new Error(`API health check failed (status ${health.status})`);
     }

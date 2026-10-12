@@ -9,6 +9,14 @@ directly (k6 v1.3.0+ transpiles them; `npm run type-check` is the optional
 K6_BASE_URL=http://localhost:8080 make loadtest-smoke
 ```
 
+Every API URL is the base URL plus `K6_API_PREFIX` (default `/api/v1`), so a
+deploy whose `server.path.base` differs sets it too: leading slash, no trailing
+slash, and an explicitly empty value means the API sits at the URL root.
+
+```bash
+K6_BASE_URL=https://staging.example.com K6_API_PREFIX=/my-service make loadtest-smoke
+```
+
 The `make loadtest-*` targets are listed by `make help`. This page covers the
 scenarios whose results need more than their script's header to read, one
 section each. The products scenarios behind `loadtest-smoke`, `loadtest-crud`,

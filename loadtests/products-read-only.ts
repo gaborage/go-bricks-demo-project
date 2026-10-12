@@ -185,7 +185,7 @@ export function setup(): void {
   console.log('');
 
   // Health check
-  const healthURL = `${config.baseURL}${config.apiPrefix}/health`;
+  const healthURL = getURL('/health');
   const response = http.get(healthURL);
 
   if (response.status !== 200) {

@@ -9,8 +9,11 @@ export const config: TestConfig = {
   // Base URL for API - override with K6_BASE_URL environment variable
   baseURL: __ENV.K6_BASE_URL || 'http://localhost:8080',
 
-  // API path prefix
-  apiPrefix: '/api/v1',
+  // API path prefix, the app's server.path.base - override with K6_API_PREFIX
+  // (leading slash, no trailing slash). `??`, not `||`: an explicitly empty
+  // K6_API_PREFIX= means the API is served at the URL root, with no prefix.
+  // Every API URL is built from it, through getURL() below.
+  apiPrefix: __ENV.K6_API_PREFIX ?? '/api/v1',
 
   // Performance thresholds - these define what "passing" means
   // Adjust these based on your SLAs and performance requirements

@@ -81,10 +81,11 @@
 //   RABBIT_MGMT=http://localhost:15673 k6 run loadtests/topology-repair.ts
 //   TOPO_PAYMENT_RATE=20 TOPO_DURATION=3m TOPO_DELETE_AT=90s k6 run loadtests/topology-repair.ts
 //
-// Knobs (env): K6_BASE_URL, RABBIT_MGMT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST,
-//   TOPO_PRODUCT_RATE (5/s), TOPO_PAYMENT_RATE (5/s), TOPO_DURATION (120s),
-//   TOPO_DELETE_AT (60s), TOPO_DISRUPTION (15s), TOPO_REPAIR_TIMEOUT (30s),
-//   TOPO_DRAIN_TAIL (20s), PERF_SUMMARY_FILE (full summary JSON, see config.ts)
+// Knobs (env): K6_BASE_URL, K6_API_PREFIX, RABBIT_MGMT, RABBIT_USER, RABBIT_PASS,
+//   RABBIT_VHOST, TOPO_PRODUCT_RATE (5/s), TOPO_PAYMENT_RATE (5/s),
+//   TOPO_DURATION (120s), TOPO_DELETE_AT (60s), TOPO_DISRUPTION (15s),
+//   TOPO_REPAIR_TIMEOUT (30s), TOPO_DRAIN_TAIL (20s), PERF_SUMMARY_FILE (full
+//   summary JSON, see config.ts)
 
 import http from 'k6/http';
 import type { RefinedResponse } from 'k6/http';
