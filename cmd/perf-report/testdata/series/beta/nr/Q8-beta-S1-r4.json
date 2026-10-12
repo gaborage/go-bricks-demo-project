@@ -1,0 +1,17 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "throttle": 0.015,
+       "ws_avg": 60.5,
+       "ws_max": 64.0
+      }
+     ]
+    }
+   }
+  }
+ }
+}

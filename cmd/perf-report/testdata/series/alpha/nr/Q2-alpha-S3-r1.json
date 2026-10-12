@@ -1,0 +1,24 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "facet": "/api/v1/tokens/relay",
+       "http.route": "/api/v1/tokens/relay",
+       "n": 9648.0,
+       "rps": 20.1
+      },
+      {
+       "facet": "/api/v1/__sim/peer/tokens",
+       "http.route": "/api/v1/__sim/peer/tokens",
+       "n": 9648.0,
+       "rps": 20.1
+      }
+     ]
+    }
+   }
+  }
+ }
+}

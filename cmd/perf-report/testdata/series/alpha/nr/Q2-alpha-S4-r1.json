@@ -1,0 +1,21 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "facet": [
+        "/api/v1/products/:id",
+        "GET"
+       ],
+       "http.route": "/api/v1/products/:id",
+       "n": 72192.0,
+       "rps": 150.4
+      }
+     ]
+    }
+   }
+  }
+ }
+}

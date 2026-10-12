@@ -14,6 +14,9 @@
 !go.sum
 !go.mod
 
+# perf-report fixture series and golden outputs (.json, .tsv, .csv, .md)
+!cmd/perf-report/testdata/**
+
 !README.md
 !LICENSE
 !TESTING.md

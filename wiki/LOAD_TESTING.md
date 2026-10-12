@@ -25,6 +25,10 @@ described in the header comment of their script under `loadtests/`, and the
 knobs that tune them (database pool size, rate limit, slow-query threshold) are
 listed under "Performance tuning" in CLAUDE.md's Load Testing section.
 
+To compare framework versions with each other (controls, run order,
+statistics and abort criteria, plus the `cmd/perf-report` generator), see
+[PERF_VERSION_COMPARISON.md](PERF_VERSION_COMPARISON.md).
+
 ## Monitored runs (resource leaks and recovery)
 
 k6 reports what the client saw. Three targets watch the server side of the

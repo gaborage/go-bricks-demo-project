@@ -1,0 +1,35 @@
+{
+ "aa": {
+  "alpha-aa": "alpha"
+ },
+ "controls": [
+  {
+   "name": "framework ref",
+   "values": {
+    "alpha": "v1.0.0",
+    "alpha-aa": "v1.0.0",
+    "beta": "v1.1.0",
+    "gamma": "main@abc1234"
+   }
+  },
+  {
+   "name": "node class",
+   "values": {
+    "alpha": "4 vCPU, zone a",
+    "alpha-aa": "4 vCPU, zone a",
+    "beta": "4 vCPU, zone a",
+    "gamma": "4 vCPU, zone a"
+   }
+  }
+ ],
+ "k6Image": "grafana/k6@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+ "labels": [
+  "alpha",
+  "beta",
+  "gamma"
+ ],
+ "notes": [
+  "Synthetic fixture: every number is made up to exercise the report."
+ ],
+ "title": "Example series: alpha vs beta vs gamma"
+}

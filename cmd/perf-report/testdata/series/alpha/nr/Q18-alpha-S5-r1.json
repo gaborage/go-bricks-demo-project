@@ -1,0 +1,122 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "beginTimeSeconds": 1767736500,
+       "endTimeSeconds": 1767736560,
+       "mcores": 101,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 8.1
+       },
+       "rps": 49.8,
+       "throttle": 0.0
+      },
+      {
+       "beginTimeSeconds": 1767736560,
+       "endTimeSeconds": 1767736620,
+       "mcores": 102,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 8.2
+       },
+       "rps": 49.8,
+       "throttle": 0.0
+      },
+      {
+       "beginTimeSeconds": 1767736620,
+       "endTimeSeconds": 1767736680,
+       "mcores": 193,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 9.3
+       },
+       "rps": 99.8,
+       "throttle": 0.0
+      },
+      {
+       "beginTimeSeconds": 1767736680,
+       "endTimeSeconds": 1767736740,
+       "mcores": 194,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 9.4
+       },
+       "rps": 99.8,
+       "throttle": 0.0
+      },
+      {
+       "beginTimeSeconds": 1767736740,
+       "endTimeSeconds": 1767736800,
+       "mcores": 195,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 9.5
+       },
+       "rps": 99.8,
+       "throttle": 0.0
+      },
+      {
+       "beginTimeSeconds": 1767736800,
+       "endTimeSeconds": 1767736860,
+       "mcores": 296,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 13.1
+       },
+       "rps": 149.8,
+       "throttle": 0.05
+      },
+      {
+       "beginTimeSeconds": 1767736860,
+       "endTimeSeconds": 1767736920,
+       "mcores": 297,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 13.2
+       },
+       "rps": 149.8,
+       "throttle": 0.05
+      },
+      {
+       "beginTimeSeconds": 1767736920,
+       "endTimeSeconds": 1767736980,
+       "mcores": 298,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 13.3
+       },
+       "rps": 149.8,
+       "throttle": 0.05
+      },
+      {
+       "beginTimeSeconds": 1767736980,
+       "endTimeSeconds": 1767737040,
+       "mcores": 389,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 25.9
+       },
+       "rps": 199.8,
+       "throttle": 0.3
+      },
+      {
+       "beginTimeSeconds": 1767737040,
+       "endTimeSeconds": 1767737100,
+       "mcores": 390,
+       "pct5xx": 0,
+       "percentile.http.server.request.duration": {
+        "95": 26.0
+       },
+       "rps": 199.8,
+       "throttle": 0.3
+      }
+     ]
+    }
+   }
+  }
+ }
+}

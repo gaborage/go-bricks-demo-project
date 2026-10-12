@@ -1,0 +1,16 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "bytes": 480000.0,
+       "objs": 4800.0
+      }
+     ]
+    }
+   }
+  }
+ }
+}

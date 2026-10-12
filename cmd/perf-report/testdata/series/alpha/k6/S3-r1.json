@@ -1,0 +1,69 @@
+{
+ "metrics": {
+  "dropped_iterations": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  },
+  "http_req_duration": {
+   "contains": "time",
+   "type": "trend",
+   "values": {
+    "avg": 39.6,
+    "max": 320.0,
+    "med": 36.0,
+    "min": 14.4,
+    "p(50)": 36.0,
+    "p(90)": 72.0,
+    "p(95)": 80.0,
+    "p(99)": 128.0
+   }
+  },
+  "http_req_failed": {
+   "contains": "default",
+   "type": "rate",
+   "values": {
+    "fails": 12000,
+    "passes": 0,
+    "rate": 0
+   }
+  },
+  "http_reqs": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 12000,
+    "rate": 20.0
+   }
+  },
+  "http_reqs{status:429}": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  }
+ },
+ "perfMeta": {
+  "abortErrorRate": 0.02,
+  "abortOn429": true,
+  "abortP95Ms": null,
+  "apiPrefix": "/api/v1",
+  "baseUrl": "http://app.internal.example:8080",
+  "endedAt": "2026-01-06T20:12:00Z",
+  "harnessTag": "perf-harness-example",
+  "maxVUs": 200,
+  "preAllocatedVUs": 50,
+  "rate": 20.0,
+  "readMix": null,
+  "runId": "alpha-S3-r1",
+  "script": "tokens-relay.ts",
+  "seedRows": null,
+  "startedAt": "2026-01-06T20:02:00Z",
+  "steps": null
+ }
+}

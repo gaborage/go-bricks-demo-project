@@ -1,0 +1,68 @@
+{
+ "metrics": {
+  "dropped_iterations": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  },
+  "http_req_duration": {
+   "contains": "time",
+   "type": "trend",
+   "values": {
+    "avg": 25.245,
+    "max": 204.0,
+    "med": 22.95,
+    "min": 9.18,
+    "p(90)": 45.9,
+    "p(95)": 51.0,
+    "p(99)": 81.6
+   }
+  },
+  "http_req_failed": {
+   "contains": "default",
+   "type": "rate",
+   "values": {
+    "fails": 12000,
+    "passes": 0,
+    "rate": 0.0004
+   }
+  },
+  "http_reqs": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 12000,
+    "rate": 20.0
+   }
+  },
+  "http_reqs{status:429}": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  }
+ },
+ "perfMeta": {
+  "abortErrorRate": 0.02,
+  "abortOn429": true,
+  "abortP95Ms": null,
+  "apiPrefix": "/api/v1",
+  "baseUrl": "http://app.internal.example:8080",
+  "endedAt": "2026-01-07T21:00:00Z",
+  "harnessTag": "perf-harness-example",
+  "maxVUs": 200,
+  "preAllocatedVUs": 50,
+  "rate": 20.0,
+  "readMix": null,
+  "runId": "beta-S2-r3",
+  "script": "products-crud.ts",
+  "seedRows": null,
+  "startedAt": "2026-01-07T20:50:00Z",
+  "steps": null
+ }
+}

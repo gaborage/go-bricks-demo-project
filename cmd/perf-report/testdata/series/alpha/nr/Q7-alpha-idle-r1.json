@@ -1,0 +1,16 @@
+{
+ "data": {
+  "actor": {
+   "account": {
+    "nrql": {
+     "results": [
+      {
+       "cpu_s": 9.6,
+       "mcores": 20.0
+      }
+     ]
+    }
+   }
+  }
+ }
+}

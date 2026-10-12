@@ -1,0 +1,82 @@
+{
+ "metrics": {
+  "dropped_iterations": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  },
+  "http_req_duration": {
+   "contains": "time",
+   "type": "trend",
+   "values": {
+    "avg": 18.315,
+    "max": 148.0,
+    "med": 16.65,
+    "min": 6.66,
+    "p(50)": 16.65,
+    "p(90)": 33.3,
+    "p(95)": 37.0,
+    "p(99)": 59.2
+   }
+  },
+  "http_req_duration{endpoint:list_products}": {
+   "contains": "time",
+   "type": "trend",
+   "values": {
+    "avg": 17.949,
+    "max": 145.04,
+    "med": 16.317,
+    "min": 6.527,
+    "p(90)": 32.634,
+    "p(95)": 36.26,
+    "p(99)": 55.5
+   }
+  },
+  "http_req_failed": {
+   "contains": "default",
+   "type": "rate",
+   "values": {
+    "fails": 30000,
+    "passes": 0,
+    "rate": 0
+   }
+  },
+  "http_reqs": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 30000,
+    "rate": 50.0
+   }
+  },
+  "http_reqs{status:429}": {
+   "contains": "default",
+   "type": "counter",
+   "values": {
+    "count": 0,
+    "rate": 0
+   }
+  }
+ },
+ "perfMeta": {
+  "abortErrorRate": 0.02,
+  "abortOn429": true,
+  "abortP95Ms": null,
+  "apiPrefix": "/api/v1",
+  "baseUrl": "http://app.internal.example:8080",
+  "endedAt": "2026-01-06T20:28:00Z",
+  "harnessTag": "perf-harness-example",
+  "maxVUs": 200,
+  "preAllocatedVUs": 50,
+  "rate": 50.0,
+  "readMix": "mixed",
+  "runId": "alpha-S1-r2",
+  "script": "products-read-only.ts",
+  "seedRows": 1000,
+  "startedAt": "2026-01-06T20:18:00Z",
+  "steps": null
+ }
+}
