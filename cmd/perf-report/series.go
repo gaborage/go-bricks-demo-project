@@ -49,6 +49,7 @@ const (
 	// Dynamic keys: k6 submetrics ("k6_p95_ms{endpoint:x}") and NR routes
 	// ("nr_p95_ms GET /x" style, prefix + space + route).
 	prefixNRRoute = "nr_"
+	prefixK6      = "k6_"
 )
 
 // k6Duration is the k6 request-duration trend. quantiles are the percentiles
@@ -56,6 +57,11 @@ const (
 const k6Duration = "http_req_duration"
 
 var quantiles = []string{"50", "95", "99"}
+
+// k6ExpectedResponse is the submetric k6 adds to every summary on its own
+// (the tag set after "http_req_duration{"); it repeats the overall trend for
+// non-error responses, so the report leaves it out.
+const k6ExpectedResponse = "expected_response:true}"
 
 // Inputs the report reads per rep, named as in the notes it writes.
 const (
@@ -81,14 +87,15 @@ type perfMeta struct {
 
 // rep is one attempted measured rep: a windows.tsv row plus what its files say.
 type rep struct {
-	label      string
-	w          windowRow
-	superseded bool // a later windows.tsv row reuses this run_id
-	vals       map[string]float64
-	flags      []string
-	meta       perfMeta
-	missing    []string
-	buckets    []bucket // S5 per-minute NR series
+	label       string
+	w           windowRow
+	superseded  bool // a later windows.tsv row reuses this run_id
+	vals        map[string]float64
+	flags       []string
+	meta        perfMeta
+	missing     []string
+	nonPositive []string // per-request metrics withheld as <= 0 after idle subtraction
+	buckets     []bucket // S5 per-minute NR series
 }
 
 func (r *rep) val(key string) float64 {
@@ -152,22 +159,10 @@ func (s *series) loadLabel(label string) error {
 	}
 	if !found {
 		s.notes = append(s.notes, fmt.Sprintf("%s: no %s yet, so no reps.", label, windowsFile))
+		s.idle[label] = idleLevel{mcores: math.NaN(), bytesPerS: math.NaN(), objsPerS: math.NaN()}
 		return nil
 	}
-	var idleRows []windowRow
-	var reps []*rep
-	lastByRunID := map[string]int{}
-	for _, row := range rows {
-		if strings.EqualFold(row.scenario, scenarioIdle) {
-			idleRows = append(idleRows, row)
-			continue
-		}
-		lastByRunID[row.runID] = len(reps)
-		reps = append(reps, &rep{label: label, w: row, vals: map[string]float64{}})
-	}
-	for i, r := range reps {
-		r.superseded = lastByRunID[r.w.runID] != i
-	}
+	idleRows, reps := splitRows(label, rows)
 	if s.idle[label], err = s.loadIdle(label, idleRows); err != nil {
 		return err
 	}
@@ -182,6 +177,26 @@ func (s *series) loadLabel(label string) error {
 	s.reps[label] = reps
 	s.noteMissing(label, reps)
 	return nil
+}
+
+// splitRows separates the idle windows from the reps. A later row with the
+// same run_id supersedes an earlier one, whose files now hold the later
+// attempt's data: a superseded rep is kept for the validity log, and a
+// superseded idle window is dropped.
+func splitRows(label string, rows []windowRow) (idle []windowRow, reps []*rep) {
+	last := map[string]int{}
+	for i := range rows {
+		last[rows[i].runID] = i
+	}
+	for i := range rows {
+		superseded := last[rows[i].runID] != i
+		if !strings.EqualFold(rows[i].scenario, scenarioIdle) {
+			reps = append(reps, &rep{label: label, w: rows[i], superseded: superseded, vals: map[string]float64{}})
+		} else if !superseded {
+			idle = append(idle, rows[i])
+		}
+	}
+	return idle, reps
 }
 
 // loadIdle takes the median over the label's valid idle windows.
@@ -202,9 +217,13 @@ func (s *series) loadIdle(label string, rows []windowRow) (idleLevel, error) {
 		mc, bps, ops = append(mc, smp.mcores), append(bps, smp.bytesPerS), append(ops, smp.objsPerS)
 	}
 	lvl := idleLevel{mcores: medianOrNaN(mc), bytesPerS: medianOrNaN(bps), objsPerS: medianOrNaN(ops)}
-	if math.IsNaN(lvl.mcores) {
+	switch {
+	case math.IsNaN(lvl.mcores):
 		s.notes = append(s.notes, fmt.Sprintf(
-			"%s: no valid idle window with Q7 mcores, so its CPU and allocations per request are not idle-subtracted.", label))
+			"%s: no valid idle window with Q7 mcores, so its CPU and allocations per request are n/a.", label))
+	case math.IsNaN(lvl.bytesPerS) || math.IsNaN(lvl.objsPerS):
+		s.notes = append(s.notes, fmt.Sprintf(
+			"%s: no idle Q9 allocation rate, so its allocations per request are n/a.", label))
 	}
 	return lvl, nil
 }
@@ -267,26 +286,35 @@ func (s *series) loadRep(r *rep) error {
 	} else {
 		r.missing = append(r.missing, inK6)
 	}
+	nr, err := s.loadNR(r)
+	if err != nil {
+		return err
+	}
+	s.readNR(r, nr)
+	r.flags = repFlags(r)
+	return nil
+}
+
+// loadNR reads the rep's NR responses. An absent file, an error body or an
+// empty result is recorded as missing.
+func (s *series) loadNR(r *rep) (map[string][]map[string]any, error) {
 	nr := map[string][]map[string]any{}
 	queries := []string{inQ2, inQ3, inQ7, inQ8, inQ9}
 	if r.w.scenario == scenarioStaircase {
 		queries = append(queries, inQ18)
 	}
 	for _, q := range queries {
-		path := filepath.Join(s.dir, r.label, "nr", q+"-"+r.w.runID+".json")
-		qdoc, ok, err := loadJSON(path)
+		doc, ok, err := loadJSON(filepath.Join(s.dir, r.label, "nr", q+"-"+r.w.runID+".json"))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if !ok {
+		if !ok || !nrUsable(doc) {
 			r.missing = append(r.missing, q)
 			continue
 		}
-		nr[q] = nrResults(qdoc)
+		nr[q] = nrResults(doc)
 	}
-	s.readNR(r, nr)
-	r.flags = repFlags(r)
-	return nil
+	return nr, nil
 }
 
 // readK6 pulls the C2 summary fields. Each metric is optional.
@@ -325,7 +353,7 @@ func readK6Submetrics(r *rep, doc jsonDoc) {
 	}
 	for name := range metrics {
 		tags, isSub := strings.CutPrefix(name, k6Duration+"{")
-		if !isSub {
+		if !isSub || tags == k6ExpectedResponse {
 			continue
 		}
 		for _, q := range quantiles {
@@ -374,11 +402,18 @@ func (s *series) readNR(r *rep, nr map[string][]map[string]any) {
 	idle := s.idle[r.label]
 	r.set(mIdle, idle.mcores, true)
 	// perRequest subtracts the idle rate over the window, then divides by n.
+	// Without an idle rate there is nothing comparable to report, and a value
+	// at or below 0 means the idle level swamped the load, so both stay n/a.
 	// The float64 conversion stops the compiler fusing the multiply into the
 	// subtraction on some architectures, so every platform rounds alike.
 	perRequest := func(key string, total float64, ok bool, idlePerS float64) {
-		if ok && okN && n > 0 && window > 0 {
-			r.set(key, (total-float64(zeroIfNaN(idlePerS)*window))/n, true)
+		if !ok || !okN || n <= 0 || window <= 0 || math.IsNaN(idlePerS) {
+			return
+		}
+		if v := (total - float64(idlePerS*window)) / n; v > 0 {
+			r.set(key, v, true)
+		} else {
+			r.nonPositive = append(r.nonPositive, key)
 		}
 	}
 	perRequest(mCPUPerReq, 1000*cpuS, okCPU, idle.mcores)
@@ -400,7 +435,7 @@ func (s *series) readNR(r *rep, nr map[string][]map[string]any) {
 // readRoutes stores the Q3 per-route percentiles.
 func readRoutes(r *rep, rows []map[string]any) {
 	for _, row := range rows {
-		route := routeOf(row)
+		route := routeKey(row)
 		if route == "" {
 			route = "all routes"
 		}
@@ -442,13 +477,6 @@ func (s *series) window(w *windowRow, n, rps, cpuS float64, okCPU bool, mcores f
 	return (w.runEnd.Sub(w.runStart) - 2*s.trim).Seconds()
 }
 
-func zeroIfNaN(v float64) float64 {
-	if math.IsNaN(v) {
-		return 0
-	}
-	return v
-}
-
 // repFlags marks a valid rep that is kept but may be environment-affected. A
 // reason code the runner wrote on a valid row is carried over as a flag.
 func repFlags(r *rep) []string {
@@ -470,23 +498,38 @@ func repFlags(r *rep) []string {
 	return flags
 }
 
-// noteMissing lists, per input, the valid reps that lack it.
+// noteMissing lists, per input, the valid reps that lack it, then the
+// per-request metrics withheld as not positive.
 func (s *series) noteMissing(label string, reps []*rep) {
-	byInput := map[string][]string{}
-	for _, r := range reps {
-		if !r.counts() {
-			continue
-		}
-		for _, in := range r.missing {
-			byInput[in] = append(byInput[in], r.w.runID)
-		}
-	}
+	missing := groupByRun(reps, func(r *rep) []string { return r.missing })
 	for _, in := range []string{inK6, inQ2, inQ3, inQ7, inQ8, inQ9, inQ18} {
-		if ids := byInput[in]; len(ids) > 0 {
+		if ids := missing[in]; len(ids) > 0 {
 			s.notes = append(s.notes, fmt.Sprintf("%s: %s missing for %d valid rep(s): %s.",
 				label, in, len(ids), strings.Join(ids, ", ")))
 		}
 	}
+	withheld := groupByRun(reps, func(r *rep) []string { return r.nonPositive })
+	for _, key := range []string{mCPUPerReq, mBytesReq, mAllocsReq} {
+		if ids := withheld[key]; len(ids) > 0 {
+			s.notes = append(s.notes, fmt.Sprintf("%s: %s is at or below 0 after idle subtraction, so n/a, for %d valid rep(s): %s.",
+				label, key, len(ids), strings.Join(ids, ", ")))
+		}
+	}
+}
+
+// groupByRun maps each item get returns to the run_ids of the counted reps
+// that carry it, in rep order.
+func groupByRun(reps []*rep, get func(*rep) []string) map[string][]string {
+	out := map[string][]string{}
+	for _, r := range reps {
+		if !r.counts() {
+			continue
+		}
+		for _, item := range get(r) {
+			out[item] = append(out[item], r.w.runID)
+		}
+	}
+	return out
 }
 
 // values returns the metric for the counted reps of label/scenario.
@@ -525,8 +568,10 @@ func scenarioLess(a, b string) bool {
 	na, okA := scenarioNumber(a)
 	nb, okB := scenarioNumber(b)
 	switch {
-	case okA && okB:
+	case okA && okB && na != nb:
 		return na < nb
+	case okA && okB:
+		return a < b
 	case okA != okB:
 		return okA
 	default:

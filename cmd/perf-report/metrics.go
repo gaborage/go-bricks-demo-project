@@ -78,7 +78,8 @@ func (s *series) dynamicDefs(scenario string) []metricDef {
 	sort.Strings(keys)
 	defs := make([]metricDef, 0, len(keys))
 	for _, k := range keys {
-		defs = append(defs, metricDef{key: k, name: dynamicName(k), decimals: 2, p99: strings.Contains(k, "p99")})
+		p99 := strings.HasPrefix(k, prefixK6+"p99") || strings.HasPrefix(k, prefixNRRoute+"p99")
+		defs = append(defs, metricDef{key: k, name: dynamicName(k), decimals: 2, p99: p99})
 	}
 	return defs
 }
@@ -92,13 +93,17 @@ func addDynamicKeys(seen map[string]bool, vals map[string]float64) {
 }
 
 func isDynamicKey(k string) bool {
-	return strings.Contains(k, "{") || (strings.HasPrefix(k, prefixNRRoute+"p") && strings.Contains(k, " "))
+	if strings.HasPrefix(k, prefixK6+"p") {
+		return strings.Contains(k, "{")
+	}
+	return strings.HasPrefix(k, prefixNRRoute+"p") && strings.Contains(k, " ")
 }
 
 // dynamicName turns "k6_p95_ms{endpoint:x}" into "k6 p95 ms {endpoint:x}" and
 // "nr_p95_ms GET /x" into "NR p95 ms GET /x".
 func dynamicName(k string) string {
-	if head, tags, ok := strings.Cut(k, "{"); ok {
+	if strings.HasPrefix(k, prefixK6) {
+		head, tags, _ := strings.Cut(k, "{")
 		return strings.ReplaceAll(head, "_", " ") + " {" + tags
 	}
 	head, route, _ := strings.Cut(k, " ")

@@ -131,7 +131,9 @@ One session per version, in this shape:
    Re-queue a void rep at the end of the schedule, at most twice per scenario,
    and log every attempt.
 9. **Staircase.** S5 once per version, after the measured reps, with 3-minute
-   steps under a fixed cap. It is indicative only.
+   steps under a fixed cap. It is indicative only. Its run crosses the
+   dropped-iteration and rate gates on purpose, so a void S5 row is still read:
+   perf-report uses each label's last S5 attempt, valid or void.
 10. **Capture.** At least 5 minutes after the last Job, run the NRQL set over
     each rep's window, trimmed by 1 minute on each side, then
     `go run ./cmd/perf-report --series <series> --out <series>`.
@@ -161,7 +163,7 @@ The drift between the two runs of the same binary is the series' noise floor.
 
 - **`series-manifest.json`** needs `labels`, an array whose first entry is the
   reference: `{"labels":["a","b","c"],"aa":{"a-aa":"a"}}`. `aa` maps an A/A
-  label to the label it repeats. perf-report also reads three optional keys:
+  label to the label it repeats. perf-report also reads four optional keys:
   `title`, `controls` and `covariates` (arrays of
   `{"name": ..., "values": {"<label>": ...}}` rows for the report's tables),
   and `notes` (an array of strings). It ignores every other key.
@@ -186,23 +188,30 @@ after each session adds that session's reps. It uses the standard library
 only, and the same files always produce the same bytes.
 
 - **Inputs.** Each rep's k6 summary, and the NR responses for Q2 (rate `rps`
-  and count `n` per route), Q3 (latency percentiles per route), Q7 (`cpu_s`
-  and `mcores`), Q8 (`throttle`, `ws_avg`, `ws_max`), Q9 (`bytes`, `objs`) and,
-  for S5, Q18 (the per-minute series). A missing file or metric renders as
-  `n/a` and is listed under the validity log.
+  and count `n` per route), Q3 (latency percentiles per route, and per method
+  when the query facets by it), Q7 (`cpu_s` and `mcores`), Q8 (`throttle`,
+  `ws_avg`, `ws_max`), Q9 (`bytes`, `objs`) and, for S5, Q18 (the per-minute
+  series). A missing metric renders as `n/a`. A missing file, a NerdGraph
+  error body or an empty result renders the same, and the validity log lists
+  the valid reps it affects. k6's built-in
+  `http_req_duration{expected_response:true}` submetric is left out of the
+  per-endpoint rows.
 - **CPU per request (P2)** is `1000 × (cpu_s − idle_cores × window_s) / n`,
   with `n` summed over Q2's route facets and `idle_cores` from the label's
   `idle` window. `window_s` is read back from the NR data (`n / rps`), and
   falls back to `cpu_s / cores` and then to the `windows.tsv` window minus
   `--trim` (default `1m`) on each side. Allocations per request use the same
-  idle subtraction.
+  idle subtraction. A label without an idle level, and a value at or below 0
+  after subtraction, render `n/a`, with the reason in the validity log.
 - **Flags.** A valid rep is flagged `throttle` when CFS throttling reaches 1%,
   and `nr-gap` when the NR request rate differs from k6's by more than 2%. The
   gap leaves out `/__sim/` routes, which k6 never calls directly. A reason code
   the runner wrote on a valid row is kept as a flag too.
 - **Staircase.** perf-report assumes the steps run back to back from
   `RUN_START`, each duration including its ramp, and uses only the minutes
-  that fall wholly inside a step.
+  that fall wholly inside a step. k6 reports dropped iterations only for the
+  whole run, so when that total is above 0 a step counts as "nothing dropped"
+  only if NR saw at least 99% of its offered rate.
 - **Not computed.** Stationarity, database capacity, neighbour and other-tenant
   flags need data perf-report does not read. Leak slopes for the optional soak
   are read from the raw files by hand.
@@ -236,10 +245,12 @@ only, and the same files always produce the same bytes.
   reps per arm the report adds the Hodges-Lehmann shift, still descriptive.
 - **Flags and the sensitivity rerun.** A flagged rep is kept and marked. The
   primary verdicts are then recomputed without flagged reps, and a verdict that
-  flips is labelled "environment-limited". The method's other flags are a
-  per-minute p95 or CPU that moves more than 10% between the halves of the
-  window, database capacity that moves by more than 1 unit, neighbours above
-  100 millicores, and other-tenant database load at or above 0.2 average active sessions.
+  flips is labelled "environment-limited". When too few unflagged reps are
+  left to rerun, the verdict stands and says so. The method's other flags are
+  a per-minute p95 or CPU that moves more than 10% between the halves of the
+  window, neighbours above 100 millicores, and other-tenant database load at or
+  above 0.2 average active sessions. (Database capacity that moves by more than
+  1 unit already voids the rep.)
 - **Staircase knee.** The last step, counting from the first, where p95 stays
   under twice the first step's p95, 5xx under 0.1%, nothing is dropped and CPU
   throttling under 25%. Report the knee rate and the CPU at the knee. One rep
@@ -262,7 +273,7 @@ The watchdog enforces these, and deleting the k6 Jobs is the kill switch.
 | Database capacity at the agreed ceiling | Kill. The frozen rate is too high for the shared database: stop and re-plan. Never raise the ceiling mid-series. |
 | Other-tenant database load above 0.5 average active sessions during a rep | Void the rep, without a kill. |
 | Broker memory above its limit, or a queue the app consumes keeps growing | Kill and void the rep. |
-| k6 sees a 429, an error rate above 2% (1% in the staircase), or a staircase p95 above 1000 ms | k6 aborts by itself. Void the rep; in the staircase this is the knee. |
+| k6 sees a 429, an error rate above 2% (1% in the staircase), or a staircase p95 above 1000 ms | k6 aborts by itself. Void the rep. In the staircase the abort marks the knee, and the run is still read. |
 | Dropped iterations above 0, or an achieved rate more than 1% off target | Void the rep. |
 | Telemetry integration errors in the window, or the collector's memory 50% above its baseline | Void the rep: NR may have undercounted. |
 | Wall clock past the planned session end | Stop. |

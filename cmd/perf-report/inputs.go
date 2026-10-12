@@ -22,6 +22,7 @@ const (
 	fieldEnd     = "endTimeSeconds"
 	fieldFacet   = "facet"
 	fieldRoute   = "http.route"
+	fieldMethod  = "http.request.method"
 )
 
 const (
@@ -99,10 +100,15 @@ func (m *manifest) optional(doc map[string]json.RawMessage, key string, into any
 	}
 }
 
+// plainName reports whether s can be used as one path element.
+func plainName(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
+}
+
 func (m *manifest) validate() error {
 	seen := map[string]bool{}
 	for _, l := range append(append([]string{}, m.labels...), m.aaLabels...) {
-		if l == "" || l == "." || l == ".." || strings.ContainsAny(l, `/\`) {
+		if !plainName(l) {
 			return fmt.Errorf("%s: label %q is not a plain directory name", manifestFile, l)
 		}
 		if seen[l] {
@@ -135,7 +141,7 @@ type windowRow struct {
 	warmStart time.Time
 	runStart  time.Time
 	runEnd    time.Time
-	rc        int
+	rc        string // the exit code as written; empty when the row has none
 	valid     bool
 	reason    string
 }
@@ -170,12 +176,20 @@ func loadWindows(path string) ([]windowRow, bool, error) {
 
 func parseWindowRow(line string) (windowRow, error) {
 	f := strings.Split(line, "\t")
+	if len(f) == 8 {
+		// An editor that strips trailing whitespace drops the tab before an
+		// empty reason, the usual case on a valid row.
+		f = append(f, "")
+	}
 	if len(f) != 9 {
 		return windowRow{}, fmt.Errorf("want 9 tab-separated fields, got %d", len(f))
 	}
 	var r windowRow
 	var err error
-	r.runID, r.scenario, r.reason = f[0], f[1], f[8]
+	r.runID, r.scenario, r.rc, r.reason = f[0], f[1], f[6], f[8]
+	if !plainName(r.runID) || !plainName(r.scenario) {
+		return r, fmt.Errorf("run_id %q and scenario %q must be plain names: they become file names", r.runID, r.scenario)
+	}
 	if r.rep, err = strconv.Atoi(f[2]); err != nil {
 		return r, fmt.Errorf("rep %q: %w", f[2], err)
 	}
@@ -188,9 +202,9 @@ func parseWindowRow(line string) (windowRow, error) {
 	if r.runEnd, err = parseTime(f[5]); err != nil {
 		return r, err
 	}
-	if f[6] != "" {
-		if r.rc, err = strconv.Atoi(f[6]); err != nil {
-			return r, fmt.Errorf("rc %q: %w", f[6], err)
+	if r.rc != "" {
+		if _, err = strconv.Atoi(r.rc); err != nil {
+			return r, fmt.Errorf("rc %q: %w", r.rc, err)
 		}
 	}
 	switch f[7] {
@@ -262,11 +276,14 @@ func asNum(v any) (float64, bool) {
 	return f, ok
 }
 
+// nrqlPath leads to the result rows of a single-query NerdGraph response.
+var nrqlPath = []string{"data", "actor", "account", "nrql", fieldResults}
+
 // nrResults returns the rows of a raw NerdGraph NRQL response. The contract
 // shape is data.actor.account.nrql.results; a response that aliases several
 // queries is read by collecting every "results" array found under data.
 func nrResults(doc jsonDoc) []map[string]any {
-	if rows, ok := doc.path("data", "actor", "account", "nrql", fieldResults).([]any); ok {
+	if rows, ok := doc.path(nrqlPath...).([]any); ok {
 		return objects(rows)
 	}
 	var out []map[string]any
@@ -324,6 +341,29 @@ func firstField(rows []map[string]any, key string) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// routeKey names a latency row: "METHOD route" when the row is also faceted
+// by method, so a GET and a POST on one route stay apart.
+func routeKey(row map[string]any) string {
+	route := routeOf(row)
+	method, _ := row[fieldMethod].(string)
+	if f, ok := row[fieldFacet].([]any); ok && method == "" && len(f) > 1 {
+		method, _ = f[1].(string)
+	}
+	if method == "" {
+		return route
+	}
+	return method + " " + route
+}
+
+// nrUsable reports whether a NerdGraph response carries rows: an error body
+// or an empty result reads as a missing file.
+func nrUsable(doc jsonDoc) bool {
+	if doc["errors"] != nil {
+		return false
+	}
+	return len(nrResults(doc)) > 0
 }
 
 // routeOf names the facet of a row faceted by http.route.

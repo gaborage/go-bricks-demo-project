@@ -76,9 +76,10 @@ type assessed struct {
 }
 
 func (s *series) assess(scenario string, def metricDef, c comparison, skipFlagged bool) assessed {
-	a := assessed{cmp: c, def: def}
 	base, okB := s.statOf(c.base, scenario, def.key, skipFlagged)
 	test, okT := s.statOf(c.test, scenario, def.key, skipFlagged)
+	// A missing arm has the zero stat, so the counts read n=0 for it.
+	a := assessed{cmp: c, def: def, verdict: verdict{kind: verdictInsufficient, nBase: base.n, nTest: test.n}}
 	if !okB || !okT {
 		return a
 	}
@@ -92,8 +93,6 @@ func (s *series) assess(scenario string, def metricDef, c comparison, skipFlagge
 	}
 	if a.hasBand {
 		a.verdict = decide(&base, &test, a.band)
-	} else {
-		a.verdict = verdict{kind: verdictInsufficient, nBase: base.n, nTest: test.n}
 	}
 	return a
 }
@@ -122,12 +121,16 @@ func (s *series) anyFlagged(scenario string, c comparison) bool {
 
 func pct(v float64) string { return strconv.FormatFloat(v*100, 'f', 1, 64) + "%" }
 
-func signedPct(v float64) string {
-	sign := "+"
-	if v < 0 {
-		sign = "-"
+func signedPct(v float64) string { return signed(v*100, 1) + "%" }
+
+// signed renders v with an explicit sign, chosen after rounding so a tiny
+// negative value prints as +0, never -0.
+func signed(v float64, decimals int) string {
+	r := roundTo(v, decimals) + 0
+	if r < 0 {
+		return "-" + fixed(-r, decimals)
 	}
-	return sign + strconv.FormatFloat(math.Abs(v)*100, 'f', 1, 64) + "%"
+	return "+" + fixed(r, decimals)
 }
 
 func fixed(v float64, decimals int) string {
@@ -155,11 +158,7 @@ func (a *assessed) deltaCell() string {
 	case !a.hasDelta:
 		return na
 	case a.def.absolute:
-		sign := "+"
-		if a.diff < 0 {
-			sign = "-"
-		}
-		return sign + fixed(math.Abs(a.diff), a.def.decimals) + a.def.absUnit
+		return signed(a.diff, a.def.decimals) + a.def.absUnit
 	default:
 		return signedPct(a.delta)
 	}
@@ -179,6 +178,9 @@ func verdictText(v *verdict) string {
 	case verdictNoDifference:
 		return "no detectable difference (band ±" + pct(v.band) + ")"
 	default:
+		if v.nBase >= minVerdictReps && v.nTest >= minVerdictReps {
+			return "no verdict: the reference median is 0"
+		}
 		return fmt.Sprintf("insufficient reps (n=%d vs %d; need %d each)", v.nBase, v.nTest, minVerdictReps)
 	}
 }

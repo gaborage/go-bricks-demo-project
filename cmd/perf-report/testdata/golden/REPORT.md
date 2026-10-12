@@ -118,7 +118,7 @@ Descriptive only: these rows never get a verdict word. Band B is shown for scale
 
 ## Stress staircase (S5)
 
-Indicative: one rep per label. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, from the per-minute Q18 series over the minutes wholly inside each step.
+Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, from the per-minute Q18 series over the minutes wholly inside each step.
 
 | step (offered rps) | alpha | beta |
 |---|---|---|

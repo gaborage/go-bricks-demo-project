@@ -48,7 +48,7 @@ func runRecord(r *rep) []string {
 	rec := []string{
 		r.label, r.w.scenario, strconv.Itoa(r.w.rep), r.w.runID, boolDigit(r.w.valid), boolDigit(r.superseded),
 		r.w.reason, strings.Join(r.flags, ";"),
-		isoTime(r.w.warmStart), isoTime(r.w.runStart), isoTime(r.w.runEnd), strconv.Itoa(r.w.rc),
+		isoTime(r.w.warmStart), isoTime(r.w.runStart), isoTime(r.w.runEnd), r.w.rc,
 	}
 	for _, key := range runColumns {
 		v, ok := r.vals[key]

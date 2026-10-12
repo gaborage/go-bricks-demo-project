@@ -85,6 +85,8 @@ func TestLoadWindows(t *testing.T) {
 		{name: "header and one row", body: windowsHead + "\n" + row + "\n", wantN: 1},
 		{name: "CRLF line endings", body: windowsHead + "\r\n" + row + "\r\n", wantN: 1},
 		{name: "void row with reasons", body: windowsHead + "\n" + strings.Replace(row, "\t0\t1\t", "\t3\t0\tdropped;429", 1) + "\n", wantN: 1},
+		{name: "stripped trailing tab", body: windowsHead + "\n" + strings.TrimSuffix(row, "\t") + "\n", wantN: 1},
+		{name: "scenario with a path", body: windowsHead + "\n" + strings.Replace(row, "\tS1\t", "\t../S1\t", 1), wantErr: "plain names"},
 		{name: "wrong header", body: "run_id\tscenario\n" + row, wantErr: "header must be exactly"},
 		{name: "short row", body: windowsHead + "\na-S1-r1\tS1\t1\n", wantErr: "want 9 tab-separated fields"},
 		{name: "bad valid", body: windowsHead + "\n" + strings.Replace(row, "\t0\t1\t", "\t0\tyes\t", 1), wantErr: "valid must be 1 or 0"},
@@ -109,16 +111,15 @@ func TestLoadWindows(t *testing.T) {
 }
 
 func TestNRResultShapes(t *testing.T) {
-	contract := jsonDoc{"data": map[string]any{"actor": map[string]any{"account": map[string]any{"nrql": map[string]any{
-		fieldResults: []any{map[string]any{fieldN: 10.0}, map[string]any{fieldN: 5.0}},
-	}}}}}
+	contract := nerdGraph(map[string]any{fieldN: 10.0}, map[string]any{fieldN: 5.0})
 	if n, ok := sumField(nrResults(contract), "n"); !ok || n != 15 {
 		t.Errorf("contract shape: n = %v, %v; want 15, true", n, ok)
 	}
-	aliased := jsonDoc{"data": map[string]any{"actor": map[string]any{"account": map[string]any{
+	// Two aliased queries under the account, read in alias order.
+	aliased := jsonDoc(nest(nrqlPath[:3], map[string]any{
 		"b": map[string]any{fieldResults: []any{map[string]any{"mcores": 2.0}}},
 		"a": map[string]any{fieldResults: []any{map[string]any{fieldRPS: 1.0}}},
-	}}}}
+	}))
 	rows := nrResults(aliased)
 	if len(rows) != 2 || rows[0][fieldRPS] != 1.0 {
 		t.Errorf("aliased shape rows = %v, want the a alias first", rows)
@@ -183,22 +184,34 @@ func TestReadK6ToleratesMissingMetrics(t *testing.T) {
 	}
 }
 
-// TestIdleMissingSubtractsNothing builds a two-label series with no idle
-// window: CPU per request is then raw, and the report says so.
-func TestIdleMissingSubtractsNothing(t *testing.T) {
+// TestPerRequestNeedsIdle builds a three-label series. "one" has an idle level
+// above its load, "two" has no idle window, and "three" subtracts normally:
+// only "three" gets CPU per request, and the report says why the others don't.
+func TestPerRequestNeedsIdle(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, manifestFile), `{"labels":["one","two"]}`)
+	writeFile(t, filepath.Join(dir, manifestFile), `{"labels":["one","two","three"]}`)
 	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-	for _, label := range []string{"one", "two"} {
+	window := func(id, scenario string, rep int) string {
+		return strings.Join([]string{id, scenario, strconv.Itoa(rep), "",
+			start.Format(time.RFC3339), start.Add(10 * time.Minute).Format(time.RFC3339), "0", "1", ""}, "\t")
+	}
+	nr := func(label, query, id, rows string) {
+		writeFile(t, filepath.Join(dir, label, "nr", query+"-"+id+".json"),
+			`{"data":{"actor":{"account":{"nrql":{"results":[`+rows+`]}}}}}`)
+	}
+	labels := []string{"one", "two", "three"}
+	idle := map[string]string{labels[0]: `{"cpu_s":96,"mcores":200}`, labels[2]: `{"cpu_s":9.6,"mcores":20}`}
+	for _, label := range labels {
 		lines := []string{windowsHead}
+		if rows, ok := idle[label]; ok {
+			lines = append(lines, window(label+"-idle-r1", "idle", 1))
+			nr(label, "Q7", label+"-idle-r1", rows)
+		}
 		for rep := 1; rep <= 3; rep++ {
 			id := label + "-S1-r" + strconv.Itoa(rep)
-			lines = append(lines, strings.Join([]string{id, "S1", strconv.Itoa(rep), "",
-				start.Format(time.RFC3339), start.Add(10 * time.Minute).Format(time.RFC3339), "0", "1", ""}, "\t"))
-			writeFile(t, filepath.Join(dir, label, "nr", "Q2-"+id+".json"),
-				`{"data":{"actor":{"account":{"nrql":{"results":[{"rps":10,"n":4800}]}}}}}`)
-			writeFile(t, filepath.Join(dir, label, "nr", "Q7-"+id+".json"),
-				`{"data":{"actor":{"account":{"nrql":{"results":[{"cpu_s":48,"mcores":100}]}}}}}`)
+			lines = append(lines, window(id, "S1", rep))
+			nr(label, "Q2", id, `{"rps":10,"n":4800}`)
+			nr(label, "Q7", id, `{"cpu_s":48,"mcores":100}`)
 		}
 		writeFile(t, filepath.Join(dir, label, windowsFile), strings.Join(lines, "\n")+"\n")
 	}
@@ -206,15 +219,23 @@ func TestIdleMissingSubtractsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := s.reps["one"][0]
-	if got := r.vals[mCPUPerReq]; !near(got, 10) {
-		t.Errorf("cpu_ms_per_req = %v, want 10 (1000 x 48 / 4800, nothing subtracted)", got)
+	for _, label := range labels[:2] {
+		if v, ok := s.reps[label][0].vals[mCPUPerReq]; ok {
+			t.Errorf("%s cpu_ms_per_req = %v, want n/a", label, v)
+		}
 	}
-	if got := r.vals[mWindow]; !near(got, 480) {
-		t.Errorf("window_s = %v, want 480 (n / rps)", got)
+	// (1000 x 48 - 20 x 480) / 4800 = 8; the window is n / rps = 480 s.
+	if got := s.reps[labels[2]][0].vals[mCPUPerReq]; !near(got, 8) {
+		t.Errorf("three cpu_ms_per_req = %v, want 8", got)
 	}
 	report := s.renderReport()
-	for _, want := range []string{"not idle-subtracted", "k6 summary missing for 3 valid rep(s)", "insufficient reps (n=0 vs 0"} {
+	for _, want := range []string{
+		"one: cpu_ms_per_req is at or below 0 after idle subtraction, so n/a, for 3 valid rep(s)",
+		"two: no valid idle window with Q7 mcores",
+		"k6 summary missing for 3 valid rep(s)",
+		"insufficient reps (n=0 vs 0",
+		"insufficient reps (n=0 vs 3",
+	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report lacks %q", want)
 		}

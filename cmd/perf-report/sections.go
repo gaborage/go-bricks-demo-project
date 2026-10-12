@@ -80,16 +80,22 @@ func (s *series) sessionWindow(label string) string {
 }
 
 func (s *series) repCounts(label string) string {
-	var valid, void int
+	var valid, void, replaced int
 	for _, r := range s.reps[label] {
-		if r.counts() {
+		switch {
+		case !r.w.valid:
+			void++
+		case r.superseded:
+			replaced++
+		default:
 			valid++
 		}
-		if !r.w.valid {
-			void++
-		}
 	}
-	return fmt.Sprintf("%d / %d / %d", len(s.reps[label]), valid, void)
+	out := fmt.Sprintf("%d / %d / %d", len(s.reps[label]), valid, void)
+	if replaced > 0 {
+		out += fmt.Sprintf(" (+%d valid but superseded)", replaced)
+	}
+	return out
 }
 
 func (s *series) voided(label string) string {
@@ -150,11 +156,12 @@ func (s *series) offeredRates(label string) string {
 	return strings.Join(parts, ", ")
 }
 
-// staircaseRun is the last counted S5 rep of a label.
+// staircaseRun is the last S5 attempt of a label, valid or void: crossing the
+// rate and dropped-iteration gates is what a staircase measures.
 func (s *series) staircaseRun(label string) *rep {
 	var last *rep
 	for _, r := range s.reps[label] {
-		if r.counts() && r.w.scenario == scenarioStaircase {
+		if !r.superseded && r.w.scenario == scenarioStaircase {
 			last = r
 		}
 	}
@@ -184,7 +191,7 @@ func (s *series) writeStaircase(b *strings.Builder) {
 		b.WriteString("No valid staircase rep in this series.\n\n")
 		return
 	}
-	b.WriteString("Indicative: one rep per label. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, " +
+	b.WriteString("Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, " +
 		"from the per-minute Q18 series over the minutes wholly inside each step.\n\n")
 	head := []string{"step (offered rps)"}
 	for _, r := range runs {
@@ -224,6 +231,10 @@ func kneeCell(stats []stepStat, knee int, hasSeries bool) string {
 	switch {
 	case !hasSeries:
 		return na + " (no Q18 series)"
+	case len(stats) == 0:
+		return na + " (no steps in perfMeta)"
+	case stats[0].buckets == 0:
+		return na + " (no Q18 minute inside step 1)"
 	case knee < 0:
 		return "below the first step"
 	}
@@ -287,7 +298,7 @@ func (s *series) writeValidityLog(b *strings.Builder) {
 				valid += " (superseded)"
 			}
 			rows = append(rows, []string{
-				r.w.runID, timeRange(r.w.runStart, r.w.runEnd), strconv.Itoa(r.w.rc), valid, r.w.reason,
+				r.w.runID, timeRange(r.w.runStart, r.w.runEnd), r.w.rc, valid, r.w.reason,
 				strings.Join(r.flags, ";"), fixed(r.val(mGap), 2), fixed(r.val(mThrottle), 2),
 			})
 		}
