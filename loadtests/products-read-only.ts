@@ -37,6 +37,7 @@ import {
   resolveReadMix,
   perfSeedRows,
   randomSeedProductID,
+  isRequestedProduct,
   perfSetupData,
   withPerfKnobs,
   summaryOutputs,
@@ -188,6 +189,8 @@ function getProduct(): void {
     'get: status is 200': (r) => r.status === 200,
     'get: response time < 400ms': (r) => r.timings.duration < 400,
     'get: has valid product': (r) => {
+      // A seed read must return the requested row with a numeric price.
+      if (seedRows !== null) return isRequestedProduct(r.body as string, productID);
       try {
         const body = JSON.parse(r.body as string) as ProductResponse;
         // go-bricks wraps response in data object

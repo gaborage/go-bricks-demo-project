@@ -37,6 +37,7 @@ import {
   resolveScenario,
   perfSeedRows,
   randomSeedProductID,
+  isRequestedProduct,
   perfSetupData,
   withPerfKnobs,
   summaryOutputs,
@@ -179,7 +180,8 @@ function getProduct(): void {
   });
 
   // A 404 is accepted for the default ids, but never for a seed id: the reset
-  // inserts every seed row this run can pick, so a missing one is a failure.
+  // inserts every seed row this run can pick, so a missing one is a failure,
+  // and so is a 200 that is not the requested row.
   const success = seedRows === null
     ? check(response, {
       'get: status is 200 or 404': (r) => r.status === 200 || r.status === 404,
@@ -187,7 +189,7 @@ function getProduct(): void {
     })
     : check(response, {
       'get: status is 200': (r) => r.status === 200,
-      'get: has valid response': (r) => hasValidProduct(r.body as string),
+      'get: has valid response': (r) => isRequestedProduct(r.body as string, productID),
     });
 
   getProductRate.add(success ? 1 : 0);

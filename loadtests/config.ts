@@ -6,7 +6,7 @@ import crypto from 'k6/crypto';
 import http from 'k6/http';
 import type { RefinedParams, RefinedResponse, RequestBody, ResponseType } from 'k6/http';
 import { Counter } from 'k6/metrics';
-import type { TestConfig, LoadProfile, SampleProduct, Headers } from './types/index.ts';
+import type { TestConfig, LoadProfile, SampleProduct, Headers, ProductResponse } from './types/index.ts';
 import type { Options, Scenario, Threshold } from 'k6/options';
 
 export const config: TestConfig = {
@@ -433,6 +433,24 @@ export function seedProductID(g: number): string {
 /** The id of a seed row picked uniformly from 1..rows. */
 export function randomSeedProductID(rows: number): string {
   return seedProductID(1 + Math.floor(Math.random() * rows));
+}
+
+/**
+ * Whether a get response body is the seed row that was asked for: the same
+ * id, a non-empty name and a finite numeric price. A 200 carrying another
+ * product, or a null price, is not a valid seed read.
+ */
+export function isRequestedProduct(body: string, productID: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as ProductResponse;
+    // go-bricks wraps response in data object
+    const product = parsed.data || parsed;
+    return product.id === productID &&
+      typeof product.name === 'string' && product.name.length > 0 &&
+      typeof product.price === 'number' && Number.isFinite(product.price);
+  } catch (e) {
+    return false;
+  }
 }
 
 /** products-read-only.ts operation mix. */
