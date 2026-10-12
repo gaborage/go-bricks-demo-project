@@ -138,11 +138,11 @@ databases:
 # modules resolve; this section is where development provisions them.
 # Each key supports public/private sources independently. Two source styles:
 #   - file:  path to a DER-encoded key (PKIX for public, PKCS8 or PKCS1 for private).
-#   - value: raw base64-encoded DER. Production deployments typically inject the
-#            base64 string from a secret manager via env var; the demo inlines it
-#            so the framework's `value:` source is exercised end-to-end.
-# `make generate-keys` regenerates all DER files AND patches the inline
-# `tokenspeer` public-key base64 between the BEGIN/END markers below.
+#   - value: raw base64-encoded DER. This is how a non-development deploy
+#            delivers keys: a secret manager injects the base64 string as
+#            KEYSTORE_KEYS_<NAME>_{PUBLIC,PRIVATE}_VALUE (see wiki/DEPLOYING.md).
+# Development uses `file:` for every half: `make generate-keys` writes the DER
+# files to certs/ (gitignored) and never edits this file.
 keystore:
   keys:
     # Webhook signing — both halves loaded from DER files.
@@ -162,14 +162,11 @@ keystore:
         file: "certs/tokens_our_private.der"
 
     # tokenspeer: the simulated counterparty keypair (in production this would
-    # be Visa Token Services or similar). Public is sourced via inline base64 to
-    # exercise the `value:` source style; private stays on disk so the in-process
-    # simulator can decrypt+sign as the peer would.
+    # be Visa Token Services or similar). Both halves on disk: the private half
+    # lets the in-process simulators decrypt+sign as the peer would.
     tokenspeer:
       public:
-        # BEGIN_TOKENS_PEER_PUB — managed by `make generate-keys`, do not edit by hand.
-        value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvZH5xiLOQPsA0tne8WoW/IOl5THDii1he9dGtK9bvSr0wDv3VAp07CZPBCyK+DiTd78JrcV/fwkknTpFq4qanOni/8InlcfUtITmzb+7+XtrvUMmsp8/KOt8+o+2rrkPLLPTnnsgXnKyqlNiUXKhX1r/nclwsMnreqvtFD3QA9IXIW/b6NSs1jCc0F1EKhq7Dlud0sXXz9Mljir/kBkwXa7KEZyYG+npiibUdkoVURv+EKq7OYNHTHuxfGdafjJs6er1oMdQdNyf8Ay7D4y/HZoOYG6bzhEYdNA1JlKaXH++membtG1aOgOnSmc2OBmcD3j2QhTgP2eCkaVj/c4ifQIDAQAB"
-        # END_TOKENS_PEER_PUB
+        file: "certs/tokens_peer_public.der"
       private:
         file: "certs/tokens_peer_private.der"
 

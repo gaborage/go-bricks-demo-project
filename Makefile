@@ -41,7 +41,7 @@ help:
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate RSA keypairs (webhooksigning, tokensour, tokenspeer, paymentssign-v1, paymentsencrypt-v1); patches tokenspeer public into config.development.yaml"
+	@echo "  generate-keys     Generate RSA keypairs (webhooksigning, tokensour, tokenspeer, paymentssign-v1, paymentsencrypt-v1) into certs/"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -500,8 +500,7 @@ update:
 # Generate RSA key pairs for the KeyStore-backed demos:
 #   - webhooksigning      : webhooks module (file/file)
 #   - tokensour           : tokens module, our half  (file/file)
-#   - tokenspeer          : tokens module, peer half (value/file — public is inlined
-#                           into config.development.yaml between BEGIN/END markers)
+#   - tokenspeer          : tokens module, peer half (file/file)
 #   - paymentssign-v1     : payments module, sealed-event SIGN family generation v1
 #   - paymentsencrypt-v1  : payments module, sealed-event ENCRYPT family generation v1
 #
@@ -513,7 +512,8 @@ update:
 # consumer needs sign-public + encrypt-private). A real deployment splits them.
 #
 # The DER file names are not the entry names: config.development.yaml maps each
-# entry (tokensour) to its files (certs/tokens_our_*.der).
+# entry (tokensour) to its files (certs/tokens_our_*.der). This target writes only
+# certs/ (gitignored) and leaves every tracked file untouched.
 generate-keys:
 	@echo "🔑 Generating RSA key pairs..."
 	@mkdir -p certs
@@ -527,27 +527,10 @@ generate-keys:
 	@openssl rsa -in certs/payments_sign_v1_private.der -inform DER -pubout -outform DER -out certs/payments_sign_v1_public.der 2>/dev/null
 	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/payments_encrypt_v1_private.der 2>/dev/null
 	@openssl rsa -in certs/payments_encrypt_v1_private.der -inform DER -pubout -outform DER -out certs/payments_encrypt_v1_public.der 2>/dev/null
-	@echo "🔁 Patching tokenspeer public key (base64) into config.development.yaml..."
-	@grep -q 'BEGIN_TOKENS_PEER_PUB' config.development.yaml || { \
-		echo "❌ config.development.yaml is missing the 'BEGIN_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
-		exit 1; \
-	}
-	@grep -q 'END_TOKENS_PEER_PUB' config.development.yaml || { \
-		echo "❌ config.development.yaml is missing the 'END_TOKENS_PEER_PUB' marker — refusing to silently skip the patch."; \
-		exit 1; \
-	}
-	@PEER_PUB_B64=$$(base64 < certs/tokens_peer_public.der | tr -d '\n'); \
-		awk -v key="$$PEER_PUB_B64" ' \
-			/BEGIN_TOKENS_PEER_PUB/ {print; in_block=1; next} \
-			/END_TOKENS_PEER_PUB/   {printf "        value: \"%s\"\n", key; print; in_block=0; next} \
-			in_block {next} \
-			{print}' config.development.yaml > config.development.yaml.tmp \
-		&& mv config.development.yaml.tmp config.development.yaml
-	@echo "✅ Keys generated in certs/ and base64 patched into config.development.yaml"
+	@echo "✅ Keys generated in certs/"
 	@echo "   webhooksigning      : certs/webhook_signing_{public,private}.der"
 	@echo "   tokensour           : certs/tokens_our_{public,private}.der"
-	@echo "   tokenspeer          : certs/tokens_peer_private.der (private)"
-	@echo "                       : config.development.yaml between BEGIN_/END_TOKENS_PEER_PUB markers (public)"
+	@echo "   tokenspeer          : certs/tokens_peer_{public,private}.der"
 	@echo "   paymentssign-v1     : certs/payments_sign_v1_{public,private}.der"
 	@echo "   paymentsencrypt-v1  : certs/payments_encrypt_v1_{public,private}.der"
 
