@@ -188,7 +188,7 @@ func (s *series) writeStaircase(b *strings.Builder) {
 		maxSteps = max(maxSteps, len(st))
 	}
 	if len(runs) == 0 {
-		b.WriteString("No valid staircase rep in this series.\n\n")
+		b.WriteString("No staircase (" + scenarioStaircase + ") attempt recorded in this series.\n\n")
 		return
 	}
 	b.WriteString("Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, " +

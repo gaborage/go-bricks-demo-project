@@ -235,6 +235,7 @@ func TestPerRequestNeedsIdle(t *testing.T) {
 		"k6 summary missing for 3 valid rep(s)",
 		"insufficient reps (n=0 vs 0",
 		"insufficient reps (n=0 vs 3",
+		"No staircase (S5) attempt recorded in this series.",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report lacks %q", want)
