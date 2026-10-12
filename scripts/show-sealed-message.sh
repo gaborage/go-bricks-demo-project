@@ -231,10 +231,12 @@ echo
 echo "request body:"
 jq '.card.pan = "<sent verbatim; masked in this echo only>"' <<<"$PAYLOAD"
 
-AUTH_STATUS="$(curl -sS -o "$AUTH_RESPONSE_FILE" -w '%{http_code}' \
+# The body goes on stdin: as an argument the card would sit in curl's argv,
+# readable by any local user through ps(1).
+AUTH_STATUS="$(printf '%s' "$PAYLOAD" | curl -sS -o "$AUTH_RESPONSE_FILE" -w '%{http_code}' \
     -H 'content-type: application/json' \
     -X POST "$API_BASE/payments/authorize" \
-    --data-binary "$PAYLOAD" || true)"
+    --data-binary @- || true)"
 
 if [[ "$AUTH_STATUS" != 2* ]]; then
     echo "response body:" >&2
