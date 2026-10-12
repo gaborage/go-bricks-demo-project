@@ -496,6 +496,8 @@ curl "http://localhost:8080/api/v1/products?page=1&pageSize=10"
 
 The project includes k6 load testing scripts. Each products scenario is described in its script's header under `loadtests/`; [wiki/LOAD_TESTING.md](wiki/LOAD_TESTING.md) covers running them and the scenarios that need more than a header.
 
+Comparing go-bricks versions under identical load follows [wiki/PERF_VERSION_COMPARISON.md](wiki/PERF_VERSION_COMPARISON.md); `go run ./cmd/perf-report --series <dir> --out <dir>` turns a captured series into `runs.csv` and `REPORT.md`.
+
 **Quick start:**
 ```bash
 # Install k6
