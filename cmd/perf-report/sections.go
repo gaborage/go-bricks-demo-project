@@ -245,6 +245,8 @@ func kneeCell(stats []stepStat, knee int, hasSeries bool) string {
 		return na + " (no steps in perfMeta)"
 	case stats[0].buckets == 0:
 		return na + " (no Q18 minute inside step 1)"
+	case !hasBaseP95(&stats[0]):
+		return na + " (no server p95 in step 1)"
 	case knee < 0:
 		return "below the first step"
 	}
@@ -257,9 +259,11 @@ func (s *series) writeTelemetryNotes(b *strings.Builder) {
 	b.WriteString("## Telemetry comparability notes\n\n")
 	b.WriteString("- P1 comes from the k6 summary, so a change in what a version's telemetry emits cannot move it.\n")
 	b.WriteString("- NR latency percentiles come from histograms and are approximations.\n")
-	b.WriteString("- Per-request server metrics divide by Q2 `n` summed over route facets, after subtracting the label's " +
-		"idle level for the length of the NR window. That window is read back from the NR data (`n / rps`, else " +
-		"`cpu_s / cores`), and from windows.tsv minus the trim only when neither is present.\n")
+	b.WriteString("- Per-request server metrics divide by Q2 `n` summed over the route facets k6 calls, after subtracting " +
+		"the label's idle level for the length of the NR window. `" + simRouteMarker + "` routes are left out of that " +
+		"divisor: a relay request reaches its in-process peer as a second server request, so a version that changes how " +
+		"the peer is reached cannot move the per-request numbers. The window is read back from the NR data (`n / rps` " +
+		"over every facet, else `cpu_s / cores`), and from windows.tsv minus the trim only when neither is present.\n")
 	b.WriteString("- The NR vs k6 rate gap leaves out `" + simRouteMarker + "` routes, which k6 never calls directly. " +
 		"A rep beyond ±" + fixed(gapFlagPct, 0) + "% is flagged `nr-gap`; " + s.gapSummary() + "\n")
 	for _, n := range s.m.notes {

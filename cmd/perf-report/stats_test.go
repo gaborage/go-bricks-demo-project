@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	eps      = 1e-9
-	aliasP95 = "p95"
+	eps         = 1e-9
+	aliasP95    = "p95"
+	aliasMcores = "mcores"
+	// kneeNoBaseP95 is the knee cell when step 1 has no server p95 to scale from.
+	kneeNoBaseP95 = "n/a (no server p95 in step 1)"
 )
 
 func near(a, b float64) bool { return math.Abs(a-b) < eps }
@@ -233,6 +236,7 @@ func TestFindKnee(t *testing.T) {
 			steps: []stepStat{ok(50, 8), ok(100, 9), with(ok(150, 9), func(s *stepStat) { s.rps = nan })}, dropped: nan, want: 1},
 		{name: "a step without minutes fails", steps: []stepStat{ok(50, 8), {offered: 100, p95: nan}}, want: 0},
 		{name: "first step without p95", steps: []stepStat{{offered: 50, p95: nan}, ok(100, 9)}, want: -1},
+		{name: "first step p95 of 0 anchors nothing", steps: []stepStat{ok(50, 0), ok(100, 9)}, want: -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -278,7 +282,7 @@ func TestStepStatsAssignsWholeMinutes(t *testing.T) {
 	t0 := start.Unix()
 	rows := []map[string]any{
 		// 10:01:00-10:02:00 is inside step 1 [10:00:30, 10:02:30).
-		{fieldBegin: float64(t0 + 30), fieldEnd: float64(t0 + 90), fieldRPS: 25.0, aliasP95: 8.0, "mcores": 100.0},
+		{fieldBegin: float64(t0 + 30), fieldEnd: float64(t0 + 90), fieldRPS: 25.0, aliasP95: 8.0, aliasMcores: 100.0},
 		// A second facet of the same minute adds rps and keeps the worst p95.
 		{fieldBegin: float64(t0 + 30), fieldEnd: float64(t0 + 90), fieldRPS: 25.0, aliasP95: 9.0},
 		// 10:02:00-10:03:00 straddles the step boundary and is dropped.

@@ -118,7 +118,7 @@ func TestNRResultShapes(t *testing.T) {
 	}
 	// Two aliased queries under the account, read in alias order.
 	aliased := jsonDoc(nest(nrqlPath[:3], map[string]any{
-		"b": map[string]any{fieldResults: []any{map[string]any{"mcores": 2.0}}},
+		"b": map[string]any{fieldResults: []any{map[string]any{aliasMcores: 2.0}}},
 		"a": map[string]any{fieldResults: []any{map[string]any{fieldRPS: 1.0}}},
 	}))
 	rows := nrResults(aliased)
@@ -182,6 +182,68 @@ func TestReadK6ToleratesMissingMetrics(t *testing.T) {
 	}
 	if _, ok := r.vals[mK6P99]; ok {
 		t.Errorf("p99 present without p(99) in the summary")
+	}
+}
+
+// TestPerRequestLeavesOutSimulatorRoutes: a relay request reaches its
+// in-process peer as a second server request, so Q2 has a relay row and a
+// /__sim/ row of equal n. Per-request metrics divide by the relay n alone,
+// while the NR rate, n and the window keep both rows.
+func TestPerRequestLeavesOutSimulatorRoutes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, manifestFile), `{"labels":["one"]}`)
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	row := func(id, scenario string) string {
+		return strings.Join([]string{id, scenario, "1", "", start.Format(time.RFC3339),
+			start.Add(10 * time.Minute).Format(time.RFC3339), "0", "1", ""}, "\t")
+	}
+	writeFile(t, filepath.Join(dir, "one", windowsFile),
+		strings.Join([]string{windowsHead, row("one-idle-r1", "idle"), row("one-S3-r1", "S3")}, "\n")+"\n")
+	nr := func(query, id, rows string) {
+		writeFile(t, filepath.Join(dir, "one", "nr", query+"-"+id+".json"),
+			`{"data":{"actor":{"account":{"nrql":{"results":[`+rows+`]}}}}}`)
+	}
+	nr("Q7", "one-idle-r1", `{"cpu_s":9.6,"mcores":20}`)
+	nr("Q2", "one-S3-r1", `{"facet":["/api/v1/tokens/relay","POST"],"rps":10,"n":4800},`+
+		`{"facet":["/api/v1/__sim/peer/tokens","POST"],"rps":10,"n":4800}`)
+	nr("Q7", "one-S3-r1", `{"cpu_s":48,"mcores":100}`)
+	s, err := loadSeries(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := s.reps["one"][0]
+	// (1000 x 48 - 20 x 480) / 4800 = 8, not / 9600 = 4; the window is 9600 / 20 = 480 s.
+	if got := r.vals[mCPUPerReq]; !near(got, 8) {
+		t.Errorf("cpu_ms_per_req = %v, want 8 (relay n only)", got)
+	}
+	if !near(r.vals[mNRN], 9600) || !near(r.vals[mNRRPS], 20) || !near(r.vals[mWindow], 480) {
+		t.Errorf("nr_n %v, nr_rps %v, window %v; want 9600, 20 and 480 over every facet",
+			r.vals[mNRN], r.vals[mNRRPS], r.vals[mWindow])
+	}
+}
+
+// TestGapNeedsClientRate: a Q2 holding only simulator rows has no client rate,
+// so the NR-vs-k6 gap stays unavailable instead of reading as -100%.
+func TestGapNeedsClientRate(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, manifestFile), `{"labels":["one"]}`)
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	writeFile(t, filepath.Join(dir, "one", windowsFile), windowsHead+"\n"+strings.Join([]string{"one-S3-r1", "S3", "1", "",
+		start.Format(time.RFC3339), start.Add(10 * time.Minute).Format(time.RFC3339), "0", "1", ""}, "\t")+"\n")
+	writeFile(t, filepath.Join(dir, "one", "k6", "S3-r1.json"),
+		`{"metrics":{"http_reqs":{"values":{"count":6000,"rate":10}}}}`)
+	writeFile(t, filepath.Join(dir, "one", "nr", "Q2-one-S3-r1.json"),
+		`{"data":{"actor":{"account":{"nrql":{"results":[{"facet":["/api/v1/__sim/peer/tokens","POST"],"rps":10,"n":6000}]}}}}}`)
+	s, err := loadSeries(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := s.reps["one"][0]
+	if !near(r.vals[mK6RPS], 10) {
+		t.Fatalf("k6 rps = %v, want 10", r.vals[mK6RPS])
+	}
+	if got, ok := r.vals[mGap]; ok {
+		t.Errorf("gap = %v, want unavailable without a client rate", got)
 	}
 }
 

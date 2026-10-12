@@ -65,8 +65,9 @@ Any mismatch in these voids the rep or the session (see
    has 0 pending rows before every rep.
 9. **Shared dependencies.** At session start the database capacity is at its
    idle level, other tenants put negligible load on the database, the pods
-   next to the app use little CPU, and the telemetry pipeline reports no
-   integration errors.
+   next to the app use little CPU, and the telemetry pipeline drops no data
+   points on the metrics the report reads (see
+   [Abort criteria](#abort-criteria)).
 10. **Time.** The same weekday class and clock window in every session, away
     from scheduled scaling events.
 11. **Order.** The same session schedule, the same rep order, the same warm-up,
@@ -186,6 +187,28 @@ The drift between the two runs of the same binary is the series' noise floor.
 - **The runner's exit code** is 0 for a valid rep, 3 for a void one, 1 for an
   error and 2 for a usage error.
 
+### Capturing without a User key
+
+`scripts/perf-nrql.sh --print` needs no key. It renders every query for every
+window as `<id> TAB <run_id> TAB <nrql>` lines, with a grouped query shown as
+`<group>/<id>`. Any NerdGraph client can run them, for example a New Relic MCP
+server. perf-report reads only the files, so save each response under the name
+the script would have used:
+
+- **One query:** `nr/<id>-<run_id>.json` (`nr/<id>-session.json` for a session
+  query), holding `{"data":{"actor":{"account":{"nrql":{"results":[...]}}}}}`.
+- **A group, such as Q18:** one `nr/<group>-<run_id>.json` whose
+  `data.actor.account` holds one object per query id, each with a `results`
+  array: `{"data":{"actor":{"account":{"Q18a":{"results":[...]},"Q18b":{"results":[...]}}}}}`.
+
+perf-report reads `data.actor.account.nrql.results` when it is there, and
+otherwise every `results` array under `data`, in key order. The top level must
+be the NerdGraph body itself, so strip any wrapper a client puts around it, and
+wrap bare rows in the envelope above. A body with a top-level `errors` member,
+or with no rows, counts as missing. A faceted row may carry its facet values
+only in its `facet` array: perf-report reads `facet[0]` as the route and
+`facet[1]` as the method.
+
 ## perf-report
 
 ```bash
@@ -197,8 +220,8 @@ after each session adds that session's reps. It uses the standard library
 only, and the same files always produce the same bytes.
 
 - **Inputs.** Each rep's k6 summary, and the NR responses for Q2 (rate `rps`
-  and count `n` per route), Q3 (latency percentiles per route, and per method
-  when the query facets by it), Q7 (`cpu_s` and `mcores`), Q8 (`throttle`,
+  and count `n` per route), Q3 (`p50`, `p95` and `p99` in ms per route and
+  method), Q7 (`cpu_s` and `mcores`), Q8 (`throttle`,
   `ws_avg`, `ws_max`), Q9 (`bytes`, `objs`) and, for S5, Q18 (the per-minute
   series). A missing metric renders as `n/a`. A missing file, a NerdGraph
   error body or an empty result renders the same, and the validity log lists
@@ -206,8 +229,12 @@ only, and the same files always produce the same bytes.
   `http_req_duration{expected_response:true}` submetric is left out of the
   per-endpoint rows.
 - **CPU per request (P2)** is `1000 × (cpu_s − idle_cores × window_s) / n`,
-  with `n` summed over Q2's route facets and `idle_cores` from the label's
-  `idle` window. `window_s` is read back from the NR data (`n / rps`), and
+  with `n` summed over Q2's route facets except `/__sim/` routes, and
+  `idle_cores` from the label's `idle` window. A relay request reaches its
+  in-process peer simulator as a second server request, so leaving those rows
+  out keeps `n` at one per client request even if a version changes how the
+  peer is reached. `window_s` is read back from the NR data (`n / rps` over
+  every facet), and
   falls back to `cpu_s / cores` and then to the `windows.tsv` window minus
   `--trim` (default `1m`) on each side. Allocations per request use the same
   idle subtraction. A label without an idle level, and a value at or below 0
@@ -222,10 +249,15 @@ only, and the same files always produce the same bytes.
   `perfMeta.stepRampSeconds` (15 s when absent). Only the minutes that fall
   wholly inside a step count; ramp minutes count for no step. k6 reports dropped iterations only for the
   whole run, so when that total is above 0 a step counts as "nothing dropped"
-  only if NR saw at least 99% of its offered rate.
+  only if NR saw at least 99% of its offered rate. `TIMESERIES` zero-fills a
+  minute with no server data (`n` 0, `p95` 0); perf-report reads it as no
+  data, not as a 0 ms minute, and a first step with no server p95 leaves the
+  knee `n/a`. A container minute with no CPU point (Q18b `pts` 0, `mcores` 0)
+  is no data too, so a missed scrape does not lower the step's mean CPU.
 - **Not computed.** Stationarity, database capacity, neighbour and other-tenant
-  flags need data perf-report does not read. Leak slopes for the optional soak
-  are read from the raw files by hand.
+  flags need data perf-report does not read, and so does the Q17a
+  dropped-data-point rule: mark such a rep void in `windows.tsv`. Leak slopes
+  for the optional soak are read from the raw files by hand.
 
 ## Statistics
 
@@ -286,6 +318,7 @@ The watchdog enforces these, and deleting the k6 Jobs is the kill switch.
 | Broker memory above its limit, or a queue the app consumes keeps growing | Kill and void the rep. |
 | k6 sees a 429, an error rate above 2% (1% in the staircase), or a staircase p95 above 1000 ms | k6 aborts by itself. Void the rep. In the staircase the abort marks the knee, and the run is still read. |
 | Dropped iterations above 0, or an achieved rate more than 1% off target | Void the rep. |
-| Telemetry integration errors in the window, or the collector's memory 50% above its baseline | Void the rep: NR may have undercounted. |
+| Q17a shows a row with dropped data points (`dropped` above 0) that may hold a metric the report reads: `http.server.request.duration` (histogram), `go.memory.allocated` or `go.memory.allocations` (monotonic counters), `container_cpu_*` (counters) or `container_memory_working_set_bytes` (gauge) | Void the rep: NR undercounted. `metricName` lists at most three names per event, so it never clears a row alone. A DeltaConversion row names its one metric in the message: void only if that metric is one of these. A row for non-monotonic sums with delta temporality cannot hold any of them, by instrument type, so it does not void the rep; integration errors are account-wide, and another workload can emit that row throughout. Any other dropping row voids the rep. |
+| The collector's memory 50% above its baseline | Void the rep: NR may have undercounted. |
 | Wall clock past the planned session end | Stop. |
 | Fingerprint, service version or environment fingerprint mismatch | Do not start the session. |

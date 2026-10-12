@@ -102,6 +102,10 @@ func TestKneeCell(t *testing.T) {
 		{name: "steps unparsed", stats: nil, knee: -1, hasSeries: true, want: "n/a (no steps in perfMeta)"},
 		{name: "no minute in step 1", stats: []stepStat{{offered: 50, p95: nan}}, knee: -1, hasSeries: true,
 			want: "n/a (no Q18 minute inside step 1)"},
+		{name: "no server p95 in step 1", stats: []stepStat{{offered: 50, buckets: 3, p95: nan, mcores: 100}}, knee: -1,
+			hasSeries: true, want: kneeNoBaseP95},
+		{name: "step 1 p95 of 0", stats: []stepStat{{offered: 50, buckets: 3, p95: 0, mcores: 100}}, knee: -1,
+			hasSeries: true, want: kneeNoBaseP95},
 		{name: "first step fails", stats: []stepStat{passing}, knee: -1, hasSeries: true, want: "below the first step"},
 		{name: "knee", stats: []stepStat{passing}, knee: 0, hasSeries: true, want: "step 1: 50 rps offered, 50.0 achieved, 100 mcores"},
 	}

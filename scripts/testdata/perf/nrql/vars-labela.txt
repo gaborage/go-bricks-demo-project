@@ -1,1 +1,1 @@
-S=demo-service,V=v1.0.0-labela,ROUTE_PREFIX=/api/v1,NS=demo-ns,CONTAINER=demo-app,POD=demo-app-0,NODE=node-a,BROKER_NS=broker-ns,NR_NS=telemetry-ns,NR_COLLECTOR=otel-gateway,CNS=namespace,CCT=container,CPOD=pod,CNODE=node
+S=demo-service,V=v1.0.0-labela,ROUTE_PREFIX=/api/v1,NS=demo-ns,CONTAINER=demo-app,POD=demo-app-0,NODE=node-a,BROKER_NS=broker-ns,NR_NS=telemetry-ns,NR_COLLECTOR=otel-gateway,JOSE_METRIC=jose.operation.duration,CNS=namespace,CCT=container,CPOD=pod,CNODE=node

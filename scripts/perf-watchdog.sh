@@ -53,7 +53,7 @@
 # above): k6 429 / error-rate / p95 aborts (k6 thresholds), dropped iterations
 # and achieved rate (perf-k8s-run.sh gates), other-tenant database load
 # (Performance Insights capture), queue growth (broker management API),
-# New Relic integration errors and collector memory (perf-nrql.sh queries),
+# New Relic dropped data points and collector memory (perf-nrql.sh Q17a/Q17b),
 # and fingerprint mismatches (pre-session checks).
 #
 # --simulate <dir> replays fixtures instead of calling kubectl or aws, on a

@@ -172,7 +172,7 @@ the broad `part-of=k6-perf` selector, or a lookalike label, cannot reach a reset
 
 Run either subcommand with `--help` for its flags; all of them are required. The 429, error-rate and p95 aborts
 belong to k6 thresholds; dropped iterations and achieved rate to the runner gates. New
-Relic integration errors and collector memory belong to `perf-nrql.sh`. Other-tenant
+Relic dropped data points (`Q17a`) and collector memory belong to `perf-nrql.sh`. Other-tenant
 database load and queue growth are not visible through those read-only commands.
 
 `wait-idle` returns once the app pod's CPU (`kubectl top`) has stayed within
@@ -204,6 +204,19 @@ A failed request leaves `<id>-<run_id>.json.err` instead, and moves any earlier
 `.err`, so a result and an error never sit side by side.
 The queries of one `group:` go out as one request, each aliased by its id under
 `account`: `Q18-<run_id>.json` holds `Q18a` (per-minute `rps`, `n`, `p95`, `pct5xx`) and
-`Q18b` (per-minute `mcores`, `throttle`). Every row carries `beginTimeSeconds` and
-`endTimeSeconds`. Downstream readers rely on these aliases: `Q2` `rps`/`n`, `Q7`
-`cpu_s`/`mcores`, `Q8` `throttle`/`ws_avg`/`ws_max`, `Q9` `bytes`/`objs`.
+`Q18b` (per-minute `mcores`, `throttle`, `pts`). Every row carries `beginTimeSeconds` and
+`endTimeSeconds`. Downstream readers rely on these aliases: `Q2` `rps`/`n`, `Q3`
+`p50`/`p95`/`p99`, `Q7` `cpu_s`/`mcores`, `Q8` `throttle`/`ws_avg`/`ws_max`, `Q9`
+`bytes`/`objs`.
+
+**Capturing without a User key.** `--print` needs no key: it prints every rendered
+query as `<id> TAB <run_id> TAB <nrql>` (a grouped query as `<group>/<id>`). Any
+NerdGraph client can run them, for example a New Relic MCP server. Save each response
+as `<out>/<id>-<run_id>.json` in the envelope above, and a group as one
+`<out>/<group>-<run_id>.json` whose `data.actor.account` holds one object per query id,
+each with a `results` array (`{"data":{"actor":{"account":{"Q18a":{"results":[...]},"Q18b":{"results":[...]}}}}}`).
+The top level must be the NerdGraph body itself: strip any wrapper the client adds,
+and wrap bare rows in the envelope. A body with a top-level `errors` member, or with
+no rows, reads as missing. See
+[Capturing without a User key](../../wiki/PERF_VERSION_COMPARISON.md#capturing-without-a-user-key)
+for what perf-report reads from each file.

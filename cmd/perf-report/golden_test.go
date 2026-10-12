@@ -52,7 +52,8 @@ func extractSeries(t testing.TB) string {
 // label, a void rep re-run under the same run_id, a summary without p(99) or
 // dropped_iterations, a throttled rep that makes a P2 verdict
 // environment-limited, an nr-gap rep, a simulator route left out of the rate
-// gap, and a staircase with and without its Q18 series.
+// gap and the per-request divisor, Q3 rows in the per-quantile alias shape New
+// Relic returns, and a staircase with and without its Q18 series.
 func TestGolden(t *testing.T) {
 	out := t.TempDir()
 	if code := run([]string{flagSeries, extractSeries(t), flagOut, out}, io.Discard, os.Stderr); code != exitOK {

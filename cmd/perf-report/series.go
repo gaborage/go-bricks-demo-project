@@ -394,16 +394,23 @@ func readPerfMeta(doc jsonDoc) perfMeta {
 	return pm
 }
 
-// readNR derives the server-side metrics. Per-request values divide by Q2 n
-// summed across route facets, after subtracting the label's idle level.
+// readNR derives the server-side metrics. Per-request values divide by the
+// client request count, Q2 n summed across the route facets k6 calls (no
+// simulator routes), after subtracting the label's idle level. The total n and
+// rps over every facet stay the NR rate and the window's length.
 func (s *series) readNR(r *rep, nr map[string][]map[string]any) {
 	q2 := nr[inQ2]
 	n, okN := sumField(q2, fieldN)
 	rps, okRPS := sumField(q2, fieldRPS)
+	clientN, okClientN := clientSum(q2, fieldN)
 	r.set(mNRN, n, okN)
 	r.set(mNRRPS, rps, okRPS)
+	// The gap needs a client rate: a Q2 holding only simulator rows has none,
+	// and reading it as 0 would report a false -100% gap.
 	if k6, ok := r.vals[mK6RPS]; ok && okRPS && k6 > 0 {
-		r.set(mGap, (clientRPS(q2)-k6)/k6*100, true)
+		if clientRPS, okClient := clientSum(q2, fieldRPS); okClient {
+			r.set(mGap, (clientRPS-k6)/k6*100, true)
+		}
 	}
 	cpuS, okCPU := sumField(nr[inQ7], "cpu_s")
 	mcores, okM := sumField(nr[inQ7], "mcores")
@@ -413,16 +420,17 @@ func (s *series) readNR(r *rep, nr map[string][]map[string]any) {
 	r.set(mWindow, window, window > 0)
 	idle := s.idle[r.label]
 	r.set(mIdle, idle.mcores, true)
-	// perRequest subtracts the idle rate over the window, then divides by n.
-	// Without an idle rate there is nothing comparable to report, and a value
-	// at or below 0 means the idle level swamped the load, so both stay n/a.
-	// The float64 conversion stops the compiler fusing the multiply into the
-	// subtraction on some architectures, so every platform rounds alike.
+	// perRequest subtracts the idle rate over the window, then divides by the
+	// client request count. Without an idle rate there is nothing comparable
+	// to report, and a value at or below 0 means the idle level swamped the
+	// load, so both stay n/a. The float64 conversion stops the compiler fusing
+	// the multiply into the subtraction on some architectures, so every
+	// platform rounds alike.
 	perRequest := func(key string, total float64, ok bool, idlePerS float64) {
-		if !ok || !okN || n <= 0 || window <= 0 || math.IsNaN(idlePerS) {
+		if !ok || !okClientN || clientN <= 0 || window <= 0 || math.IsNaN(idlePerS) {
 			return
 		}
-		if v := (total - float64(idlePerS*window)) / n; v > 0 {
+		if v := (total - float64(idlePerS*window)) / clientN; v > 0 {
 			r.set(key, v, true)
 		} else {
 			r.nonPositive = append(r.nonPositive, key)
@@ -457,19 +465,22 @@ func readRoutes(r *rep, rows []map[string]any) {
 	}
 }
 
-// clientRPS is the Q2 rate without simulator routes: a relay request reaches
-// its in-process peer simulator as a second server request k6 never sent.
-func clientRPS(rows []map[string]any) float64 {
+// clientSum adds a Q2 field over the rows without simulator routes: a relay
+// request reaches its in-process peer simulator as a second server request k6
+// never sent. It returns false when no such row has the field.
+func clientSum(rows []map[string]any, key string) (float64, bool) {
 	var sum float64
+	found := false
 	for _, row := range rows {
 		if strings.Contains(routeOf(row), simRouteMarker) {
 			continue
 		}
-		if v, ok := asNum(row[fieldRPS]); ok {
+		if v, ok := asNum(row[key]); ok {
 			sum += v
+			found = true
 		}
 	}
-	return sum
+	return sum, found
 }
 
 // window is the length in seconds of the NR window the rep's sums cover. It is

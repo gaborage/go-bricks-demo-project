@@ -53,12 +53,12 @@ Descriptive only: these rows never get a verdict word. Band B is shown for scale
 | k6 p50 ms {endpoint:list_products} | 16.32 [15.88–16.76] n=3 | 16.54 [15.88–17.20] n=4 | +1.4% | 16.32 [15.88–16.76] n=3 | -1.3% | +0.0% | beta vs alpha: ±10.8%<br>gamma vs beta: ±16.0%<br>gamma vs alpha: ±10.8% | 0.0% |
 | k6 p95 ms {endpoint:list_products} | 36.26 [35.28–37.24] n=3 | 36.75 [35.28–38.22] n=4 | +1.4% | 36.26 [35.28–37.24] n=3 | -1.3% | +0.0% | beta vs alpha: ±10.8%<br>gamma vs beta: ±16.0%<br>gamma vs alpha: ±10.8% | 0.0% |
 | k6 p99 ms {endpoint:list_products} | 55.50 [54.00–57.00] n=3 | 56.25 [54.00–58.50] n=4 | +1.4% | 55.50 [54.00–57.00] n=3 | -1.3% | +0.0% | beta vs alpha: ±10.8%<br>gamma vs beta: ±16.0%<br>gamma vs alpha: ±10.8% | 0.0% |
-| NR p50 ms /api/v1/products | 7.50 [7.50–7.50] n=3 | 7.50 [7.50–7.50] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
-| NR p50 ms /api/v1/products/:id | 1.50 [1.50–1.50] n=3 | 1.50 [1.50–1.50] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
-| NR p95 ms /api/v1/products | 23.45 [23.40–23.50] n=3 | 23.73 [23.42–23.80] n=4 | +1.2% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
-| NR p95 ms /api/v1/products/:id | 6.45 [6.40–6.50] n=3 | 6.73 [6.42–6.80] n=4 | +4.3% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
-| NR p99 ms /api/v1/products | 40.00 [40.00–40.00] n=3 | 40.00 [40.00–40.00] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±10.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
-| NR p99 ms /api/v1/products/:id | 8.00 [8.00–8.00] n=3 | 8.00 [8.00–8.00] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±10.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p50 ms GET /api/v1/products | 7.50 [7.50–7.50] n=3 | 7.50 [7.50–7.50] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p50 ms GET /api/v1/products/:id | 1.50 [1.50–1.50] n=3 | 1.50 [1.50–1.50] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p95 ms GET /api/v1/products | 23.45 [23.40–23.50] n=3 | 23.73 [23.42–23.80] n=4 | +1.2% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p95 ms GET /api/v1/products/:id | 6.45 [6.40–6.50] n=3 | 6.73 [6.42–6.80] n=4 | +4.3% | n/a | n/a | n/a | beta vs alpha: ±5.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p99 ms GET /api/v1/products | 40.00 [40.00–40.00] n=3 | 40.00 [40.00–40.00] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±10.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| NR p99 ms GET /api/v1/products/:id | 8.00 [8.00–8.00] n=3 | 8.00 [8.00–8.00] n=4 | +0.0% | n/a | n/a | n/a | beta vs alpha: ±10.0%<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
 | error % | 0.000 [0.000–0.000] n=3 | 0.000 [0.000–0.000] n=4 | +0.000 pp | 0.000 [0.000–0.000] n=3 | +0.000 pp | +0.000 pp | — | — |
 | 429 responses | 0 [0–0] n=3 | 0 [0–0] n=4 | +0 | 0 [0–0] n=3 | +0 | +0 | — | — |
 | dropped iterations | 0 [0–0] n=3 | 0 [0–0] n=4 | +0 | 0 [0–0] n=3 | +0 | +0 | — | — |
@@ -97,6 +97,13 @@ Descriptive only: these rows never get a verdict word. Band B is shown for scale
 | error % | 0.000 [0.000–0.000] n=1 | n/a | n/a | n/a | n/a | n/a | — | — |
 | 429 responses | 0 [0–0] n=1 | n/a | n/a | n/a | n/a | n/a | — | — |
 | dropped iterations | 0 [0–0] n=1 | n/a | n/a | n/a | n/a | n/a | — | — |
+| CPU mcores (Q7) | 100 [100–100] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| CPU-ms per request | 4.000 [4.000–4.000] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| CPU throttled % | 0.20 [0.20–0.20] n=1 | n/a | n/a | n/a | n/a | n/a | — | — |
+| working set avg MiB | 62.0 [62.0–62.0] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| working set max MiB | 66.0 [66.0–66.0] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| alloc bytes per request | 12000 [12000–12000] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
+| allocs per request | 150.0 [150.0–150.0] n=1 | n/a | n/a | n/a | n/a | n/a | beta vs alpha: n/a<br>gamma vs beta: n/a<br>gamma vs alpha: n/a | n/a |
 
 ### S4 get-only
 
@@ -136,7 +143,7 @@ perf-report does not compute leak slopes: they need per-minute working-set and g
 
 - P1 comes from the k6 summary, so a change in what a version's telemetry emits cannot move it.
 - NR latency percentiles come from histograms and are approximations.
-- Per-request server metrics divide by Q2 `n` summed over route facets, after subtracting the label's idle level for the length of the NR window. That window is read back from the NR data (`n / rps`, else `cpu_s / cores`), and from windows.tsv minus the trim only when neither is present.
+- Per-request server metrics divide by Q2 `n` summed over the route facets k6 calls, after subtracting the label's idle level for the length of the NR window. `/__sim/` routes are left out of that divisor: a relay request reaches its in-process peer as a second server request, so a version that changes how the peer is reached cannot move the per-request numbers. The window is read back from the NR data (`n / rps` over every facet, else `cpu_s / cores`), and from windows.tsv minus the trim only when neither is present.
 - The NR vs k6 rate gap leaves out `/__sim/` routes, which k6 never calls directly. A rep beyond ±2% is flagged `nr-gap`; flagged: beta-S4-r1 2.67%.
 - Synthetic fixture: every number is made up to exercise the report.
 
@@ -149,7 +156,7 @@ Every attempted rep. Only valid reps enter the statistics; a superseded row was 
 | alpha-S4-r1 | 2026-01-06T19:14:00Z to 2026-01-06T19:24:00Z | 0 | 1 |  |  | 0.27 | n/a |
 | alpha-S1-r1 | 2026-01-06T19:30:00Z to 2026-01-06T19:40:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
 | alpha-S2-r1 | 2026-01-06T19:46:00Z to 2026-01-06T19:56:00Z | 0 | 1 |  |  | n/a | n/a |
-| alpha-S3-r1 | 2026-01-06T20:02:00Z to 2026-01-06T20:12:00Z | 0 | 1 |  |  | 0.50 | n/a |
+| alpha-S3-r1 | 2026-01-06T20:02:00Z to 2026-01-06T20:12:00Z | 0 | 1 |  |  | 0.50 | 0.20 |
 | alpha-S1-r2 | 2026-01-06T20:18:00Z to 2026-01-06T20:28:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
 | alpha-S2-r2 | 2026-01-06T20:34:00Z to 2026-01-06T20:44:00Z | 0 | 1 |  |  | n/a | n/a |
 | alpha-S4-r2 | 2026-01-06T20:50:00Z to 2026-01-06T21:00:00Z | 0 | 1 |  |  | n/a | n/a |
@@ -189,9 +196,9 @@ Data gaps and warnings:
 
 - alpha: Q2 missing for 6 valid rep(s): alpha-S2-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
 - alpha: Q3 missing for 8 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S3-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
-- alpha: Q7 missing for 8 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S3-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
-- alpha: Q8 missing for 8 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S3-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
-- alpha: Q9 missing for 8 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S3-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
+- alpha: Q7 missing for 7 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
+- alpha: Q8 missing for 7 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
+- alpha: Q9 missing for 7 valid rep(s): alpha-S4-r1, alpha-S2-r1, alpha-S2-r2, alpha-S4-r2, alpha-S2-r3, alpha-S4-r3, alpha-S5-r1.
 - beta: Q2 missing for 6 valid rep(s): beta-S2-r1, beta-S2-r2, beta-S2-r3, beta-S4-r3, beta-S4-r2, beta-S5-r1.
 - beta: Q3 missing for 7 valid rep(s): beta-S4-r1, beta-S2-r1, beta-S2-r2, beta-S2-r3, beta-S4-r3, beta-S4-r2, beta-S5-r1.
 - beta: Q7 missing for 7 valid rep(s): beta-S4-r1, beta-S2-r1, beta-S2-r2, beta-S2-r3, beta-S4-r3, beta-S4-r2, beta-S5-r1.
