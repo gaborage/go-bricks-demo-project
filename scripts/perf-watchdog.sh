@@ -18,8 +18,11 @@
 # It kills load Jobs only. Pass the load-generator selector,
 #   --job-selector app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator
 # so a products reset Job (component=reset) is neither counted as running load
-# nor deleted mid-reset. part-of=k6-perf alone matches every perf Job and is for
-# session cleanup, not for this flag.
+# nor deleted mid-reset. `watch` refuses to start (exit 2) unless one
+# comma-separated term of --job-selector is exactly
+# app.kubernetes.io/component=load-generator (`==` and surrounding spaces are
+# accepted). part-of=k6-perf alone matches every perf Job and is for session
+# cleanup, never for this flag.
 #
 # VOID line format (perf-k8s-run.sh voids any rep whose window contains one):
 #   VOID <ISO-8601 UTC> rule=<rule> scope=<rep|session> action=<kill|stop> detail=<text>
@@ -376,8 +379,8 @@ cmd_watch() {
         [[ -n "${!f}" ]] || usage_err "watch: every flag is required (missing --$flag)"
     done
     [[ "$W_SEL" == *=* ]] || usage_err "--job-selector must be a label selector (key=value)"
-    [[ "$W_SEL" == *app.kubernetes.io/component=load-generator* ]] \
-        || log "notice: --job-selector does not name app.kubernetes.io/component=load-generator; it may also count and kill reset Jobs"
+    has_load_term "$W_SEL" \
+        || usage_err "--job-selector must contain the term app.kubernetes.io/component=load-generator, so only load Jobs are counted and killed (e.g. app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator)"
     [[ "$W_ACU_CEIL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage_err "--acu-ceiling must be a number"
     [[ "$W_BMEM" =~ ^[0-9]+$ ]] || usage_err "--broker-mem-mi must be a whole number"
     [[ "$W_CPU_PCT" =~ ^[0-9]+$ ]] || usage_err "--node-cpu-pct must be a whole number"
@@ -497,6 +500,22 @@ cmd_watch() {
         clock_sleep "$W_INTERVAL"
     done
     return 0
+}
+
+# has_load_term SELECTOR -> 0 when one comma-separated term is the equality
+# app.kubernetes.io/component=load-generator ("==" and surrounding spaces allowed).
+# A lookalike key or value, or a set-based or != term, does not count.
+has_load_term() {
+    local selector="$1" term key value
+    while IFS= read -r term; do
+        if [[ "$term" == *==* ]]; then key="${term%%==*}"; value="${term#*==}"
+        elif [[ "$term" == *=* ]]; then key="${term%%=*}"; value="${term#*=}"
+        else continue; fi
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$key" == "app.kubernetes.io/component" && "$value" == "load-generator" ]]; then return 0; fi
+    done < <(printf '%s\n' "$selector" | tr ',' '\n')
+    return 1
 }
 
 FIRED=()

@@ -165,7 +165,10 @@ The runner voids any rep whose window contains such a line. The watchdog enforce
 | `app.kubernetes.io/part-of=k6-perf` | every perf Job and ConfigMap, reset included | session cleanup: `kubectl delete job,configmap -l app.kubernetes.io/part-of=k6-perf` |
 
 A reset Job carries `component=reset`, so the watchdog neither counts it as running load
-nor deletes it. A rule that fires during a reset still writes its VOID line.
+nor deletes it. A rule that fires during a reset still writes its VOID line. `watch`
+refuses to start (exit 2) unless one comma-separated term of `--job-selector` is
+exactly `app.kubernetes.io/component=load-generator` (`==` and spaces are accepted), so
+the broad `part-of=k6-perf` selector, or a lookalike label, cannot reach a reset Job.
 
 Run either subcommand with `--help` for its flags; all of them are required. The 429, error-rate and p95 aborts
 belong to k6 thresholds; dropped iterations and achieved rate to the runner gates. New

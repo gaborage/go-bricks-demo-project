@@ -504,6 +504,32 @@ else
     bad "watchdog load-and-reset"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"
 fi
 
+# --job-selector must carry the exact load-generator equality term.
+selector_case() { # NAME WANT_RC SELECTOR
+    local name="$1" want_rc="$2" selector="$3" rc=0
+    local dir="$WORK/watch-selector-$name"
+    mkdir -p "$dir/sim"
+    cp "$TD/watchdog/base.json" "$dir/sim/base.json"
+    cp "$TD/watchdog/cases/healthy.jsonl" "$dir/sim/samples.jsonl"
+    PATH="$FORBIDDEN_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test \
+        --deployment demo-app --pod demo-app-0 --node node-a --job-selector "$selector" \
+        --aurora-cluster db-test --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 \
+        --node-cpu-pct 90 --interval 15 --session-end 2026-10-14T06:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
+        --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || rc=$?
+    if [[ $rc -ne $want_rc ]]; then bad "watchdog selector $name: exit $rc, want $want_rc"; show "$dir/stderr"; return 0; fi
+    if [[ $want_rc -eq 2 ]] && ! grep -q 'must contain the term app.kubernetes.io/component=load-generator' "$dir/stderr"; then
+        bad "watchdog selector $name: the usage error does not name the required term"; return 0
+    fi
+    ok "watchdog selector $name -> exit $rc"
+    return 0
+}
+selector_case broad-part-of 2 "app.kubernetes.io/part-of=k6-perf"
+selector_case lookalike-key 2 "app.kubernetes.io/part-of=k6-perf,x.app.kubernetes.io/component=load-generator"
+selector_case lookalike-value 2 "app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator-x"
+selector_case not-equal 2 "app.kubernetes.io/component!=load-generator"
+selector_case documented 0 "$LOAD_SEL"
+selector_case double-equals-spaces 0 "app.kubernetes.io/part-of=k6-perf, app.kubernetes.io/component == load-generator"
+
 usage_rc=0
 PATH="$FORBIDDEN_PATH" "$TEST_BASH" scripts/perf-watchdog.sh watch --context c --namespace n >/dev/null 2>"$WORK/watch-usage.err" || usage_rc=$?
 if [[ $usage_rc -eq 2 ]] && grep -q 'every flag is required' "$WORK/watch-usage.err"; then
