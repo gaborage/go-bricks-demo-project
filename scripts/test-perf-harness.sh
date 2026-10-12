@@ -115,7 +115,7 @@ runner_case() {
     if [[ "$RC" -ne "$want_rc" ]]; then bad "runner $name: exit $RC, want $want_rc"; show "$dir/stderr"; return 0; fi
     if [[ "$want_rc" -eq 0 || "$want_rc" -eq 3 ]]; then
         row="$(last_row "$dir/out/windows.tsv")"
-        reason="$(printf '%s' "$row" | awk -F'\t' '{ print $9 }')"
+        reason="$(printf '%s' "$row" | awk -F'\t' -v col=9 '{ print $col }')"
         if [[ "$reason" != "$want_reason" ]]; then bad "runner $name: reason '$reason', want '$want_reason'"; show "$dir/stderr"; return 0; fi
     fi
     if grep -q ' delete ' "$dir/kubectl.calls" 2>/dev/null; then bad "runner $name: the runner deleted something"; return 0; fi
@@ -130,6 +130,8 @@ runner_case 429              429.log              3 "rate;429"            facts-
 runner_case rate             rate.log             3 "rate"                facts-clean.env ""
 runner_case 5xx-submetric    5xx.log              3 "5xx"                 facts-clean.env ""
 runner_case 5xx-fallback     failed-fallback.log  3 "5xx"                 facts-clean.env ""
+runner_case 5xx-counter      5xx-counter.log      3 "5xx"                 facts-clean.env ""
+runner_case 4xx-only         4xx-only.log         0 ""                    facts-clean.env ""
 runner_case missing-marker   missing-marker.log   3 "missing-summary"     facts-clean.env ""
 runner_case wrong-run-id     wrong-runid.log      3 "missing-summary"     facts-clean.env ""
 runner_case slo-threshold    slo-threshold.log    0 ""                    facts-clean.env ""
@@ -138,6 +140,15 @@ runner_case void-outside     valid.log            0 ""                    facts-
 runner_case cluster-facts    valid.log            3 "pod;node;k6cpu;acu"  facts-dirty.env ""
 JOB_STATE=Deleted runner_case killed-job killed.log 3 "void;missing-summary" facts-clean.env void-inside.log
 FAKE_PODS_JSON="$TD/runner/pods.json" runner_case live-facts valid.log 0 "" "" ""
+
+if grep -q 'gate 5xx: 120 of 90000 requests (perf_http_5xx)' "$WORK/runner-5xx-counter/stderr" \
+    && ! grep -q 'fell back' "$WORK/runner-5xx-counter/stderr" \
+    && grep -q 'warning: 5xx gate fell back to http_req_failed' "$WORK/runner-5xx-fallback/stderr" \
+    && ! grep -q 'fell back' "$WORK/runner-4xx-only/stderr"; then
+    ok "runner 5xx source order: perf_http_5xx, then http_reqs{status:5NN}, then http_req_failed with a warning"
+else
+    bad "runner 5xx source order"; show "$WORK/runner-5xx-counter/stderr"
+fi
 
 # The valid run's row, summary and env wiring.
 dir="$WORK/runner-valid"

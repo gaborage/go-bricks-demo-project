@@ -178,7 +178,7 @@ cmd_wait_idle() {
             out=""; err="$(head -c 300 "$errf")"; err="${err:-kubectl top pod failed}"
         fi
         taken=$((taken + 1))
-        m="$(printf '%s\n' "$out" | awk 'NF >= 2 { c = $2; if (c ~ /m$/) { sub(/m$/, "", c); printf "%d", c } else if (c ~ /^[0-9.]+$/) printf "%d", c * 1000; exit }')"
+        m="$(printf '%s\n' "$out" | awk -v col=2 'NF >= col { c = $col; if (c ~ /m$/) { sub(/m$/, "", c); printf "%d", c } else if (c ~ /^[0-9.]+$/) printf "%d", c * 1000; exit }')"
         if [[ -z "$m" ]]; then
             case "$err" in
                 *"Metrics API not available"*|*metrics.k8s.io*)

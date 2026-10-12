@@ -34,9 +34,10 @@
 #   rate             iterations / duration more than 1% off --rate, or
 #                    perfMeta.rate differs from --rate (skipped for a PERF_STEPS staircase)
 #   429              http_reqs{status:429} > 0, or the submetric is absent
-#   5xx              5xx responses >= 0.1% of http_reqs, counted from any
-#                    http_reqs{status:5NN} submetrics. Without one, http_req_failed
-#                    is used as an upper bound (it also counts 4xx and network errors).
+#   5xx              5xx responses >= 0.1% of http_reqs, counted from the suite's
+#                    perf_http_5xx counter; without it, from any http_reqs{status:5NN}
+#                    submetrics; only then from http_req_failed, an upper bound that
+#                    also counts 4xx and network errors (logged as a warning).
 #   void             a VOID line in --void-log (default <out>/void.log) inside
 #                    [warm or run start, run end or now]
 #   pod / node       app pod replaced, restarted or more than one / node changed,
@@ -276,7 +277,7 @@ void_in_window() {
     fi
     while IFS= read -r line; do
         [[ "$line" == "VOID "* ]] || continue
-        ts="$(printf '%s\n' "$line" | awk '{ print $2 }')"
+        ts="$(printf '%s\n' "$line" | awk -v col=2 '{ print $col }')"
         epoch="$(iso_to_epoch "$ts")"
         [[ -n "$epoch" ]] || continue
         if ((epoch >= start && epoch <= end)); then
@@ -426,8 +427,8 @@ K6_CPU_MAX="" JOB_STATE=""
 sample_k6_cpu() { # JOB -> raises K6_CPU_MAX from `kubectl top` (no-op without metrics-server)
     local job="$1" out m
     out="$(kc top pod -l "job-name=$job" --containers --no-headers 2>/dev/null)" || return 0
-    m="$(printf '%s\n' "$out" | awk '
-        { c = $3; if (c ~ /m$/) { sub(/m$/, "", c); v = c + 0 } else if (c ~ /^[0-9.]+$/) { v = c * 1000 } else next
+    m="$(printf '%s\n' "$out" | awk -v col=3 '
+        { c = $col; if (c ~ /m$/) { sub(/m$/, "", c); v = c + 0 } else if (c ~ /^[0-9.]+$/) { v = c * 1000 } else next
           if (v > max) max = v; seen = 1 }
         END { if (seen) printf "%d", max }')"
     [[ -n "$m" ]] || return 0
@@ -580,8 +581,8 @@ evaluate_k6() {
         G_MISSING=1; return 0
     fi
     # grep, not awk: the summary is one very long line.
-    begin="$(grep -n -x -F -e '---PERF-SUMMARY-BEGIN---' "$log_file" | cut -d: -f1 | awk -v s="$start_line" '$1 > s' || true)"
-    end="$(grep -n -x -F -e '---PERF-SUMMARY-END---' "$log_file" | cut -d: -f1 | awk -v s="$start_line" '$1 > s' || true)"
+    begin="$(grep -n -x -F -e '---PERF-SUMMARY-BEGIN---' "$log_file" | cut -d: -f1 | awk -v s="$start_line" -v col=1 '$col > s' || true)"
+    end="$(grep -n -x -F -e '---PERF-SUMMARY-END---' "$log_file" | cut -d: -f1 | awk -v s="$start_line" -v col=1 '$col > s' || true)"
     n_begin="$(printf '%s' "$begin" | grep -c . || true)"
     n_end="$(printf '%s' "$end" | grep -c . || true)"
     if [[ "$n_begin" -ne 1 || "$n_end" -ne 1 ]] || [[ "$end" -ne $((begin + 2)) ]]; then
@@ -604,9 +605,9 @@ evaluate_k6() {
         [ cnt("dropped_iterations"), cnt("iterations"), cnt("http_reqs"), cnt("http_reqs{status:429}"),
           ([.metrics | to_entries[] | select(.key | test("^http_reqs\\{status:5[0-9][0-9]\\}$")) | .value.values.count // 0]
             | if length > 0 then add else "absent" end),
-          (.metrics.http_req_failed.values.passes // "absent"),
+          (.metrics.http_req_failed.values.passes // "absent"), cnt("perf_http_5xx"),
           (.perfMeta.runId // "absent"), (.perfMeta.rate // "absent") ] | @tsv' "$json_file")"
-    IFS=$'\t' read -r dropped iters reqs n429 n5xx failed meta_run meta_rate <<<"$fields"
+    IFS=$'\t' read -r dropped iters reqs n429 n5xx failed counter5xx meta_run meta_rate <<<"$fields"
 
     if [[ "$meta_run" != "$run_id" ]]; then
         log "gate missing-summary: perfMeta.runId is '$meta_run', this rep is '$run_id'"
@@ -629,8 +630,14 @@ evaluate_k6() {
     if [[ "$reqs" == absent ]] || ! fgt "$reqs" 0; then
         log "notice: 5xx gate not evaluated (no http_reqs)"
     else
-        local bad="$n5xx" source="http_reqs{status:5NN}"
-        if [[ "$bad" == absent ]]; then bad="$failed"; source="http_req_failed, an upper bound that also counts 4xx"; fi
+        # Sources in order: the suite's perf_http_5xx counter, any http_reqs{status:5NN}
+        # submetrics, and only then http_req_failed, which also counts 4xx.
+        local bad="$counter5xx" source="perf_http_5xx"
+        if [[ "$bad" == absent ]]; then bad="$n5xx"; source="http_reqs{status:5NN}"; fi
+        if [[ "$bad" == absent && "$failed" != absent ]]; then
+            bad="$failed"; source="http_req_failed"
+            log "warning: 5xx gate fell back to http_req_failed, which also counts 4xx and network errors (no perf_http_5xx in the summary)"
+        fi
         if [[ "$bad" == absent ]]; then
             log "notice: 5xx gate not evaluated (no 5xx submetric and no http_req_failed)"
         elif fge "$(awk -v b="$bad" -v r="$reqs" 'BEGIN { printf "%.6f", b * 100 / r }')" "$MAX_5XX_PCT"; then

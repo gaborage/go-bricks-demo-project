@@ -112,6 +112,12 @@ a `perfMeta` block. The runner writes:
 missing (no `APP_SELECTOR`, no metrics-server, no `ACU_WARM`) is logged as not
 evaluated, and does not void the rep.
 
+The `5xx` gate voids a rep at 0.1% of `http_reqs` or more. It reads the 5xx count from
+the suite's `perf_http_5xx` counter, which the k6 scripts add whenever `PERF_RATE` or
+`PERF_STEPS` is set. Without that counter it sums any `http_reqs{status:5NN}`
+submetrics. Only when neither is present does it fall back to `http_req_failed`, and
+it logs a warning, because that count also includes 4xx responses and network errors.
+
 **Idle window.** Record one per label, with no load running, before the measured reps:
 `--kind idle --label <label> --rep 0 --duration 10m` waits through the window and writes
 the row `<label>-idle-r0` with scenario `idle` and its `run_start`/`run_end`. No Job
