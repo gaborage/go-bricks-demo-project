@@ -14,12 +14,14 @@
 // prints a request or response body. Failures report the HTTP status plus the
 // envelope's error.code (or k6's transport error) and nothing else.
 
-import http from 'k6/http';
 import type { RefinedResponse, ResponseType } from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
+// `http` is config.ts's perfHttp: the k6/http calls, plus the perf_http_5xx
+// count under PERF_RATE or PERF_STEPS.
 import {
+  perfHttp as http,
   config,
   getURL,
   headers,

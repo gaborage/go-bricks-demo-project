@@ -3,6 +3,9 @@
 
 import { sleep } from 'k6';
 import crypto from 'k6/crypto';
+import http from 'k6/http';
+import type { RefinedParams, RefinedResponse, RequestBody, ResponseType } from 'k6/http';
+import { Counter } from 'k6/metrics';
 import type { TestConfig, LoadProfile, SampleProduct, Headers } from './types/index.ts';
 import type { Options, Scenario, Threshold } from 'k6/options';
 
@@ -385,6 +388,10 @@ export function maybeSleep(seconds: number, controlled: boolean): void {
 // With PERF_RATE or PERF_STEPS set, dropped_iterations and http_reqs{status:429}
 // carry a count<1 threshold, so both always appear in the summary data (k6 omits
 // a metric that recorded nothing) and either one fails the run's thresholds.
+// In that mode the perf_http_5xx counter also counts every response with a
+// status of 500 or above, made through perfHttp below, and carries a
+// count>=0 threshold so it appears even at 0. A runner judges server errors
+// from it: http_req_failed also counts the 404s products-crud.ts accepts.
 
 /** A boolean knob: unset, 0 or false is off; 1 or true is on; anything else throws. */
 function perfFlag(name: string): boolean {
@@ -456,6 +463,8 @@ function perfThresholds(): Record<string, Threshold[]> {
   const controlled = positiveIntOr(__ENV.PERF_RATE, 0) > 0 || perfSteps() !== null;
   if (controlled) {
     extra['dropped_iterations'] = ['count<1'];
+    // Never fails: it only keeps the counter in the summary at 0.
+    extra[PERF_HTTP_5XX] = ['count>=0'];
   }
   if (perfFlag('PERF_ABORT_ON_429')) {
     extra['http_reqs{status:429}'] = [abortThreshold('count<1')];
@@ -472,6 +481,62 @@ function perfThresholds(): Record<string, Threshold[]> {
   }
   return extra;
 }
+
+/** Responses with a status of 500 or above, counted under PERF_RATE or PERF_STEPS. */
+export const PERF_HTTP_5XX = 'perf_http_5xx';
+
+// Registered only under a controlled load (PERF_RATE or PERF_STEPS set, the
+// same condition that adds its threshold), so a default run records no new
+// metric. Created here, at module scope, because k6 only allows custom
+// metrics in the init context.
+const serverErrors: Counter | null =
+  positiveIntOr(__ENV.PERF_RATE, 0) > 0 || (__ENV.PERF_STEPS || '').trim() !== ''
+    ? new Counter(PERF_HTTP_5XX)
+    : null;
+
+function countServerError<RT extends ResponseType | undefined>(response: RefinedResponse<RT>): RefinedResponse<RT> {
+  if (serverErrors !== null && response.status >= 500) {
+    serverErrors.add(1);
+  }
+  return response;
+}
+
+/**
+ * k6/http's get, post, put and del, plus expectedStatuses, with every response
+ * counted into perf_http_5xx when that counter is registered. Otherwise each
+ * call is exactly the k6/http call. The perf-aware scripts import it as
+ * `http`, so no request site changes.
+ */
+export const perfHttp = {
+  get<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.get>[0],
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.get(url, params));
+  },
+  post<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.post>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.post(url, body, params));
+  },
+  put<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.put>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.put(url, body, params));
+  },
+  del<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.del>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.del(url, body, params));
+  },
+  expectedStatuses: http.expectedStatuses,
+};
 
 /**
  * A script's options plus whatever the perf knobs add: their thresholds,

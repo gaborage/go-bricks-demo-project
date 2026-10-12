@@ -20,11 +20,13 @@
 // see config.ts. Gets pick seed ids only with PERF_SEED_ROWS set, which needs
 // the seed from scripts/perf-reset-products.sh in the database.
 
-import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 import type { Options } from 'k6/options';
+// `http` is config.ts's perfHttp: the k6/http calls, plus the perf_http_5xx
+// count under PERF_RATE or PERF_STEPS.
 import {
+  perfHttp as http,
   config,
   getURL,
   getRandomPage,
