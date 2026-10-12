@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "perf-reset-20261014t000000z",
+        "labels": {"app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "reset"}
+      },
+      "status": {"active": 1}
+    }
+  ]
+}

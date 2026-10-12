@@ -15,6 +15,12 @@
 # --void-log. Every parameter is a required flag: nothing is read from the
 # environment, so a session's guard rails are all on its command line.
 #
+# It kills load Jobs only. Pass the load-generator selector,
+#   --job-selector app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator
+# so a products reset Job (component=reset) is neither counted as running load
+# nor deleted mid-reset. part-of=k6-perf alone matches every perf Job and is for
+# session cleanup, not for this flag.
+#
 # VOID line format (perf-k8s-run.sh voids any rep whose window contains one):
 #   VOID <ISO-8601 UTC> rule=<rule> scope=<rep|session> action=<kill|stop> detail=<text>
 #
@@ -370,6 +376,8 @@ cmd_watch() {
         [[ -n "${!f}" ]] || usage_err "watch: every flag is required (missing --$flag)"
     done
     [[ "$W_SEL" == *=* ]] || usage_err "--job-selector must be a label selector (key=value)"
+    [[ "$W_SEL" == *app.kubernetes.io/component=load-generator* ]] \
+        || log "notice: --job-selector does not name app.kubernetes.io/component=load-generator; it may also count and kill reset Jobs"
     [[ "$W_ACU_CEIL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage_err "--acu-ceiling must be a number"
     [[ "$W_BMEM" =~ ^[0-9]+$ ]] || usage_err "--broker-mem-mi must be a whole number"
     [[ "$W_CPU_PCT" =~ ^[0-9]+$ ]] || usage_err "--node-cpu-pct must be a whole number"

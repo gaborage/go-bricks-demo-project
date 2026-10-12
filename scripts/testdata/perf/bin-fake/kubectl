@@ -8,6 +8,9 @@
 #   FAKE_WATCH_BASE  a watchdog sample (testdata/perf/watchdog/base.json): serves
 #                    the watchdog's live reads and accepts its `delete job`
 #   FAKE_WATCH_POD_NOTFOUND=1  answer `get pod` with NotFound
+#   FAKE_WATCH_JOBS  a job list served instead of base.json's .jobs; `get jobs`
+#                    and `delete job` apply the -l equality selector to it, and
+#                    every deleted job name is appended to $FAKE_DIR/deleted.jobs
 set -euo pipefail
 : "${FAKE_DIR:?FAKE_DIR must be set by the test runner}"
 printf '%s\n' "$*" >>"$FAKE_DIR/kubectl.calls"
@@ -23,6 +26,20 @@ done
 verb="${args[$i]:-}"
 rest=" ${args[*]:$((i + 1))} "
 
+selector=""
+for ((k = i + 1; k < ${#args[@]}; k++)); do
+    if [[ "${args[$k]}" == -l ]]; then selector="${args[$((k + 1))]:-}"; fi
+done
+
+# jobs_matching -> the job list, filtered by the -l equality selector
+jobs_matching() {
+    local src
+    if [[ -n "${FAKE_WATCH_JOBS:-}" ]]; then src="$(cat "$FAKE_WATCH_JOBS")"; else src="$(jq '.jobs' "$FAKE_WATCH_BASE")"; fi
+    printf '%s' "$src" | jq --arg sel "$selector" '($sel | split(",") | map(split("="))) as $req
+        | .items |= map(select(. as $j | all($req[]; ($j.metadata.labels[.[0]] // "") == .[1])))'
+    return 0
+}
+
 if [[ -n "${FAKE_WATCH_BASE:-}" ]]; then
     case "$verb:$rest" in
         "get: deployment "*) jq '.deploy' "$FAKE_WATCH_BASE" ;;
@@ -34,10 +51,14 @@ if [[ -n "${FAKE_WATCH_BASE:-}" ]]; then
             jq '.pod' "$FAKE_WATCH_BASE" ;;
         "get: node "*) jq '.node' "$FAKE_WATCH_BASE" ;;
         "get: events "*) jq '.events' "$FAKE_WATCH_BASE" ;;
-        "get: jobs "*) jq '.jobs' "$FAKE_WATCH_BASE" ;;
+        "get: jobs "*) jobs_matching ;;
         "top: node "*) jq -r '.top_node' "$FAKE_WATCH_BASE" ;;
         "top: pod "*) jq -r '.top_broker' "$FAKE_WATCH_BASE" ;;
-        "delete: job -l "*) echo 'job.batch "k6-labela-s4-r1-1014000000" deleted (fake)' ;;
+        "delete: job -l "*)
+            jobs_matching | jq -r '.items[].metadata.name' | while IFS= read -r name; do
+                echo "job.batch \"$name\" deleted (fake)"
+                echo "$name" >>"$FAKE_DIR/deleted.jobs"
+            done ;;
         *) echo "fake kubectl (watch): unexpected '$verb$rest'" >&2; exit 97 ;;
     esac
     exit 0

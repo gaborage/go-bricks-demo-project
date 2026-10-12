@@ -21,6 +21,13 @@
 #                  loadtests/types/*.ts, named k6-scripts-<ref> and
 #                  k6-types-<ref>; prints a sha256 manifest of every file.
 #
+# Labels. Every Job and ConfigMap the runner creates carries
+# app.kubernetes.io/part-of=k6-perf, the cleanup selector for all perf objects.
+# The k6 Job adds app.kubernetes.io/component=load-generator and the reset Job
+# app.kubernetes.io/component=reset, so the watchdog selector
+#   app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator
+# kills load Jobs only.
+#
 # Results under --out:
 #   <scenario>-r<n>.log          full Job log
 #   k6/<scenario>-r<n>.json      the summary line between the ---PERF-SUMMARY-*--- markers
@@ -895,7 +902,7 @@ run_reset() {
         sql_cm="$(jq -cn --arg n "$SQL_CONFIGMAP" --arg ns "$NS" --arg sql "$sql" '{
             apiVersion: "v1", kind: "ConfigMap",
             metadata: { name: $n, namespace: $ns, labels: {
-                "app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "data-reset" } },
+                "app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "reset" } },
             data: { "reset.sql": $sql } }')"
     fi
     job="$(render "$PSQL_TEMPLATE" "$PSQL_TEMPLATE_VARS")"

@@ -34,6 +34,8 @@ export KUBECONFIG=/dev/null AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FIL
 unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN NEW_RELIC_ACCOUNT_ID PERF_NRQL_VARS || true
 FAKE_PATH="$TD/bin-fake:$TD/bin-forbidden:$PATH"
 FORBIDDEN_PATH="$TD/bin-forbidden:$PATH"
+# The watchdog's selector: load Jobs only, never the reset Job (component=reset).
+LOAD_SEL="app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator"
 ENV_EXAMPLE="$REPO_ROOT/loadtests/k8s/.env.example"
 HAVE_RUBY=0
 command -v ruby >/dev/null 2>&1 && HAVE_RUBY=1
@@ -315,6 +317,8 @@ else
             and $j.spec.activeDeadlineSeconds == 450 and $j.spec.ttlSecondsAfterFinished == 86400
             and $j.metadata.labels["app.kubernetes.io/part-of"] == "k6-perf"
             and $j.spec.template.metadata.labels["app.kubernetes.io/part-of"] == "k6-perf"
+            and $j.metadata.labels["app.kubernetes.io/component"] == "load-generator"
+            and $j.spec.template.metadata.labels["app.kubernetes.io/component"] == "load-generator"
             and $j.spec.template.metadata.annotations["karpenter.sh/do-not-disrupt"] == "true"
             and $c.resources.requests.cpu == "1" and $c.resources.requests.memory == "512Mi"
             and $c.resources.limits.cpu == "2" and $c.resources.limits.memory == "1Gi"
@@ -350,6 +354,10 @@ elif [[ $HAVE_RUBY -eq 1 ]]; then
         | $cm.kind == "ConfigMap" and ($cm.data["reset.sql"] | test("perf-reset stub"))
         and $j.kind == "Job" and $j.spec.backoffLimit == 0
         and $c.envFrom[0].secretRef.name == "go-bricks-demo-project-db"
+        and $j.metadata.labels["app.kubernetes.io/part-of"] == "k6-perf"
+        and $j.metadata.labels["app.kubernetes.io/component"] == "reset"
+        and $j.spec.template.metadata.labels["app.kubernetes.io/component"] == "reset"
+        and $cm.metadata.labels["app.kubernetes.io/component"] == "reset"
         and $e.PGHOST == "$(DATABASE_HOST)" and $e.PGPASSWORD == "$(DATABASE_PASSWORD)"
         and $e.PGSSLMODE == "verify-full" and $e.PGSSLROOTCERT == "/etc/perf-reset/ca/ca-bundle.pem"
         and ([$p.volumes[] | .configMap.name // empty] == [$cm.metadata.name, "db-ca-bundle"])
@@ -413,7 +421,7 @@ for expect in "$TD"/watchdog/cases/*.expect; do
     [[ ! -f "$TD/watchdog/cases/$name.session_end" ]] || end="$(cat "$TD/watchdog/cases/$name.session_end")"
     RC=0
     PATH="$FORBIDDEN_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test \
-        --deployment demo-app --pod demo-app-0 --node node-a --job-selector app.kubernetes.io/part-of=k6-perf \
+        --deployment demo-app --pod demo-app-0 --node node-a --job-selector "$LOAD_SEL" \
         --aurora-cluster db-test --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 \
         --node-cpu-pct 90 --interval 15 --session-end "$end" --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
         --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || RC=$?
@@ -445,7 +453,7 @@ watch_live() { # NAME [ENV=VALUE...]
     mkdir -p "$dir"
     env "$@" PATH="$TD/bin-watch:$TD/bin-fake:$PATH" FAKE_DIR="$dir" FAKE_WATCH_BASE="$TD/watchdog/base.json" \
         "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test --deployment demo-app \
-        --pod demo-app-0 --node node-a --job-selector app.kubernetes.io/part-of=k6-perf --aurora-cluster db-test \
+        --pod demo-app-0 --node node-a --job-selector "$LOAD_SEL" --aurora-cluster db-test \
         --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 --node-cpu-pct 90 \
         --interval 1 --session-end 2099-01-01T00:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
         >"$dir/stdout" 2>"$dir/stderr" &
@@ -471,11 +479,29 @@ fi
 watch_live pod-notfound FAKE_WATCH_POD_NOTFOUND=1
 dir="$WORK/watch-live-pod-notfound"
 if sed -n 2p "$dir/watchdog.csv" | grep -q ',gone,' && grep -q 'rule=pod-gone scope=session action=kill' "$dir/void.log" \
-    && grep -q '^--context ctx-test --namespace ns-test delete job -l app.kubernetes.io/part-of=k6-perf --wait=false$' "$dir/kubectl.calls" \
-    && [[ $(grep -c ' delete ' "$dir/kubectl.calls") -eq $(grep -c ' delete job -l app.kubernetes.io/part-of=k6-perf --wait=false$' "$dir/kubectl.calls") ]]; then
+    && grep -qxF -- "--context ctx-test --namespace ns-test delete job -l $LOAD_SEL --wait=false" "$dir/kubectl.calls" \
+    && [[ $(grep -c ' delete ' "$dir/kubectl.calls") -eq $(grep -cxF -- "--context ctx-test --namespace ns-test delete job -l $LOAD_SEL --wait=false" "$dir/kubectl.calls") ]]; then
     ok "watchdog live NotFound: pod-gone VOID and its only action, delete job -l <selector>"
 else
     bad "watchdog live NotFound"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"; show "$dir/stderr"
+fi
+# A reset Job (component=reset) running alone: not counted, not deleted.
+watch_live reset-only FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-reset-only.json"
+dir="$WORK/watch-live-reset-only"
+if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f14,16)" == "0,0" ]] && grep -q 'rule=pod-gone' "$dir/void.log" \
+    && ! grep -q ' delete ' "$dir/kubectl.calls" && [[ ! -e "$dir/deleted.jobs" ]]; then
+    ok "watchdog: a reset Job running alone is neither counted as load nor deleted"
+else
+    bad "watchdog reset-only"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"
+fi
+# A load Job and a reset Job together: only the load Job is deleted.
+watch_live load-and-reset FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-load-and-reset.json"
+dir="$WORK/watch-live-load-and-reset"
+if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f14,16)" == "1,1" ]] \
+    && [[ "$(sort -u "$dir/deleted.jobs" 2>/dev/null)" == "k6-labela-s4-r1-1014000000" ]]; then
+    ok "watchdog: with load and reset Jobs running, only the load Job is deleted"
+else
+    bad "watchdog load-and-reset"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"
 fi
 
 usage_rc=0

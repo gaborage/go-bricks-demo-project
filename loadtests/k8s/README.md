@@ -55,7 +55,8 @@ The env list carries `K6_BASE_URL` (`TARGET_URL`), `K6_API_PREFIX` (`API_PREFIX`
 `PERF_SUMMARY_FILE`, every `--set K=V`, and the wrapper's `HARNESS_SCRIPT`,
 `HARNESS_WARM`, `HARNESS_WARM_RATE` and `HARNESS_K6_FLAGS`. The Job is fixed at
 `backoffLimit: 0`, `restartPolicy: Never` and `ttlSecondsAfterFinished: 86400`. It is
-labelled `app.kubernetes.io/part-of=k6-perf` and annotated `karpenter.sh/do-not-disrupt:
+labelled `app.kubernetes.io/part-of=k6-perf` and `app.kubernetes.io/component=load-generator`
+(the reset Job: `component=reset`), and annotated `karpenter.sh/do-not-disrupt:
 "true"`. Resources are requests 1 CPU / 512Mi and limits 2 CPU / 1Gi, plus the
 ephemeral-storage pair above. It runs as
 non-root with seccomp `RuntimeDefault` and a read-only root filesystem (`/tmp` is an
@@ -140,7 +141,8 @@ re-queue a void staircase.
 
 `perf-watchdog.sh watch` runs for the whole session. It needs `kubectl get`/`top` and
 `aws cloudwatch get-metric-statistics`, and nothing else. Its only action is `kubectl
-delete job -l <selector>`. Every rule writes one line to the void log:
+delete job -l <selector>`, and it kills load Jobs only. Every rule writes one line to the
+void log:
 
 ```
 VOID <ISO-8601 UTC> rule=<rule> scope=<rep|session> action=<kill|stop> detail=<text>
@@ -154,6 +156,16 @@ The runner voids any rep whose window contains such a line. The watchdog enforce
   condition, or CPU above the threshold on two samples in a row.
 - **Shared dependencies:** broker memory, and the Aurora ACU ceiling.
 - **Time:** the session end.
+
+**Selectors.** Two label selectors, for two jobs:
+
+| Selector | Matches | Use it for |
+|---|---|---|
+| `app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator` | k6 Jobs only | the watchdog's `--job-selector`, and a kill switch that stops load but leaves a running reset alone |
+| `app.kubernetes.io/part-of=k6-perf` | every perf Job and ConfigMap, reset included | session cleanup: `kubectl delete job,configmap -l app.kubernetes.io/part-of=k6-perf` |
+
+A reset Job carries `component=reset`, so the watchdog neither counts it as running load
+nor deletes it. A rule that fires during a reset still writes its VOID line.
 
 Run either subcommand with `--help` for its flags; all of them are required. The 429, error-rate and p95 aborts
 belong to k6 thresholds; dropped iterations and achieved rate to the runner gates. New

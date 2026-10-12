@@ -15,6 +15,10 @@
 # counts and nothing else; backoffLimit 0 means a failed reset is never retried
 # behind your back.
 #
+# Labels: app.kubernetes.io/part-of=k6-perf, like every perf Job, so session
+# cleanup removes it, and app.kubernetes.io/component=reset, so the watchdog's
+# load-generator selector neither counts nor kills it.
+#
 # envsubst template, rendered with an explicit variable list (README.md):
 #
 #   envsubst '${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER}
@@ -29,7 +33,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: perf-reset
-    app.kubernetes.io/component: data-reset
+    app.kubernetes.io/component: reset
     app.kubernetes.io/part-of: k6-perf
 spec:
   backoffLimit: 0
@@ -39,7 +43,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: perf-reset
-        app.kubernetes.io/component: data-reset
+        app.kubernetes.io/component: reset
         app.kubernetes.io/part-of: k6-perf
     spec:
       restartPolicy: Never

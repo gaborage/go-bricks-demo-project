@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "k6-labela-s4-r1-1014000000",
+        "labels": {"app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "load-generator"}
+      },
+      "status": {"active": 1}
+    },
+    {
+      "metadata": {
+        "name": "perf-reset-20261014t000000z",
+        "labels": {"app.kubernetes.io/part-of": "k6-perf", "app.kubernetes.io/component": "reset"}
+      },
+      "status": {"active": 1}
+    }
+  ]
+}
