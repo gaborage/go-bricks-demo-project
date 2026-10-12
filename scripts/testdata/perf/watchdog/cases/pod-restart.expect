@@ -1,0 +1,2 @@
+VOID rule=pod-restart scope=rep action=kill
+KILLS 1

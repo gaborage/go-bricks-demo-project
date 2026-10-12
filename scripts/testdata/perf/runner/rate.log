@@ -1,0 +1,46 @@
+WARM_START=2025-10-14T00:00:00Z
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/products-read-only.ts
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 200 max VUs, 10m5s max duration (incl. graceful stop):
+              * steady: 150.00 iterations/s for 10m0s (maxVUs: 50-200, gracefulStop: 5s)
+
+running (10m00.0s), 000/050 VUs, 90000 complete and 0 interrupted iterations
+steady ✓ [ 100% ] 000/050 VUs  10m0s  150.00 iters/s
+
+     http_req_duration..............: avg=12.31ms min=1.02ms med=9.88ms max=412.7ms p(90)=21.4ms p(95)=27.9ms
+     http_reqs......................: 90000  148.757/s
+WARM_RC=0
+RUN_START=2025-10-14T00:02:07Z
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/products-read-only.ts
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 200 max VUs, 10m5s max duration (incl. graceful stop):
+              * steady: 150.00 iterations/s for 10m0s (maxVUs: 50-200, gracefulStop: 5s)
+
+running (10m00.0s), 000/050 VUs, 90000 complete and 0 interrupted iterations
+steady ✓ [ 100% ] 000/050 VUs  10m0s  150.00 iters/s
+
+     http_req_duration..............: avg=12.31ms min=1.02ms med=9.88ms max=412.7ms p(90)=21.4ms p(95)=27.9ms
+     http_reqs......................: 90000  148.757/s
+---PERF-SUMMARY-BEGIN---
+{"root_group":{"name":"","path":"","groups":[],"checks":[]},"options":{"summaryTrendStats":["avg","min","med","max","p(90)","p(95)","p(99)"],"summaryTimeUnit":"","noColor":true},"state":{"isStdOutTTY":false,"isStdErrTTY":false,"testRunDurationMs":605012.4},"metrics":{"http_req_duration":{"type":"trend","contains":"time","values":{"avg":12.31,"min":1.02,"med":9.88,"max":412.7,"p(90)":21.4,"p(95)":27.9,"p(99)":61.3},"thresholds":{"p(95)<500":{"ok":true}}},"http_reqs":{"type":"counter","contains":"default","values":{"count":88500,"rate":146.27799364112207}},"http_reqs{status:429}":{"type":"counter","contains":"default","values":{"count":0,"rate":0},"thresholds":{"count==0":{"ok":true}}},"iterations":{"type":"counter","contains":"default","values":{"count":88500,"rate":146.27799364112207}},"dropped_iterations":{"type":"counter","contains":"default","values":{"count":0,"rate":0},"thresholds":{"count==0":{"ok":true}}},"http_req_failed":{"type":"rate","contains":"default","values":{"rate":0,"passes":0,"fails":88500}},"vus":{"type":"gauge","contains":"default","values":{"value":3,"min":1,"max":9}}},"perfMeta":{"runId":"labela-S4-r1","script":"products-read-only.ts","readMix":"get","rate":150,"steps":null,"seedRows":250000,"preAllocatedVUs":50,"maxVUs":200,"baseUrl":"http://app.perf-demo.svc:8080","apiPrefix":"/api/v1","abortOn429":true,"abortErrorRate":0.02,"abortP95Ms":null,"harnessTag":"perf-harness-v1","startedAt":"2025-10-14T00:02:08Z","endedAt":"2025-10-14T00:12:09Z"}}
+---PERF-SUMMARY-END---
+RUN_END=2025-10-14T00:12:09Z
+RC=0

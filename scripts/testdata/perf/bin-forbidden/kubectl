@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Tripwire for the watchdog --simulate tests: simulate must never shell out.
+echo "forbidden: kubectl $*" >&2
+echo "kubectl $*" >>"${FAKE_DIR:-/dev/null}/forbidden.calls"
+exit 97

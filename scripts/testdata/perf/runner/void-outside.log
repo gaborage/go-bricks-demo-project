@@ -1,0 +1,2 @@
+VOID 2025-10-13T23:40:00Z rule=node-cpu scope=rep action=kill detail=node CPU 95% > 90% on 2 samples in a row
+VOID 2025-10-14T00:20:00Z rule=broker-mem scope=rep action=kill detail=broker memory 1100Mi > 1024Mi

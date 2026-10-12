@@ -1,0 +1,115 @@
+# loadtests/k8s/psql-job.yaml
+#
+# The products reset/seed as a Kubernetes Job. It runs the SQL that
+# `scripts/perf-reset-products.sh --print-sql` prints, from a ConfigMap that
+# scripts/perf-k8s-run.sh creates per run, and prints one line:
+#
+#   COUNT products=<n> seed=<n> outbox_pending=<n> last_analyze=<ts|null>
+#
+# Credentials never appear in this manifest. The app's own database Secret is
+# imported whole with envFrom, and the PG* variables psql reads are mapped from
+# its keys with Kubernetes $(VAR) references, which the kubelet resolves at
+# container start. The key names are template variables because they are the
+# app's naming, not psql's. TLS is verify-full against a CA bundle from a
+# ConfigMap. psql runs quiet (-q) with tuples only (-At), so the output carries
+# counts and nothing else; backoffLimit 0 means a failed reset is never retried
+# behind your back.
+#
+# envsubst template, rendered with an explicit variable list (README.md):
+#
+#   envsubst '${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER}
+#     ${DB_SECRET} ${PG_HOST_KEY} ${PG_PORT_KEY} ${PG_DB_KEY} ${PG_USER_KEY}
+#     ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP}' \
+#     < loadtests/k8s/psql-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: perf-reset
+    app.kubernetes.io/component: data-reset
+    app.kubernetes.io/part-of: k6-perf
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: perf-reset
+        app.kubernetes.io/component: data-reset
+        app.kubernetes.io/part-of: k6-perf
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${PSQL_RUN_AS_USER}
+        runAsGroup: ${PSQL_RUN_AS_USER}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: psql
+          image: ${PSQL_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["psql"]
+          args: ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-f", "/sql/reset.sql"]
+          envFrom:
+            - secretRef:
+                name: ${DB_SECRET}
+          env:
+            - name: PGHOST
+              value: "$(${PG_HOST_KEY})"
+            - name: PGPORT
+              value: "$(${PG_PORT_KEY})"
+            - name: PGDATABASE
+              value: "$(${PG_DB_KEY})"
+            - name: PGUSER
+              value: "$(${PG_USER_KEY})"
+            - name: PGPASSWORD
+              value: "$(${PG_PASSWORD_KEY})"
+            - name: PGSSLMODE
+              value: verify-full
+            - name: PGSSLROOTCERT
+              value: /etc/perf-reset/ca/${PG_CA_KEY}
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            - name: PGAPPNAME
+              value: perf-reset
+            - name: PGOPTIONS
+              value: "-c statement_timeout=600000 -c lock_timeout=30000 -c client_min_messages=warning"
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+              readOnly: true
+            - name: ca
+              mountPath: /etc/perf-reset/ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: sql
+          configMap:
+            name: ${SQL_CONFIGMAP}
+        - name: ca
+          configMap:
+            name: ${PG_CA_CONFIGMAP}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

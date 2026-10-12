@@ -1,0 +1,2 @@
+VOID rule=broker-mem scope=rep action=kill
+KILLS 1

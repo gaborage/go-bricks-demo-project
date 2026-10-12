@@ -1,0 +1,3 @@
+VOID rule=node-changed scope=session action=kill
+VOID rule=node-changed scope=session action=kill
+KILLS 2

@@ -1,0 +1,2 @@
+VOID rule=pod-gone scope=session action=kill
+KILLS 1

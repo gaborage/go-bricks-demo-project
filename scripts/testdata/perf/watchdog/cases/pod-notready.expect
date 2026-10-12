@@ -1,0 +1,2 @@
+VOID rule=pod-notready scope=rep action=kill
+KILLS 1

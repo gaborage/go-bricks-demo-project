@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Tripwire for the offline tests: no test may reach AWS.
+echo "forbidden: aws $*" >&2
+echo "aws $*" >>"${FAKE_DIR:-/dev/null}/forbidden.calls"
+exit 97

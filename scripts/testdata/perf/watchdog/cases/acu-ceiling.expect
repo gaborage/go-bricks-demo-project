@@ -1,0 +1,3 @@
+VOID rule=acu-ceiling scope=session action=stop
+VOID rule=acu-ceiling scope=session action=stop
+KILLS 2

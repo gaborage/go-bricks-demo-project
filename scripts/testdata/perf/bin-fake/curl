@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake curl for scripts/test-perf-harness.sh. Records argv and stdin (the curl
+# config carrying the key), snapshots every process's argv with ps while the
+# "request" is in flight, copies $FAKE_CURL_RESPONSE to --output and prints
+# $FAKE_CURL_CODE as the HTTP status.
+set -euo pipefail
+: "${FAKE_DIR:?}"
+out="" prev=""
+for a in "$@"; do
+    [[ "$prev" != --output ]] || out="$a"
+    if [[ "$prev" == --data-binary && "$a" == @* ]]; then cat "${a#@}" >>"$FAKE_DIR/curl.bodies"; echo >>"$FAKE_DIR/curl.bodies"; fi
+    prev="$a"
+done
+printf '%s\n' "$@" >>"$FAKE_DIR/curl.argv"
+cat >>"$FAKE_DIR/curl.stdin"
+ps -A -o args= >>"$FAKE_DIR/ps.txt" 2>/dev/null || true
+cp "${FAKE_CURL_RESPONSE:?}" "${out:?--output missing}"
+printf '%s' "${FAKE_CURL_CODE:-200}"

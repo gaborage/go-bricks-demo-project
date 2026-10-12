@@ -1,0 +1,124 @@
+# loadtests/k8s/k6-job.yaml
+#
+# One k6 rep as a Kubernetes Job: an optional warm-up invocation, then the
+# measured invocation, run from inside the cluster so no ingress, gateway or VPN
+# sits in the measured path.
+#
+# This is an envsubst template. scripts/perf-k8s-run.sh renders it with an
+# EXPLICIT variable list, so only the ${...} placeholders listed in README.md are
+# substituted. The container shell below references its own variables ($rc,
+# $HARNESS_*) and command substitutions ($(date ...)); they are not in the list
+# and reach the pod untouched. To render by hand, pass the same list:
+#
+#   envsubst '${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE}
+#     ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR}
+#     ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP}' \
+#     < loadtests/k8s/k6-job.yaml
+#
+# K6_NODE_SELECTOR, K6_AFFINITY and K6_ENV are single-line JSON (valid YAML flow
+# style), so optional blocks render as {} and the env list needs no indentation
+# handling. The shell is static: everything it varies on arrives as env vars.
+#
+# The wrapper prints these lines, each on its own line (k6 scripts never do):
+#   WARM_START=<ISO-8601 UTC>   only when HARNESS_WARM is not 0
+#   WARM_RC=<k6 exit code>      only when HARNESS_WARM is not 0
+#   RUN_START=<ISO-8601 UTC>
+#   RUN_END=<ISO-8601 UTC>
+#   RC=<k6 exit code of the measured invocation>
+# It exits 0 once RC is printed, so a Failed Job means the wrapper itself did not
+# finish (deadline, eviction, OOM, kill switch), never a failing k6 threshold.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: k6
+    app.kubernetes.io/component: load-generator
+    app.kubernetes.io/part-of: k6-perf
+    perf-run-id: ${RUN_ID_LABEL}
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: ${ACTIVE_DEADLINE_SECONDS}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6
+        app.kubernetes.io/component: load-generator
+        app.kubernetes.io/part-of: k6-perf
+        perf-run-id: ${RUN_ID_LABEL}
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector: ${K6_NODE_SELECTOR}
+      affinity: ${K6_AFFINITY}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${K6_RUN_AS_USER}
+        runAsGroup: ${K6_RUN_AS_USER}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: ${K6_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              if [ "${HARNESS_WARM:-0}" != "0" ]; then
+                echo "WARM_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                (
+                  unset PERF_STEPS PERF_SUMMARY_STDOUT PERF_SUMMARY_FILE
+                  PERF_DURATION="$HARNESS_WARM"
+                  PERF_RATE="$HARNESS_WARM_RATE"
+                  export PERF_DURATION PERF_RATE
+                  exec k6 run --no-thresholds --no-summary "/scripts/$HARNESS_SCRIPT"
+                )
+                echo "WARM_RC=$?"
+              fi
+              echo "RUN_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              k6 run ${HARNESS_K6_FLAGS:-} "/scripts/$HARNESS_SCRIPT"
+              rc=$?
+              echo "RUN_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "RC=$rc"
+              exit 0
+          env: ${K6_ENV}
+          resources:
+            requests:
+              cpu: "1"
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: types
+              mountPath: /scripts/types
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: ${SCRIPTS_CONFIGMAP}
+        - name: types
+          configMap:
+            name: ${TYPES_CONFIGMAP}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

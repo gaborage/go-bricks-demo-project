@@ -1,0 +1,2 @@
+VOID rule=replicas scope=rep action=kill
+KILLS 1

@@ -1,0 +1,1 @@
+{"data":{"actor":{"account":{"nrql":null}}},"errors":[{"message":"NRQL Syntax Error: Error at line 1 position 22, unexpected WHERE","path":["actor","account","nrql"]}]}

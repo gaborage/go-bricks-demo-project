@@ -1,6 +1,6 @@
 # Go Bricks Demo Project Makefile
 
-.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api show-sealed-message seal-event-demo generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze
+.PHONY: help build run test clean docker-up docker-up-local docker-up-newrelic docker-down logs status check-deps deps fmt lint coverage check migrate migrate-info migrate-analytics migrate-analytics-info migrate-all migrate-multitenant-check migrate-multitenant-install migrate-multitenant-init migrate-multitenant-up migrate-multitenant-info migrate-multitenant-validate migrate-multitenant-reset migrate-multitenant-samples test-products-api show-sealed-message seal-event-demo generate-keys dev update check-k6 loadtest-install loadtest-crud loadtest-read loadtest-ramp loadtest-spike loadtest-sustained loadtest-smoke loadtest-tokens loadtest-tokens-smoke loadtest-type-check loadtest-all loadtest-all-monitored loadtest-monitor loadtest-analyze perf-harness-test
 
 # Default target
 help:
@@ -77,6 +77,7 @@ help:
 	@echo "  loadtest-all-monitored    Run all tests with monitoring & analysis"
 	@echo "  loadtest-monitor          Start manual monitoring"
 	@echo "  loadtest-analyze FILE=... Analyze metrics file"
+	@echo "  perf-harness-test         Offline tests of the in-cluster k6 harness (runner, watchdog, NRQL)"
 	@echo ""
 	@echo "Messaging resilience:"
 	@echo "  redeclare-demo            Delete payment-events/product-events under the live app; watch them self-repair"
@@ -776,3 +777,10 @@ loadtest-analyze:
 		exit 1; \
 	fi
 	@./scripts/analyze-loadtest-results.sh $(FILE)
+
+# Offline tests of the in-cluster k6 harness (scripts/perf-k8s-run.sh,
+# perf-watchdog.sh, perf-nrql.sh, loadtests/k8s, loadtests/nrql): saved Job
+# logs, watchdog simulations, NRQL goldens, shellcheck and gitignore checks.
+# Reaches no cluster, AWS account or New Relic API.
+perf-harness-test:
+	@./scripts/test-perf-harness.sh
