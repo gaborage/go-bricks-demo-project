@@ -405,9 +405,12 @@ func (s *series) readNR(r *rep, nr map[string][]map[string]any) {
 	clientN, okClientN := clientSum(q2, fieldN)
 	r.set(mNRN, n, okN)
 	r.set(mNRRPS, rps, okRPS)
+	// The gap needs a client rate: a Q2 holding only simulator rows has none,
+	// and reading it as 0 would report a false -100% gap.
 	if k6, ok := r.vals[mK6RPS]; ok && okRPS && k6 > 0 {
-		clientRPS, _ := clientSum(q2, fieldRPS)
-		r.set(mGap, (clientRPS-k6)/k6*100, true)
+		if clientRPS, okClient := clientSum(q2, fieldRPS); okClient {
+			r.set(mGap, (clientRPS-k6)/k6*100, true)
+		}
 	}
 	cpuS, okCPU := sumField(nr[inQ7], "cpu_s")
 	mcores, okM := sumField(nr[inQ7], "mcores")

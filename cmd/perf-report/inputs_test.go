@@ -222,6 +222,31 @@ func TestPerRequestLeavesOutSimulatorRoutes(t *testing.T) {
 	}
 }
 
+// TestGapNeedsClientRate: a Q2 holding only simulator rows has no client rate,
+// so the NR-vs-k6 gap stays unavailable instead of reading as -100%.
+func TestGapNeedsClientRate(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, manifestFile), `{"labels":["one"]}`)
+	start := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	writeFile(t, filepath.Join(dir, "one", windowsFile), windowsHead+"\n"+strings.Join([]string{"one-S3-r1", "S3", "1", "",
+		start.Format(time.RFC3339), start.Add(10 * time.Minute).Format(time.RFC3339), "0", "1", ""}, "\t")+"\n")
+	writeFile(t, filepath.Join(dir, "one", "k6", "S3-r1.json"),
+		`{"metrics":{"http_reqs":{"values":{"count":6000,"rate":10}}}}`)
+	writeFile(t, filepath.Join(dir, "one", "nr", "Q2-one-S3-r1.json"),
+		`{"data":{"actor":{"account":{"nrql":{"results":[{"facet":["/api/v1/__sim/peer/tokens","POST"],"rps":10,"n":6000}]}}}}}`)
+	s, err := loadSeries(dir, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := s.reps["one"][0]
+	if !near(r.vals[mK6RPS], 10) {
+		t.Fatalf("k6 rps = %v, want 10", r.vals[mK6RPS])
+	}
+	if got, ok := r.vals[mGap]; ok {
+		t.Errorf("gap = %v, want unavailable without a client rate", got)
+	}
+}
+
 // TestPerRequestNeedsIdle builds a three-label series. "one" has an idle level
 // above its load, "two" has no idle window, and "three" subtracts normally:
 // only "three" gets CPU per request, and the report says why the others don't.
