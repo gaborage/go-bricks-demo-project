@@ -276,10 +276,11 @@ The project supports **two observability stacks** that can be switched using Doc
 
 **Best for:** Local development with immediate feedback (< 30 seconds vs. 10-15 min cloud delay)
 
-**Start:**
+**Start** (from the repository root; the root `.env` supplies `NEW_RELIC_LICENSE_KEY`, which compose interpolates for every profile):
 ```bash
-cd etc/docker
-docker-compose --profile local up -d
+make docker-up-local
+# Or manually:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile local up -d
 ```
 
 **Access:**
@@ -359,9 +360,8 @@ The dashboard now uses OpenTelemetry semantic conventions for Go runtime metrics
 3. Start stack:
    ```bash
    make docker-up-newrelic
-   # Or manually:
-   cd etc/docker
-   docker-compose --profile newrelic up -d
+   # Or manually, from the repository root:
+   docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile newrelic up -d
    ```
 
 **Access:**
@@ -372,12 +372,12 @@ The dashboard now uses OpenTelemetry semantic conventions for Go runtime metrics
 ### Switching Observability Stacks
 
 ```bash
-# Stop current stack
-cd etc/docker && docker-compose down
+# From the repository root. Stop current stack (make docker-down also removes the volumes)
+docker-compose -f etc/docker/docker-compose.yml --env-file .env down
 
 # Start desired stack
-docker-compose --profile local up -d      # For Prometheus/Grafana/Loki/Tempo
-docker-compose --profile newrelic up -d   # For New Relic
+make docker-up-local       # For Prometheus/Grafana/Loki/Tempo
+make docker-up-newrelic    # For New Relic
 ```
 
 **Note:** Application doesn't need restart when switching - it always sends to `localhost:4317`.
@@ -1695,7 +1695,7 @@ curl -s http://localhost:8080/_sys/health-debug | jq .data.components.messaging.
 # Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
 # failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
 # (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
-make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.67.0)
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.69.0)
 # Exit codes: 0 clean; 1 fleet split (something was attempted and something
 # failed or was never attempted); 2 nothing attempted, no schema touched (empty
 # or failed tenant listing, unreadable tenant store, credential provider that

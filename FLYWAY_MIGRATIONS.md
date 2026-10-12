@@ -225,22 +225,28 @@ flyway -configFiles=flyway/flyway-oracle.conf \
 
 ### Docker Compose Commands
 
+Run these from the repository root. The compose file's Flyway services are
+`flyway` (main PostgreSQL database) and `flyway-analytics` (analytics database),
+both in the `migrations` profile; there is no Oracle Flyway service. Every
+compose command needs the root `.env`: compose interpolates the whole file, and
+the New Relic collector declares `NEW_RELIC_LICENSE_KEY` as required.
+
 ```bash
 # PostgreSQL - Info
-docker-compose run --rm flyway-postgres info
+make migrate-info
+# Or: docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway info
 
 # PostgreSQL - Migrate
-docker-compose run --rm flyway-postgres migrate
+make migrate
+# Or: docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway migrate
 
-# Oracle - Info
-docker-compose run --rm flyway-oracle info
-
-# Oracle - Migrate
-docker-compose run --rm flyway-oracle migrate
+# Analytics database
+make migrate-analytics-info
+make migrate-analytics
 
 # Override command
-docker-compose run --rm flyway-postgres validate
-docker-compose run --rm flyway-postgres repair
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway validate
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway repair
 ```
 
 ---
@@ -527,7 +533,7 @@ docker ps | grep postgres
 make docker-up
 
 # Wait for health checks
-docker-compose ps
+make status
 ```
 
 ### Issue 3: Migration Checksum Mismatch
@@ -544,8 +550,8 @@ docker-compose ps
 # Option 2: Repair migration history (USE WITH CAUTION)
 flyway -configFiles=flyway/flyway-postgresql.conf repair
 
-# Or via Docker
-docker-compose run --rm flyway-postgres repair
+# Or via Docker, from the repository root
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway repair
 ```
 
 ### Issue 4: Oracle Connection Timeout
@@ -573,13 +579,16 @@ docker exec oracle-tenant3 healthcheck.sh
 
 **Solution:**
 ```bash
-# Fix permissions
-chmod 644 migrations/postgresql/*.sql
-chmod 644 migrations/oracle/*.sql
+# Fix permissions on the directories the compose Flyway services mount
+chmod 644 migrations/*.sql             # flyway (main database)
+chmod 644 migrations-analytics/*.sql   # flyway-analytics
 
-# Restart Flyway container
-docker-compose down
-docker-compose up -d
+# Re-run only the target for the database that failed. The Flyway containers
+# are one-shot (`run --rm`), so each run mounts the files afresh and nothing
+# needs restarting. The compose file has no Oracle Flyway service.
+make migrate              # if the main database failed
+# or
+make migrate-analytics    # if the analytics database failed
 ```
 
 ### Issue 6: Validation Failed in Production

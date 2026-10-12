@@ -1,9 +1,11 @@
 # Running outside development
 
 `make run` boots with `APP_ENV=development` and reads two files from the working
-directory. Any other environment (`APP_ENV=staging`, `production`, ...) reads only
-the base and takes everything else from environment variables. This page lists
-what the base already provides and what a deploy must supply.
+directory. Any other environment (`APP_ENV=staging`, `production`, ...) reads the
+base, plus a `config.<APP_ENV>.yaml` overlay when the deploy supplies one (this
+repository ships none for a deployed environment), and takes everything else from
+environment variables. This page lists what the base already provides and what a
+deploy must supply.
 
 ## How configuration loads
 

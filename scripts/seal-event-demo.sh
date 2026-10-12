@@ -198,7 +198,12 @@ BODY_WRONG_TYPE="$(mktemp)"
 OPEN_OUT="$(mktemp)"
 OPEN_ERR="$(mktemp)"
 TOOL_DIR="$(mktemp -d)"
-trap 'rm -f "$CURL_CFG" "$BODY_VALID" "$BODY_WRONG_TYPE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT INT TERM HUP
+trap 'rm -f "$CURL_CFG" "$BODY_VALID" "$BODY_WRONG_TYPE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT
+# Signals become ordinary exits, so the EXIT trap cleans up once and a Ctrl-C
+# stops the demo instead of running the next step without its scratch files.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 

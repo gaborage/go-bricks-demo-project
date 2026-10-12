@@ -514,9 +514,9 @@ The permissions are restored on every exit. The broker is never stopped, because
 ### Local Stack (Recommended)
 ```bash
 make docker-up-local
-# Or manually:
-cd etc/docker
-docker-compose --profile local up -d
+# Or manually, from the repository root (the root .env is what supplies
+# NEW_RELIC_LICENSE_KEY, which compose interpolates for every profile):
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile local up -d
 ```
 - **Prometheus:** http://localhost:9090
 - **Grafana:** http://localhost:3000 (admin/admin)
@@ -526,13 +526,12 @@ docker-compose --profile local up -d
 ```bash
 # Create .env with NEW_RELIC_LICENSE_KEY and NEW_RELIC_REGION
 make docker-up-newrelic
-# Or manually:
-cd etc/docker
-docker-compose --profile newrelic up -d
+# Or manually, from the repository root:
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile newrelic up -d
 ```
 - **New Relic One:** https://one.newrelic.com/nr1-core
 
-**Switch stacks:** Just run `docker-compose down` and start the other profile. Application auto-connects to `localhost:4317`.
+**Switch stacks:** From the repository root, run `docker-compose -f etc/docker/docker-compose.yml --env-file .env down` and start the other profile. (`make docker-down` also works, but it removes the volumes too.) Application auto-connects to `localhost:4317`.
 
 See [wiki/PROMETHEUS_GRAFANA_SETUP.md](wiki/PROMETHEUS_GRAFANA_SETUP.md) for details.
 
@@ -744,7 +743,7 @@ curl http://localhost:8080/api/v1/analytics/views/test-id
 
 **Connection pool exhausted:** Increase `database.pool.max.connections` in [config.development.yaml](config.development.yaml)
 
-**Observability not working:** Check OTel Collector: `docker-compose ps | grep otel-collector`
+**Observability not working:** Check the collector with `make status`: it is `go-bricks-alloy` on the local profile and `go-bricks-otel-collector-newrelic` on the New Relic one.
 
 ## Documentation
 

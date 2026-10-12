@@ -178,7 +178,12 @@ AUTH_RESPONSE_FILE="$(mktemp)"
 OPEN_OUT="$(mktemp)"
 OPEN_ERR="$(mktemp)"
 TOOL_DIR="$(mktemp -d)"
-trap 'rm -f "$CURL_CFG" "$AUTH_RESPONSE_FILE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT INT TERM HUP
+trap 'rm -f "$CURL_CFG" "$AUTH_RESPONSE_FILE" "$OPEN_OUT" "$OPEN_ERR"; rm -rf "$TOOL_DIR"' EXIT
+# Signals become ordinary exits, so the EXIT trap cleans up once and a Ctrl-C
+# stops the demo instead of running the next step without its scratch files.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 write_curl_cfg "$CURL_CFG" "$RABBIT_MGMT" "$RABBIT_USER" "$RABBIT_PASS"
 
@@ -226,10 +231,12 @@ echo
 echo "request body:"
 jq '.card.pan = "<sent verbatim; masked in this echo only>"' <<<"$PAYLOAD"
 
-AUTH_STATUS="$(curl -sS -o "$AUTH_RESPONSE_FILE" -w '%{http_code}' \
+# The body goes on stdin: as an argument the card would sit in curl's argv,
+# readable by any local user through ps(1).
+AUTH_STATUS="$(printf '%s' "$PAYLOAD" | curl -sS -o "$AUTH_RESPONSE_FILE" -w '%{http_code}' \
     -H 'content-type: application/json' \
     -X POST "$API_BASE/payments/authorize" \
-    --data-binary "$PAYLOAD" || true)"
+    --data-binary @- || true)"
 
 if [[ "$AUTH_STATUS" != 2* ]]; then
     echo "response body:" >&2

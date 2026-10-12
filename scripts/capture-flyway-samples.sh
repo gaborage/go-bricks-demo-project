@@ -87,10 +87,15 @@ cleanup() {
     cp "$V1_BACKUP" "$V1_PATH"
     rm -f "$V1_BACKUP"
 }
-# INT/TERM coverage matters here — without it, Ctrl+C during the checksum-
-# mismatch scenario leaves the appended comment in V1 on disk, and the next
-# `git add` would commit it.
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+# Signals become ordinary exits, so cleanup runs once, from the EXIT trap. A
+# signal trap that only ran cleanup let the script carry on past an
+# interrupted `|| true` step with the V1 backup already deleted; scenario 7
+# then appended its checksum drift to V1 and nothing could restore it, so the
+# next `git add` would commit it.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # --- scenarios ------------------------------------------------------------
 

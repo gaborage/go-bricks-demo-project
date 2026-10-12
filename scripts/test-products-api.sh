@@ -50,14 +50,19 @@ for tool in curl jq; do
     command -v "$tool" >/dev/null || fail "required tool '$tool' not found"
 done
 
+# One response file for the whole run, from mktemp rather than a guessable
+# /tmp name another user could plant first as a symlink. The EXIT trap removes
+# it even when fail() aborts mid-run.
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$BODY_FILE"' EXIT
+
 # request METHOD PATH [JSON_BODY] — sets RESP_STATUS and RESP_BODY.
 request() {
     local method="$1" path="$2" body="${3:-}"
-    local args=(-sS -X "$method" "$API_BASE$path" -o /tmp/products-api-body.$$ -w '%{http_code}')
+    local args=(-sS -X "$method" "$API_BASE$path" -o "$BODY_FILE" -w '%{http_code}')
     [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' -d "$body")
     RESP_STATUS="$(curl "${args[@]}")" || fail "curl $method $path failed — is the app running? (make run)"
-    RESP_BODY="$(cat /tmp/products-api-body.$$)"
-    rm -f /tmp/products-api-body.$$
+    RESP_BODY="$(cat "$BODY_FILE")"
 }
 
 # jq_get FILTER — evaluate FILTER against RESP_BODY, empty string if missing.
