@@ -52,6 +52,9 @@ const (
 	prefixK6      = "k6_"
 )
 
+// keyPerfMeta is the summary's harness block (run id, rate, steps, ...).
+const keyPerfMeta = "perfMeta"
+
 // k6Duration is the k6 request-duration trend. quantiles are the percentiles
 // read from it, its submetrics and the NR latency rows.
 const k6Duration = "http_req_duration"
@@ -83,6 +86,8 @@ type perfMeta struct {
 	preAlloc   float64
 	maxVUs     float64
 	steps      []step
+	stepRamp   time.Duration // ramp before every step after the first
+	startedAt  time.Time     // when the measured invocation started; zero if absent
 }
 
 // rep is one attempted measured rep: a windows.tsv row plus what its files say.
@@ -364,21 +369,28 @@ func readK6Submetrics(r *rep, doc jsonDoc) {
 
 func readPerfMeta(doc jsonDoc) perfMeta {
 	pm := perfMeta{rate: math.NaN(), seedRows: math.NaN(), preAlloc: math.NaN(), maxVUs: math.NaN()}
-	if v, ok := doc.num("perfMeta", "rate"); ok {
+	if v, ok := doc.num(keyPerfMeta, "rate"); ok {
 		pm.rate = v
 	}
-	if v, ok := doc.num("perfMeta", "seedRows"); ok {
+	if v, ok := doc.num(keyPerfMeta, "seedRows"); ok {
 		pm.seedRows = v
 	}
-	if v, ok := doc.num("perfMeta", "preAllocatedVUs"); ok {
+	if v, ok := doc.num(keyPerfMeta, "preAllocatedVUs"); ok {
 		pm.preAlloc = v
 	}
-	if v, ok := doc.num("perfMeta", "maxVUs"); ok {
+	if v, ok := doc.num(keyPerfMeta, "maxVUs"); ok {
 		pm.maxVUs = v
 	}
-	pm.readMix = doc.str("perfMeta", "readMix")
-	pm.harnessTag = doc.str("perfMeta", "harnessTag")
-	pm.steps = parseSteps(doc.path("perfMeta", "steps"))
+	pm.readMix = doc.str(keyPerfMeta, "readMix")
+	pm.harnessTag = doc.str(keyPerfMeta, "harnessTag")
+	pm.steps = parseSteps(doc.path(keyPerfMeta, "steps"))
+	pm.stepRamp = defaultStepRamp
+	if v, ok := doc.num(keyPerfMeta, "stepRampSeconds"); ok && v >= 0 {
+		pm.stepRamp = time.Duration(v * float64(time.Second))
+	}
+	if t, err := time.Parse(time.RFC3339, doc.str(keyPerfMeta, "startedAt")); err == nil {
+		pm.startedAt = t.UTC()
+	}
 	return pm
 }
 

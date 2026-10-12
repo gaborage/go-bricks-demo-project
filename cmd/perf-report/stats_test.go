@@ -288,7 +288,7 @@ func TestStepStatsAssignsWholeMinutes(t *testing.T) {
 			"percentile.http.server.request.duration": map[string]any{"95": 10.0}, "throttle": 0.02},
 	}
 	steps := []step{{50, 2 * time.Minute}, {100, 2 * time.Minute}}
-	got := stepStats(steps, start, readBuckets(rows))
+	got := stepStats(steps, start, 0, readBuckets(rows)) // no ramp: steps abut
 	if got[0].buckets != 1 || !near(got[0].rps, 50) || !near(got[0].p95, 9) || !near(got[0].mcores, 100) {
 		t.Errorf("step 1 = %+v", got[0])
 	}

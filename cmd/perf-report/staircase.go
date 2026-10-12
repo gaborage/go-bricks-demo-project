@@ -20,10 +20,14 @@ const (
 	// dropped_iterations total is non-zero: k6 reports only the total.
 	kneeMinAchieved = 0.99
 	minuteSeconds   = 60
+	// defaultStepRamp is the ramp the k6 suite runs before every step after
+	// the first, used when perfMeta carries no stepRampSeconds.
+	defaultStepRamp = 15 * time.Second
 )
 
-// step is one PERF_STEPS stage: an arrival rate held for a duration. Steps run
-// back to back from RUN_START, each duration including its ramp.
+// step is one PERF_STEPS stage: an arrival rate held for a duration. The first
+// step starts at the run's start; every later step starts after the previous
+// one ends plus a separate ramp stage.
 type step struct {
 	rate     float64
 	duration time.Duration
@@ -183,14 +187,20 @@ type stepStat struct {
 	throttle float64 // mean, percent
 }
 
-func stepStats(steps []step, start time.Time, buckets []bucket) []stepStat {
+// stepStats lays the steps out from start, with ramp between consecutive steps,
+// and aggregates the minutes that fall wholly inside each step. Ramp minutes
+// belong to no step.
+func stepStats(steps []step, start time.Time, ramp time.Duration, buckets []bucket) []stepStat {
 	out := make([]stepStat, len(steps))
-	from := start.Unix()
+	from := float64(start.UnixNano()) / 1e9
 	for i, st := range steps {
-		to := from + int64(st.duration.Seconds())
+		if i > 0 {
+			from += ramp.Seconds()
+		}
+		to := from + st.duration.Seconds()
 		var rps, p95, e5, mc, th []float64
 		for _, b := range buckets {
-			if b.begin < from || b.end > to {
+			if float64(b.begin) < from || float64(b.end) > to {
 				continue
 			}
 			rps, p95 = append(rps, b.rps), append(p95, b.p95)

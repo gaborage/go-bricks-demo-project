@@ -110,9 +110,10 @@ One session per version, in this shape:
 6. **Watchdog.** Start it for the whole session. It enforces the
    [Abort criteria](#abort-criteria) and writes VOID lines.
 7. **Idle, reset, warm-up.** Record 10 minutes with no load as the `idle`
-   window in `windows.tsv`: it gives the pod's idle CPU. Reset the data, then
-   run a 10-minute warm-up whose results are discarded, and wait for the
-   database capacity to settle.
+   window in `windows.tsv` with `scripts/perf-k8s-run.sh --kind idle`: it
+   gives the pod's idle CPU, and perf-report needs it for every per-request
+   metric. Reset the data, then run a 10-minute warm-up whose results are
+   discarded, and wait for the database capacity to settle.
 8. **Measured reps.** One Job per rep: a 2-minute warm-up invocation, then a
    10-minute measured one. Wait for the pod's CPU to return to idle before
    each. The order is a Latin square, identical in every session:
@@ -134,9 +135,10 @@ One session per version, in this shape:
    steps under a fixed cap. It is indicative only. Its run crosses the
    dropped-iteration and rate gates on purpose, so a void S5 row is still read:
    perf-report uses each label's last S5 attempt, valid or void.
-10. **Capture.** At least 5 minutes after the last Job, run the NRQL set over
-    each rep's window, trimmed by 1 minute on each side, then
-    `go run ./cmd/perf-report --series <series> --out <series>`.
+10. **Capture.** At least 5 minutes after the last Job, run
+    `scripts/perf-nrql.sh --queries loadtests/nrql/queries.yaml` over the
+    label's `windows.tsv` with `--trim 1m`, so each rep's window loses 1 minute
+    on each side, then `go run ./cmd/perf-report --series <series> --out <series>`.
 11. **Go or no-go.** Every scenario has 3 valid reps. If the reference
     version's spread fails the [rep extension](#statistics) rule, run 2 more
     reps of that scenario now and plan 5 for every later session.
@@ -157,8 +159,14 @@ The drift between the two runs of the same binary is the series' noise floor.
     windows.tsv                 one row per attempted rep, plus the idle window
     <scenario>-r<n>.log         the Job log (WARM_START=, RUN_START=, RUN_END=, RC= lines)
     k6/<scenario>-r<n>.json     k6 handleSummary data plus a perfMeta block
-    nr/<query>-<run_id>.json    raw NerdGraph responses, queries Q0..Q18
+    facts/<scenario>-r<n>.env   inputs of the runner's pod, node, k6 CPU and capacity gates
+    attempts/                   an earlier attempt's files, moved aside when a rep is re-run
     reset-<ts>.log              row counts only
+    nr/<query>-<run_id>.json    raw NerdGraph responses, queries Q0..Q18 (Q18 holds
+                                Q18a and Q18b, sent as one request)
+    nr/<query>-session.json     session-scope queries, once per session
+    nr/<file>.json.err          a failed request's response; it replaces <file>.json,
+                                and an earlier result moves to nr/attempts/
 ```
 
 - **`series-manifest.json`** needs `labels`, an array whose first entry is the
@@ -171,7 +179,8 @@ The drift between the two runs of the same binary is the series' noise floor.
   `run_id scenario rep warm_start run_start run_end rc valid reason`. Times are
   ISO-8601 UTC with a `Z`. `run_id` is `<label>-<scenario>-r<n>`. `valid` is 1
   or 0, and `reason` is empty or a `;`-joined list of `dropped`, `rate`, `429`,
-  `5xx`, `void`, `pod`, `node`, `k6cpu`, `acu` and `missing-summary`. Only
+  `5xx`, `void`, `pod`, `node`, `k6cpu`, `acu`, `missing-summary` and
+  `warmup` (the rep's warm-up invocation failed, so it ran cold). Only
   valid reps enter the statistics, and every attempted rep appears in the
   validity log.
 - **The runner's exit code** is 0 for a valid rep, 3 for a void one, 1 for an
@@ -207,9 +216,11 @@ only, and the same files always produce the same bytes.
   and `nr-gap` when the NR request rate differs from k6's by more than 2%. The
   gap leaves out `/__sim/` routes, which k6 never calls directly. A reason code
   the runner wrote on a valid row is kept as a flag too.
-- **Staircase.** perf-report assumes the steps run back to back from
-  `RUN_START`, each duration including its ramp, and uses only the minutes
-  that fall wholly inside a step. k6 reports dropped iterations only for the
+- **Staircase.** The first step starts at `perfMeta.startedAt` (k6's setup
+  runs after `RUN_START`), or at `RUN_START` when the summary lacks it. Every
+  later step starts when the one before it ends plus a separate ramp stage of
+  `perfMeta.stepRampSeconds` (15 s when absent). Only the minutes that fall
+  wholly inside a step count; ramp minutes count for no step. k6 reports dropped iterations only for the
   whole run, so when that total is above 0 a step counts as "nothing dropped"
   only if NR saw at least 99% of its offered rate.
 - **Not computed.** Stationarity, database capacity, neighbour and other-tenant

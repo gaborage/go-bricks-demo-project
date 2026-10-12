@@ -85,6 +85,7 @@ func TestLoadWindows(t *testing.T) {
 		{name: "header and one row", body: windowsHead + "\n" + row + "\n", wantN: 1},
 		{name: "CRLF line endings", body: windowsHead + "\r\n" + row + "\r\n", wantN: 1},
 		{name: "void row with reasons", body: windowsHead + "\n" + strings.Replace(row, "\t0\t1\t", "\t3\t0\tdropped;429", 1) + "\n", wantN: 1},
+		{name: "void cold rep", body: windowsHead + "\n" + strings.Replace(row, "\t0\t1\t", "\t3\t0\twarmup", 1) + "\n", wantN: 1},
 		{name: "stripped trailing tab", body: windowsHead + "\n" + strings.TrimSuffix(row, "\t") + "\n", wantN: 1},
 		{name: "scenario with a path", body: windowsHead + "\n" + strings.Replace(row, "\tS1\t", "\t../S1\t", 1), wantErr: "plain names"},
 		{name: "wrong header", body: "run_id\tscenario\n" + row, wantErr: "header must be exactly"},
@@ -165,7 +166,7 @@ func TestNRResultShapes(t *testing.T) {
 
 func TestReadK6ToleratesMissingMetrics(t *testing.T) {
 	r := &rep{vals: map[string]float64{}}
-	readK6(r, jsonDoc{"perfMeta": map[string]any{"rate": nil, "steps": nil}})
+	readK6(r, jsonDoc{keyPerfMeta: map[string]any{"rate": nil, "steps": nil}})
 	if len(r.vals) != 0 {
 		t.Errorf("vals = %v, want none", r.vals)
 	}

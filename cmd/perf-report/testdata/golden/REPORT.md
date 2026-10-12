@@ -118,15 +118,15 @@ Descriptive only: these rows never get a verdict word. Band B is shown for scale
 
 ## Stress staircase (S5)
 
-Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, from the per-minute Q18 series over the minutes wholly inside each step.
+Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, from the per-minute Q18 series over the minutes wholly inside each step. Steps start at perfMeta.startedAt (else RUN_START), with a ramp (perfMeta.stepRampSeconds, else 15 s) before every step after the first.
 
 | step (offered rps) | alpha | beta |
 |---|---|---|
-| 1 (50) | 8.15 / 0.00 / 102 / 0.0 | n/a |
-| 2 (100) | 9.40 / 0.00 / 194 / 0.0 | n/a |
-| 3 (150) | 13.20 / 0.00 / 297 / 5.0 | n/a |
-| 4 (200) | 25.95 / 0.00 / 390 / 30.0 | n/a |
-| knee | step 3: 150 rps offered, 149.8 achieved, 297 mcores | n/a (no Q18 series) |
+| 1 (50) | 8.00 / 0.00 / 100 / 0.0 | n/a |
+| 2 (100) | 9.00 / 0.00 / 195 / 0.0 | n/a |
+| 3 (150) | 12.50 / 0.00 / 290 / 5.0 | n/a |
+| 4 (200) | 25.00 / 0.00 / 385 / 30.0 | n/a |
+| knee | step 3: 150 rps offered, 150.0 achieved, 290 mcores | n/a (no Q18 series) |
 
 ## Soak (optional)
 
@@ -156,7 +156,7 @@ Every attempted rep. Only valid reps enter the statistics; a superseded row was 
 | alpha-S2-r3 | 2026-01-06T21:06:00Z to 2026-01-06T21:16:00Z | 0 | 1 |  |  | n/a | n/a |
 | alpha-S4-r3 | 2026-01-06T21:22:00Z to 2026-01-06T21:32:00Z | 0 | 1 |  |  | n/a | n/a |
 | alpha-S1-r3 | 2026-01-06T21:38:00Z to 2026-01-06T21:48:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
-| alpha-S5-r1 | 2026-01-06T21:54:00Z to 2026-01-06T22:06:00Z | 0 | 1 |  |  | n/a | n/a |
+| alpha-S5-r1 | 2026-01-06T21:54:00Z to 2026-01-06T22:06:46Z | 0 | 1 |  |  | n/a | n/a |
 | beta-S4-r1 | 2026-01-07T19:14:00Z to 2026-01-07T19:24:00Z | 0 | 1 |  | nr-gap | 2.67 | n/a |
 | beta-S1-r1 | 2026-01-07T19:30:00Z to 2026-01-07T19:40:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
 | beta-S2-r1 | 2026-01-07T19:46:00Z to 2026-01-07T19:56:00Z | 0 | 1 |  |  | n/a | n/a |
@@ -168,7 +168,7 @@ Every attempted rep. Only valid reps enter the statistics; a superseded row was 
 | beta-S1-r3 | 2026-01-07T21:22:00Z to 2026-01-07T21:32:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
 | beta-S1-r4 | 2026-01-07T21:38:00Z to 2026-01-07T21:48:00Z | 0 | 1 |  | throttle | 0.00 | 1.50 |
 | beta-S4-r2 | 2026-01-07T21:54:00Z to 2026-01-07T22:04:00Z | 0 | 1 |  |  | n/a | n/a |
-| beta-S5-r1 | 2026-01-07T22:10:00Z to 2026-01-07T22:22:00Z | 0 | 1 |  |  | n/a | n/a |
+| beta-S5-r1 | 2026-01-07T22:10:00Z to 2026-01-07T22:22:46Z | 0 | 1 |  |  | n/a | n/a |
 | gamma-S4-r1 | 2026-01-08T19:14:00Z to 2026-01-08T19:24:00Z | 0 | 1 |  |  | n/a | n/a |
 | gamma-S1-r1 | 2026-01-08T19:30:00Z to 2026-01-08T19:40:00Z | 0 | 1 |  |  | 0.00 | 0.20 |
 | gamma-S2-r1 | 2026-01-08T19:46:00Z to 2026-01-08T19:56:00Z | 0 | 1 |  |  | n/a | n/a |

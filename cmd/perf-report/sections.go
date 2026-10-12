@@ -183,7 +183,7 @@ func (s *series) writeStaircase(b *strings.Builder) {
 		if r == nil {
 			continue
 		}
-		st := stepStats(r.meta.steps, r.w.runStart, r.buckets)
+		st := stepStats(r.meta.steps, staircaseAnchor(r), r.meta.stepRamp, r.buckets)
 		runs = append(runs, run{label: label, stats: st, knee: findKnee(st, r.val(mDropped)), r: r})
 		maxSteps = max(maxSteps, len(st))
 	}
@@ -192,7 +192,8 @@ func (s *series) writeStaircase(b *strings.Builder) {
 		return
 	}
 	b.WriteString("Indicative: one rep per label, its last attempt whether valid or void. Cells are p95 ms / 5xx % / CPU mcores / CPU throttled %, " +
-		"from the per-minute Q18 series over the minutes wholly inside each step.\n\n")
+		"from the per-minute Q18 series over the minutes wholly inside each step. Steps start at perfMeta.startedAt " +
+		"(else RUN_START), with a ramp (perfMeta.stepRampSeconds, else 15 s) before every step after the first.\n\n")
 	head := []string{"step (offered rps)"}
 	for _, r := range runs {
 		head = append(head, r.label)
@@ -210,6 +211,15 @@ func (s *series) writeStaircase(b *strings.Builder) {
 		knee = append(knee, kneeCell(r.stats, r.knee, len(r.r.buckets) > 0))
 	}
 	writeTable(b, head, append(rows, knee))
+}
+
+// staircaseAnchor is where the first step starts: perfMeta.startedAt when the
+// summary has it (k6's setup runs after RUN_START), else RUN_START.
+func staircaseAnchor(r *rep) time.Time {
+	if !r.meta.startedAt.IsZero() {
+		return r.meta.startedAt
+	}
+	return r.w.runStart
 }
 
 func stepOffered(stats []stepStat, i int) string {
