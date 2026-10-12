@@ -678,6 +678,30 @@ else
     bad "nrql batch errors (exit $RC)"
 fi
 
+# Result and error never coexist. Direction 1: an earlier .json, then a failure.
+dir="$WORK/nrql-stale"
+mkdir -p "$dir/out"
+cp "$TD/nrql/stale-result.json" "$dir/out/Q0-labela-S4-r1.json"
+FAKE_CURL_RESPONSE="$TD/nrql/response-errors.json" nrql "$dir" --queries "$Q" \
+    --windows "$TD/nrql/windows-labela.tsv" --vars "$VARS_A" --out "$dir/out" --account 1234567 --key-stdin <"$KEY_FILE"
+moved="$(find "$dir/out/attempts" -name 'Q0-labela-S4-r1-*.json' 2>/dev/null | head -n 1)"
+if [[ $RC -eq 1 && ! -e "$dir/out/Q0-labela-S4-r1.json" && -f "$dir/out/Q0-labela-S4-r1.json.err" \
+    && -n "$moved" ]] && grep -q 'stale-capture-marker' "$moved"; then
+    ok "nrql failure moves an earlier result to attempts/ before writing .err"
+else
+    bad "nrql stale result on failure (exit $RC)"; find "$dir/out" | head -n 20
+fi
+# Direction 2: an earlier .err, then a success.
+cp "$TD/nrql/stale-error.json" "$dir/out/Q0-labela-S4-r1.json.err"
+FAKE_CURL_RESPONSE="$TD/nrql/response-ok.json" nrql "$dir" --queries "$Q" \
+    --windows "$TD/nrql/windows-labela.tsv" --vars "$VARS_A" --out "$dir/out" --account 1234567 --key-stdin <"$KEY_FILE"
+if [[ $RC -eq 0 && -f "$dir/out/Q0-labela-S4-r1.json" && ! -e "$dir/out/Q0-labela-S4-r1.json.err" \
+    && -z "$(find "$dir/out" -maxdepth 1 -name '*.err')" ]] && jq -e '.data.actor.account.nrql.results' "$dir/out/Q0-labela-S4-r1.json" >/dev/null; then
+    ok "nrql success removes a stale .err: result and error never coexist"
+else
+    bad "nrql stale error on success (exit $RC)"; find "$dir/out" -maxdepth 1 | head -n 20
+fi
+
 dir="$WORK/nrql-keychain"
 mkdir -p "$dir"
 FAKE_NR_KEY="$KEY" FAKE_CURL_RESPONSE="$TD/nrql/response-ok.json" USER=perf-tester nrql "$dir" \

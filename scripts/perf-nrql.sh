@@ -39,9 +39,11 @@
 # SERVICE=<name>. {S}, {R} and {W} are always derived and cannot be set.
 #
 # Exit codes: 0 every request succeeded, 1 a request failed (HTTP error or a
-# GraphQL `errors` member; batch mode carries on and writes the response to
-# <file>.err), 2 usage (including an unresolved placeholder, caught before any
-# request is sent).
+# GraphQL `errors` member; batch mode carries on, writes the response to
+# <file>.err and moves an earlier <file> for the same id and run into
+# <out>/attempts/, so a result and an error never coexist; a success removes a
+# stale <file>.err), 2 usage (including an unresolved placeholder, caught before
+# any request is sent).
 
 case "$-" in
     *x*) echo "perf-nrql: refusing to run with xtrace on: a trace would print the New Relic key" >&2; exit 2 ;;
@@ -502,11 +504,19 @@ for ((r = 0; r < ${#REQ_FILES[@]}; r++)); do
         done
     fi
     rm -f "$TMP_DIR/resp.json"
+    # A result and an error for the same <id>-<run_id> never coexist: a reader must
+    # not take an earlier capture's .json for this attempt's outcome.
     if nerdgraph "$TMP_DIR/body.json" "$TMP_DIR/resp.json"; then
         mv "$TMP_DIR/resp.json" "$dest"
         rm -f "$dest.err"
     else
         failures=$((failures + 1))
+        if [[ -e "$dest" ]]; then
+            mkdir -p "$opt_out/attempts"
+            stale="$opt_out/attempts/$(basename "$dest" .json)-$(date -u +%Y%m%dT%H%M%SZ).json"
+            mv "$dest" "$stale"
+            log "moved the earlier $(basename "$dest") to attempts/ ($(basename "$stale"))"
+        fi
         log "${REQ_FILES[$r]} for ${REQ_RUNS[$r]} failed; response kept in $(basename "$dest").err"
         if [[ -s "$TMP_DIR/resp.json" ]]; then mv "$TMP_DIR/resp.json" "$dest.err"; else : >"$dest.err"; fi
     fi

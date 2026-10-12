@@ -177,6 +177,9 @@ drops): rows with `valid=1`, plus the staircase `S5` whether valid or void. It r
 a `run_id` that is not a safe file name, and skips a row whose timestamps do not
 convert. Each response is the raw NerdGraph JSON,
 `{"data":{"actor":{"account":{"nrql":{"results":[...]}}}}}`, in `<out>/<id>-<run_id>.json`.
+A failed request leaves `<id>-<run_id>.json.err` instead, and moves any earlier
+`.json` for the same id and run into `<out>/attempts/`. A later success removes the
+`.err`, so a result and an error never sit side by side.
 The queries of one `group:` go out as one request, each aliased by its id under
 `account`: `Q18-<run_id>.json` holds `Q18a` (per-minute `rps`, `n`, `p95`, `pct5xx`) and
 `Q18b` (per-minute `mcores`, `throttle`). Every row carries `beginTimeSeconds` and
