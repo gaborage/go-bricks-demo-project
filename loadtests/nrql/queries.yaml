@@ -367,8 +367,10 @@ queries:
     nrql: >-
       FROM NrIntegrationError SELECT count(*) AS n, sum(droppedDataPointCount) AS dropped,
       uniques(metricName, 20) AS metrics WHERE droppedDataPointCount > 0
-      FACET newRelicFeature, category, message {W} LIMIT MAX
+      FACET newRelicFeature, category, message, metricName {W} LIMIT MAX
     notes: >-
+      Faceted by metricName too, so a row's dropped count belongs to the
+      metric names it lists and never mixes events that dropped other metrics.
       Only rows that dropped data points; rows that only report modified data
       carry no droppedDataPointCount and are left out. LIMIT MAX, because the
       void rule needs every row and the dropping rows rank last by n.
