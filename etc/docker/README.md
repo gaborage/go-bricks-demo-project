@@ -45,6 +45,7 @@ make migrate
 make migrate-analytics
 # Or manually:
 docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway migrate
+docker-compose -f etc/docker/docker-compose.yml --env-file .env --profile migrations run --rm flyway-analytics migrate
 ```
 
 ### Stop Services

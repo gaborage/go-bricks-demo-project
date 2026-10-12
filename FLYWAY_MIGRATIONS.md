@@ -579,13 +579,15 @@ docker exec oracle-tenant3 healthcheck.sh
 
 **Solution:**
 ```bash
-# Fix permissions
-chmod 644 migrations/postgresql/*.sql
-chmod 644 migrations/oracle/*.sql
+# Fix permissions on the directories the compose Flyway services mount
+chmod 644 migrations/*.sql             # flyway (main database)
+chmod 644 migrations-analytics/*.sql   # flyway-analytics
 
-# Re-run the migration. The Flyway container is one-shot (`run --rm`), so
-# each run mounts the files afresh and nothing needs restarting.
-make migrate
+# Re-run the migration that failed. The Flyway containers are one-shot
+# (`run --rm`), so each run mounts the files afresh and nothing needs
+# restarting. The compose file has no Oracle Flyway service.
+make migrate              # main database
+make migrate-analytics    # analytics database
 ```
 
 ### Issue 6: Validation Failed in Production
