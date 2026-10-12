@@ -37,6 +37,7 @@
 import { relayScenario } from './tokens-common.ts';
 
 const scenario = relayScenario({
+  script: 'tokens-vts-issuer-relay.ts',
   path: '/tokens/vts-issuer-relay',
   endpoint: 'tokens_vts_issuer_relay',
   metricPrefix: 'vts_issuer_relay',

@@ -31,6 +31,7 @@
 import { relayScenario } from './tokens-common.ts';
 
 const scenario = relayScenario({
+  script: 'tokens-mle-relay.ts',
   path: '/tokens/mle-relay',
   endpoint: 'tokens_mle_relay',
   metricPrefix: 'mle_relay',

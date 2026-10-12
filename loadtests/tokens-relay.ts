@@ -40,6 +40,7 @@
 import { relayScenario } from './tokens-common.ts';
 
 const scenario = relayScenario({
+  script: 'tokens-relay.ts',
   path: '/tokens/relay',
   endpoint: 'tokens_relay',
   metricPrefix: 'relay',

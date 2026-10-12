@@ -707,5 +707,5 @@ ${warnings.length > 0 ? `\n${warnings.join('\n')}\n` : ''}═══════�
       queue_routed_stats: queueRouted === undefined ? null : queueRouted,
     },
   };
-  return summaryOutputs(report, summary);
+  return summaryOutputs(report, summary, { script: 'topology-repair.ts' });
 }

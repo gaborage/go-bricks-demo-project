@@ -384,5 +384,5 @@ Resilience Assessment:
   console.log(summary);
   console.log(assessment);
 
-  return summaryOutputs(data, summary + '\n' + assessment + '\n');
+  return summaryOutputs(data, summary + '\n' + assessment + '\n', { script: 'spike-test.ts', scenario: spikeScenario });
 }

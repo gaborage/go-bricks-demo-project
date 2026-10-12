@@ -2,8 +2,12 @@
 // This file contains shared configuration for all load tests
 
 import { sleep } from 'k6';
-import type { TestConfig, LoadProfile, SampleProduct, Headers } from './types/index.ts';
-import type { Scenario } from 'k6/options';
+import crypto from 'k6/crypto';
+import http from 'k6/http';
+import type { RefinedParams, RefinedResponse, RequestBody, ResponseType } from 'k6/http';
+import { Counter } from 'k6/metrics';
+import type { TestConfig, LoadProfile, SampleProduct, Headers, ProductResponse } from './types/index.ts';
+import type { Options, Scenario, Threshold } from 'k6/options';
 
 export const config: TestConfig = {
   // Base URL for API - override with K6_BASE_URL environment variable
@@ -190,8 +194,14 @@ export function createChecks(): Record<string, CheckFunction> {
 // option env-vars (which would override script `scenarios`):
 //   PERF_RATE      offered requests/sec (0 or unset -> keep native VU stages)
 //   PERF_DURATION  steady-state duration (default 60s)
+//   PERF_STEPS     "rate:duration,..." staircase instead of PERF_RATE, e.g.
+//                  "50:3m,100:3m,150:3m": one ramping-arrival-rate scenario that
+//                  holds each rate for its duration, with a 15s linear ramp
+//                  between steps. Needs PERF_RATE unset or 0.
 //   PERF_PREALLOC  preallocated VUs reused for keep-alive connections (def 300)
 //   PERF_MAXVUS    hard VU ceiling (default = PERF_PREALLOC)
+// The perf-comparison knobs (abort guards, run id, seed ids, summary markers)
+// are documented with their helpers further down.
 
 /** Parse a positive-integer env value; fallback on unset/zero/malformed input (NaN-safe). */
 function positiveIntOr(value: string | undefined, fallback: number): number {
@@ -199,9 +209,79 @@ function positiveIntOr(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Steady constant-arrival-rate scenario when PERF_RATE is set, else null. */
+/** One PERF_STEPS step: an offered rate (iterations/s) held for a k6 duration. */
+export interface PerfStep {
+  rate: number;
+  duration: string;
+}
+
+/**
+ * Linear ramp between two PERF_STEPS steps; part of the staircase's length.
+ * Reported as perfMeta.stepRampSeconds, so a reader can time the steps.
+ */
+export const PERF_STEP_RAMP_SECONDS = 15;
+const PERF_STEP_RAMP = `${PERF_STEP_RAMP_SECONDS}s`;
+
+/** A k6 duration such as "30s", "3m" or "1m30s", and not all zeros. */
+function isK6Duration(value: string): boolean {
+  return /^(\d+(ms|s|m|h))+$/.test(value) && /[1-9]/.test(value);
+}
+
+/**
+ * PERF_STEPS parsed into steps, or null when unset. A malformed value throws at
+ * init: a perf run must not silently fall back to another load shape.
+ */
+export function perfSteps(): PerfStep[] | null {
+  const raw = (__ENV.PERF_STEPS || '').trim();
+  if (raw === '') return null;
+  return raw.split(',').map((part) => {
+    const m = /^\s*([1-9]\d*)\s*:\s*(\S+)\s*$/.exec(part);
+    if (!m || !isK6Duration(m[2])) {
+      throw new Error(`PERF_STEPS: "${part}" is not <rate>:<duration> (for example 50:3m)`);
+    }
+    return { rate: parseInt(m[1], 10), duration: m[2] };
+  });
+}
+
+// The PERF_STEPS value behind each staircase scenario, so perfMeta reports
+// steps only for a run that really executes one.
+const staircaseSteps = new WeakMap<object, string>();
+
+/** The PERF_STEPS staircase as one ramping-arrival-rate scenario. */
+function staircaseScenario(steps: PerfStep[]): Scenario {
+  const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 300);
+  const stages: { target: number; duration: string }[] = [];
+  steps.forEach((step, i) => {
+    if (i > 0) stages.push({ target: step.rate, duration: PERF_STEP_RAMP });
+    stages.push({ target: step.rate, duration: step.duration });
+  });
+  const scenario = {
+    executor: 'ramping-arrival-rate',
+    startRate: steps[0].rate,
+    timeUnit: '1s',
+    preAllocatedVUs: prealloc,
+    maxVUs: positiveIntOr(__ENV.PERF_MAXVUS, prealloc),
+    stages,
+    gracefulStop: '5s',
+  } as Scenario;
+  staircaseSteps.set(scenario, steps.map((step) => `${step.rate}:${step.duration}`).join(','));
+  return scenario;
+}
+
+/**
+ * The controlled scenario a steady test runs: the PERF_STEPS staircase, else a
+ * constant-arrival-rate scenario when PERF_RATE is set, else null (native VU
+ * stages).
+ */
 export function resolveScenario(): Scenario | null {
+  const steps = perfSteps();
   const rate = positiveIntOr(__ENV.PERF_RATE, 0);
+  if (steps) {
+    if (rate > 0) {
+      throw new Error('PERF_RATE and PERF_STEPS are exclusive: set PERF_RATE=0 or unset it to run the staircase');
+    }
+    return staircaseScenario(steps);
+  }
   if (rate <= 0) return null;
   const prealloc = positiveIntOr(__ENV.PERF_PREALLOC, 300);
   return {
@@ -290,14 +370,336 @@ export function maybeSleep(seconds: number, controlled: boolean): void {
   sleep(seconds);
 }
 
-// handleSummary helper: always emit the human-readable stdout text; ADDITIONALLY
-// write the full k6 summary JSON to PERF_SUMMARY_FILE when set, so a version A/B
-// can diff machine-readable metrics across runs.
-export function summaryOutputs(data: unknown, stdout: string): Record<string, string> {
+// ============================================================================
+// Perf-comparison knobs (opt-in; with none set every script runs as before)
+// ============================================================================
+// For comparing framework versions under an open-model load, e.g. from a
+// Kubernetes Job whose only output channel is its log:
+//   PERF_READ_MIX         get | list | mixed: products-read-only.ts operation mix
+//                         (mixed is the default 70% list / 30% get)
+//   PERF_SEED_ROWS        N: gets pick a uniform random row of the deterministic
+//                         seed (scripts/perf-reset-products.sh) instead of
+//                         discovered or fixture ids. Writes never touch seed rows.
+//   PERF_ABORT_ON_429     1: abort the run on the first 429 (rate limiter)
+//   PERF_ABORT_ERROR_RATE fraction: abort once http_req_failed reaches it
+//   PERF_ABORT_P95_MS     ms: abort once http_req_duration p(95) reaches it
+//                         All three use abortOnFail with delayAbortEval 60s.
+//   PERF_RUN_ID           id: tags every request and metric run_id=<id>
+//   PERF_HARNESS_TAG      recorded in perfMeta only (e.g. the scripts' git tag)
+//   PERF_SUMMARY_STDOUT   1: print the summary JSON (with perfMeta) to stdout
+//                         between ---PERF-SUMMARY-BEGIN--- and
+//                         ---PERF-SUMMARY-END---, after the text summary
+// With PERF_RATE or PERF_STEPS set, dropped_iterations and http_reqs{status:429}
+// carry a count<1 threshold, so both always appear in the summary data (k6 omits
+// a metric that recorded nothing) and either one fails the run's thresholds.
+// In that mode the perf_http_5xx counter also counts every response with a
+// status of 500 or above, made through perfHttp below, and carries a
+// count>=0 threshold so it appears even at 0. A runner judges server errors
+// from it: http_req_failed also counts the 404s products-crud.ts accepts.
+
+/** A boolean knob: unset, 0 or false is off; 1 or true is on; anything else throws. */
+function perfFlag(name: string): boolean {
+  const raw = (__ENV[name] || '').trim().toLowerCase();
+  if (raw === '' || raw === '0' || raw === 'false') return false;
+  if (raw === '1' || raw === 'true') return true;
+  throw new Error(`${name} must be 1 or 0, got "${__ENV[name]}"`);
+}
+
+/** A numeric knob, or null when unset; a value outside `valid` throws. */
+function perfNumber(name: string, valid: (n: number) => boolean, expected: string): number | null {
+  const raw = (__ENV[name] || '').trim();
+  if (raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !valid(n)) {
+    throw new Error(`${name} must be ${expected}, got "${raw}"`);
+  }
+  return n;
+}
+
+/** PERF_SEED_ROWS, or null when unset. */
+export function perfSeedRows(): number | null {
+  return perfNumber('PERF_SEED_ROWS', (n) => Number.isInteger(n) && n > 0, 'a positive integer');
+}
+
+/**
+ * The id of seed row g: md5('perf-seed-' || g)::uuid, exactly as
+ * scripts/perf-reset-products.sh writes it.
+ */
+export function seedProductID(g: number): string {
+  const h = crypto.md5(`perf-seed-${g}`, 'hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** The id of a seed row picked uniformly from 1..rows. */
+export function randomSeedProductID(rows: number): string {
+  return seedProductID(1 + Math.floor(Math.random() * rows));
+}
+
+/**
+ * Whether a get response body is the seed row that was asked for: the same
+ * id, a non-empty name and a finite numeric price. A 200 carrying another
+ * product, or a null price, is not a valid seed read.
+ */
+export function isRequestedProduct(body: string, productID: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as ProductResponse;
+    // go-bricks wraps response in data object
+    const product = parsed.data || parsed;
+    return product.id === productID &&
+      typeof product.name === 'string' && product.name.length > 0 &&
+      typeof product.price === 'number' && Number.isFinite(product.price);
+  } catch (e) {
+    return false;
+  }
+}
+
+/** products-read-only.ts operation mix. */
+export type ReadMix = 'get' | 'list' | 'mixed';
+
+/** PERF_READ_MIX, or null when unset (the script's default mix). */
+export function resolveReadMix(): ReadMix | null {
+  const raw = (__ENV.PERF_READ_MIX || '').trim();
+  if (raw === '') return null;
+  if (raw === 'get' || raw === 'list' || raw === 'mixed') return raw;
+  throw new Error(`PERF_READ_MIX must be get, list or mixed, got "${raw}"`);
+}
+
+/** PERF_ABORT_ERROR_RATE, or null when unset. */
+function perfAbortErrorRate(): number | null {
+  return perfNumber('PERF_ABORT_ERROR_RATE', (n) => n > 0 && n <= 1, 'a fraction in (0, 1]');
+}
+
+/** PERF_ABORT_P95_MS, or null when unset. */
+function perfAbortP95Ms(): number | null {
+  return perfNumber('PERF_ABORT_P95_MS', (n) => n > 0, 'a positive number of milliseconds');
+}
+
+/** Abort guard: fail fast, but only judge after the first minute. */
+function abortThreshold(expression: string): Threshold {
+  return { threshold: expression, abortOnFail: true, delayAbortEval: '60s' };
+}
+
+/** The thresholds the perf knobs add, keyed by metric; empty when none is set. */
+function perfThresholds(): Record<string, Threshold[]> {
+  const extra: Record<string, Threshold[]> = {};
+  const controlled = positiveIntOr(__ENV.PERF_RATE, 0) > 0 || perfSteps() !== null;
+  if (controlled) {
+    extra['dropped_iterations'] = ['count<1'];
+    // Never fails: it only keeps the counter in the summary at 0.
+    extra[PERF_HTTP_5XX] = ['count>=0'];
+  }
+  if (perfFlag('PERF_ABORT_ON_429')) {
+    extra['http_reqs{status:429}'] = [abortThreshold('count<1')];
+  } else if (controlled) {
+    extra['http_reqs{status:429}'] = ['count<1'];
+  }
+  const errorRate = perfAbortErrorRate();
+  if (errorRate !== null) {
+    extra['http_req_failed'] = [abortThreshold(`rate<${errorRate}`)];
+  }
+  const p95Ms = perfAbortP95Ms();
+  if (p95Ms !== null) {
+    extra['http_req_duration'] = [abortThreshold(`p(95)<${p95Ms}`)];
+  }
+  return extra;
+}
+
+/** Responses with a status of 500 or above, counted under PERF_RATE or PERF_STEPS. */
+export const PERF_HTTP_5XX = 'perf_http_5xx';
+
+// Registered only under a controlled load (PERF_RATE or PERF_STEPS set, the
+// same condition that adds its threshold), so a default run records no new
+// metric. Created here, at module scope, because k6 only allows custom
+// metrics in the init context.
+const serverErrors: Counter | null =
+  positiveIntOr(__ENV.PERF_RATE, 0) > 0 || (__ENV.PERF_STEPS || '').trim() !== ''
+    ? new Counter(PERF_HTTP_5XX)
+    : null;
+
+function countServerError<RT extends ResponseType | undefined>(response: RefinedResponse<RT>): RefinedResponse<RT> {
+  if (serverErrors !== null && response.status >= 500) {
+    serverErrors.add(1);
+  }
+  return response;
+}
+
+/**
+ * k6/http's get, post, put and del, plus expectedStatuses, with every response
+ * counted into perf_http_5xx when that counter is registered. Otherwise each
+ * call is exactly the k6/http call. The perf-aware scripts import it as
+ * `http`, so no request site changes.
+ */
+export const perfHttp = {
+  get<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.get>[0],
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.get(url, params));
+  },
+  post<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.post>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.post(url, body, params));
+  },
+  put<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.put>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.put(url, body, params));
+  },
+  del<RT extends ResponseType | undefined>(
+    url: Parameters<typeof http.del>[0],
+    body?: RequestBody | null,
+    params?: RefinedParams<RT> | null,
+  ): RefinedResponse<RT> {
+    return countServerError(http.del(url, body, params));
+  },
+  expectedStatuses: http.expectedStatuses,
+};
+
+/**
+ * A script's options plus whatever the perf knobs add: their thresholds,
+ * appended after the script's own, and the run_id tag. With no knob set it
+ * returns `options` itself, so `k6 inspect` output is unchanged.
+ */
+export function withPerfKnobs(options: Options): Options {
+  // Validated here, at init, rather than first read in handleSummary.
+  perfFlag('PERF_SUMMARY_STDOUT');
+  const extra = perfThresholds();
+  const names = Object.keys(extra);
+  const runID = (__ENV.PERF_RUN_ID || '').trim();
+  if (names.length === 0 && runID === '') return options;
+
+  const thresholds: Record<string, Threshold[]> = { ...(options.thresholds || {}) };
+  names.forEach((name) => {
+    thresholds[name] = (thresholds[name] || []).concat(extra[name]);
+  });
+  return {
+    ...options,
+    ...(names.length > 0 ? { thresholds } : {}),
+    ...(runID !== '' ? { tags: { ...(options.tags || {}), run_id: runID } } : {}),
+  };
+}
+
+/** What setup() returns so the summary can stamp the run's start. */
+export interface PerfSetupData {
+  perfStartedAt: string;
+}
+
+/** setup()'s return value: the run's start, read back from handleSummary's setup_data. */
+export function perfSetupData(): PerfSetupData {
+  return { perfStartedAt: new Date().toISOString() };
+}
+
+/** What a script tells summaryOutputs about its run, for perfMeta. */
+export interface PerfSummaryContext {
+  /** The script's file name, e.g. 'products-read-only.ts'. */
+  script: string;
+  /** True when the script's options went through withPerfKnobs, so its abort guards apply. */
+  perfKnobs?: boolean;
+  /**
+   * The scenario a perf knob selected (PERF_RATE, PERF_STEPS, the controlled
+   * spike), or null when the run uses the script's own load shape.
+   */
+  scenario?: Scenario | null;
+  /** The script's PERF_READ_MIX, when it reads one. */
+  readMix?: ReadMix | null;
+  /** The script's PERF_SEED_ROWS, when it reads one. */
+  seedRows?: number | null;
+}
+
+/**
+ * Run identity and the load the run actually executed, added to the summary
+ * JSON as `perfMeta`. Load-shape fields come from the selected scenario and
+ * abort fields from the guards the script applied, not from the environment
+ * alone, so a knob the script ignores reads as null (or false).
+ */
+export interface PerfMeta {
+  runId: string | null;
+  script: string | null;
+  /**
+   * The selected scenario's executor: constant-arrival-rate (PERF_RATE),
+   * ramping-arrival-rate (PERF_STEPS, or the controlled spike), or null for the
+   * script's own load shape.
+   */
+  executor: string | null;
+  readMix: ReadMix | null;
+  /** The constant arrival rate, or null for any other load shape. */
+  rate: number | null;
+  /** The staircase as rate:duration steps, or null when none runs. */
+  steps: string | null;
+  /** The linear ramp between two staircase steps, in seconds, or null when no staircase runs. */
+  stepRampSeconds: number | null;
+  seedRows: number | null;
+  /** null without a selected scenario: native VU mode has no arrival-rate VU pool. */
+  preAllocatedVUs: number | null;
+  maxVUs: number | null;
+  baseUrl: string;
+  apiPrefix: string;
+  /** The abort guards the script applied (false/null for a script without withPerfKnobs). */
+  abortOn429: boolean;
+  abortErrorRate: number | null;
+  abortP95Ms: number | null;
+  harnessTag: string | null;
+  /** From setup(); null for a script whose setup does not return perfSetupData(). */
+  startedAt: string | null;
+  endedAt: string;
+}
+
+function perfMeta(data: unknown, ctx: PerfSummaryContext | undefined): PerfMeta {
+  const setupData = (data as { setup_data?: { perfStartedAt?: unknown } } | null)?.setup_data;
+  const scenario = ctx?.scenario || null;
+  const shape = (scenario || {}) as { executor?: string; rate?: number; preAllocatedVUs?: number; maxVUs?: number };
+  const knobs = ctx?.perfKnobs === true;
+  const steps = scenario ? staircaseSteps.get(scenario) ?? null : null;
+  return {
+    runId: (__ENV.PERF_RUN_ID || '').trim() || null,
+    script: ctx?.script ?? null,
+    executor: shape.executor ?? null,
+    readMix: ctx?.readMix ?? null,
+    rate: shape.executor === 'constant-arrival-rate' ? shape.rate ?? null : null,
+    steps,
+    stepRampSeconds: steps !== null ? PERF_STEP_RAMP_SECONDS : null,
+    seedRows: ctx?.seedRows ?? null,
+    preAllocatedVUs: shape.preAllocatedVUs ?? null,
+    maxVUs: shape.maxVUs ?? null,
+    baseUrl: config.baseURL,
+    apiPrefix: config.apiPrefix,
+    abortOn429: knobs && perfFlag('PERF_ABORT_ON_429'),
+    abortErrorRate: knobs ? perfAbortErrorRate() : null,
+    abortP95Ms: knobs ? perfAbortP95Ms() : null,
+    harnessTag: (__ENV.PERF_HARNESS_TAG || '').trim() || null,
+    startedAt: typeof setupData?.perfStartedAt === 'string' ? setupData.perfStartedAt : null,
+    endedAt: new Date().toISOString(),
+  };
+}
+
+/** Lines that frame the summary JSON on stdout under PERF_SUMMARY_STDOUT=1. */
+export const PERF_SUMMARY_BEGIN = '---PERF-SUMMARY-BEGIN---';
+export const PERF_SUMMARY_END = '---PERF-SUMMARY-END---';
+
+// handleSummary helper: always emit the human-readable stdout text. With
+// PERF_SUMMARY_FILE set, ADDITIONALLY write the full k6 summary JSON, plus a
+// top-level `perfMeta`, to that file, so a version A/B can diff
+// machine-readable metrics across runs. With PERF_SUMMARY_STDOUT=1, also print
+// that JSON as one line between the marker lines, after the text summary, for
+// a runner that can only read the log.
+export function summaryOutputs(data: unknown, stdout: string, ctx?: PerfSummaryContext): Record<string, string> {
   const outputs: Record<string, string> = { stdout };
   const file = __ENV.PERF_SUMMARY_FILE;
+  const markers = perfFlag('PERF_SUMMARY_STDOUT');
+  if (!file && !markers) return outputs;
+
+  const json = JSON.stringify({ ...(data as Record<string, unknown>), perfMeta: perfMeta(data, ctx) });
   if (file) {
-    outputs[file] = JSON.stringify(data);
+    outputs[file] = json;
+  }
+  if (markers) {
+    const text = stdout.endsWith('\n') ? stdout : `${stdout}\n`;
+    outputs.stdout = `${text}${PERF_SUMMARY_BEGIN}\n${json}\n${PERF_SUMMARY_END}\n`;
   }
   return outputs;
 }
@@ -314,12 +716,17 @@ export interface SummaryMetric {
 
 /**
  * A Rate metric as a percentage, or "n/a (none ran)" when the metric recorded no
- * sample. k6 omits a metric that never received a value, and rendering that as
- * 0.00% reads as "every request failed".
+ * sample. k6 omits a metric that never received a value, or keeps it at rate 0
+ * with no passes and no fails when a threshold names it, and rendering either
+ * as 0.00% reads as "every request failed".
  */
 export function formatRate(metric: SummaryMetric | undefined): string {
-  const rate = metric?.values?.rate;
-  return rate === undefined ? 'n/a (none ran)' : `${(rate * 100).toFixed(2)}%`;
+  const values = metric?.values;
+  const rate = values?.rate;
+  if (rate === undefined || (values?.passes === 0 && values?.fails === 0)) {
+    return 'n/a (none ran)';
+  }
+  return `${(rate * 100).toFixed(2)}%`;
 }
 
 /** A trend stat in milliseconds, or "n/a" when the run recorded none. */
