@@ -470,7 +470,7 @@ make test                                        # Run all tests (uses race dete
 [cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
 
 - **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `paymentssign-v1` and `paymentsencrypt-v1`, and restores the previous runtime in `t.Cleanup`.
-- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.69.0, and their `Init` needs a validated config, a database or DER files.
+- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.71.1, and their `Init` needs a validated config, a database or DER files.
 - **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
 - **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
 
@@ -574,12 +574,13 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` is pinned to go-bricks `v0.69.0`. There is no
+**go-bricks version:** `go.mod` is pinned to go-bricks `v0.71.1`. There is no
 `replace` directive — builds and CI resolve the framework from the module proxy
 like any other dependency. The per-environment operator decisions for the
-v0.67.0 → v0.69.0 upgrade live in
-[wiki/GOBRICKS_V069_UPGRADE.md](wiki/GOBRICKS_V069_UPGRADE.md), and those for
-v0.64.0 → v0.67.0 in [wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
+v0.69.0 → v0.71.1 upgrade live in
+[wiki/GOBRICKS_V071_UPGRADE.md](wiki/GOBRICKS_V071_UPGRADE.md), those for
+v0.67.0 → v0.69.0 in [wiki/GOBRICKS_V069_UPGRADE.md](wiki/GOBRICKS_V069_UPGRADE.md),
+and those for v0.64.0 → v0.67.0 in [wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
 
 **Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
 file. It stays untracked — `.gitignore` is a deny-all allowlist, so `go.work` is
@@ -879,7 +880,7 @@ printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
 
 **PAN-bearing requests in logs (go-bricks v0.65.0, ADR-110):** `TokenizeRequest`, `PeerSimRequest`, `RelayRequest` and `MLERelayRequest` implement `logger.Redactor` with a value receiver, so a filtered logger handed the whole struct — the decrypted JOSE request or a plaintext relay body — renders `{"last4":"…"}` and never the PAN. Same rules as the payments card (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)): it backs up `log.sensitivefields`, it is consulted only at `Interface`/`WithFields`, and it does not make logging request bodies acceptable. It cannot reach bytes that were already marshaled, so the relays' outbound `httpclient` body preview stays covered by the `pan` needle. [internal/modules/tokens/handlers/pan_redaction_test.go](internal/modules/tokens/handlers/pan_redaction_test.go) pins all four types.
 
-**Reference:** [go-bricks v0.67.0 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.67.0/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
+**Reference:** [go-bricks v0.71.1 llms.txt](https://github.com/gaborage/go-bricks/blob/v0.71.1/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
 ### Sealed Messages (JWE-of-JWS on AMQP)
 
@@ -927,7 +928,7 @@ back off the parked bytes with `open-event` (below): exit `3` plus
 under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 
 ```bash
-printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.71.1 \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
   -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
@@ -1697,7 +1698,7 @@ curl -s http://localhost:8080/_sys/health-debug | jq .data.components.messaging.
 # Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
 # failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
 # (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
-make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.69.0)
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.71.1)
 # Exit codes: 0 clean; 1 fleet split (something was attempted and something
 # failed or was never attempted); 2 nothing attempted, no schema touched (empty
 # or failed tenant listing, unreadable tenant store, credential provider that
