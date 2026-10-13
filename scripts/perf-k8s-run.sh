@@ -50,7 +50,8 @@
 #                    [warm or run start, run end or now]
 #   pod / node       app pod replaced, restarted or more than one / node changed,
 #                    from facts read before and after the Job (APP_SELECTOR)
-#   k6cpu            k6 container CPU reached 70% of its 1-CPU request (kubectl top)
+#   k6cpu            k6 container CPU reached 70% of its CPU request, K6_CPU_REQUEST
+#                    (default 1 core), sampled with kubectl top
 #   acu              Aurora ACU left ACU_WARM +/- 1 inside the window (CloudWatch)
 #   missing-summary  no single summary line after RUN_START=, no RC=, or a
 #                    perfMeta.runId that is not this rep's run id
@@ -171,11 +172,10 @@ PSQL_TEMPLATE="$REPO_ROOT/loadtests/k8s/psql-job.yaml"
 # Test hook: the offline suite points this at a stub of the SQL generator.
 RESET_SCRIPT="${PERF_RESET_SCRIPT:-$SCRIPT_DIR/perf-reset-products.sh}"
 # shellcheck disable=SC2016 # literal ${NAME} tokens: envsubst's explicit variable list
-K6_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE} ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR} ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP} ${K6_EPHEMERAL_REQUEST} ${K6_EPHEMERAL_LIMIT}'
+K6_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE} ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR} ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP} ${K6_EPHEMERAL_REQUEST} ${K6_EPHEMERAL_LIMIT} ${K6_CPU_REQUEST} ${K6_CPU_LIMIT}'
 # shellcheck disable=SC2016
 PSQL_TEMPLATE_VARS='${JOB_NAME} ${NAMESPACE} ${PSQL_IMAGE} ${PSQL_RUN_AS_USER} ${DB_SECRET} ${PG_HOST_KEY} ${PG_PORT_KEY} ${PG_DB_KEY} ${PG_USER_KEY} ${PG_PASSWORD_KEY} ${PG_CA_CONFIGMAP} ${PG_CA_KEY} ${SQL_CONFIGMAP} ${PSQL_EPHEMERAL_REQUEST} ${PSQL_EPHEMERAL_LIMIT}'
-K6_CPU_REQUEST_M=1000      # requests.cpu in k6-job.yaml
-K6_CPU_GATE_PCT=70         # k6cpu gate threshold, percent of the request
+K6_CPU_GATE_PCT=70         # k6cpu gate threshold, percent of the K6_CPU_REQUEST the run uses
 RATE_TOLERANCE=0.01        # rate gate: |achieved - target| / target
 MAX_5XX_PCT=0.1            # 5xx gate: must stay below this percent of http_reqs
 STEP_RAMP_S=15             # ramp before each PERF_STEPS step (k6 suite)
@@ -233,6 +233,26 @@ storage_quantity() {
     value="${!name:-$default}"
     [[ "$value" =~ ^[0-9]+(Ki|Mi|Gi)$ ]] || usage_err "$name must be a storage quantity such as 256Mi, got '$value'"
     printf '%s' "$value"
+    return 0
+}
+
+# cpu_quantity NAME DEFAULT -> the env value of NAME, or DEFAULT when NAME is unset;
+# refuses anything but whole cores (4) or millicores (3500m), and refuses zero and an
+# explicitly empty value
+cpu_quantity() {
+    local name="$1" default="$2" value
+    value="${!name-$default}"
+    [[ "$value" =~ ^(0|[1-9][0-9]{0,8})m?$ ]] \
+        || usage_err "$name must be a CPU quantity in whole cores such as 4 or millicores such as 3500m, got '$value'"
+    [[ "$(cpu_millicores "$value")" -gt 0 ]] || usage_err "$name must be above zero, got '$value'"
+    printf '%s' "$value"
+    return 0
+}
+
+# cpu_millicores QUANTITY -> millicores of a quantity cpu_quantity accepted
+cpu_millicores() {
+    local q="$1"
+    if [[ "$q" == *m ]]; then echo $((10#${q%m})); else echo $((10#$q * 1000)); fi
     return 0
 }
 
@@ -783,8 +803,16 @@ run_k6() {
     TYPES_CONFIGMAP="k6-types-$(dns_name "$HARNESS_TAG" 40)"
     K6_EPHEMERAL_REQUEST="$(storage_quantity K6_EPHEMERAL_REQUEST 256Mi)"
     K6_EPHEMERAL_LIMIT="$(storage_quantity K6_EPHEMERAL_LIMIT 1Gi)"
+    # The template gets each CPU quantity as spelled; the k6cpu gate gets the request in millicores.
+    K6_CPU_REQUEST="$(cpu_quantity K6_CPU_REQUEST 1)"
+    K6_CPU_LIMIT="$(cpu_quantity K6_CPU_LIMIT 2)"
+    K6_CPU_REQUEST_M="$(cpu_millicores "$K6_CPU_REQUEST")"
+    K6_CPU_LIMIT_M="$(cpu_millicores "$K6_CPU_LIMIT")"
+    ((K6_CPU_LIMIT_M >= K6_CPU_REQUEST_M)) \
+        || usage_err "K6_CPU_LIMIT ($K6_CPU_LIMIT) must not be below K6_CPU_REQUEST ($K6_CPU_REQUEST)"
     export JOB_NAME NAMESPACE RUN_ID_LABEL K6_IMAGE ACTIVE_DEADLINE_SECONDS K6_RUN_AS_USER \
-        K6_NODE_SELECTOR K6_AFFINITY K6_ENV SCRIPTS_CONFIGMAP TYPES_CONFIGMAP K6_EPHEMERAL_REQUEST K6_EPHEMERAL_LIMIT
+        K6_NODE_SELECTOR K6_AFFINITY K6_ENV SCRIPTS_CONFIGMAP TYPES_CONFIGMAP K6_EPHEMERAL_REQUEST K6_EPHEMERAL_LIMIT \
+        K6_CPU_REQUEST K6_CPU_LIMIT
 
     local manifest
     manifest="$(render "$K6_TEMPLATE" "$K6_TEMPLATE_VARS")"
@@ -838,6 +866,8 @@ run_k6() {
         {
             app_pod_facts after
             [[ -z "$K6_CPU_MAX" ]] || echo "k6_cpu_max_m=$K6_CPU_MAX"
+            echo "k6_cpu_request_m=$K6_CPU_REQUEST_M"
+            echo "k6_cpu_limit_m=$K6_CPU_LIMIT_M"
             if [[ -n "$warm_level" ]]; then
                 echo "acu_warm=$warm_level"
                 acu_facts "${run_start:-$applied_at}" "${run_end:-$finished_at}"

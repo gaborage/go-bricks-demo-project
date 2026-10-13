@@ -49,6 +49,8 @@ Pipe either command into `kubectl apply --dry-run=server -f -` for an admission 
 | `${SCRIPTS_CONFIGMAP}` | `k6-scripts-<HARNESS_TAG>`, mounted at `/scripts` |
 | `${TYPES_CONFIGMAP}` | `k6-types-<HARNESS_TAG>`, mounted at `/scripts/types` |
 | `${K6_EPHEMERAL_REQUEST}` / `${K6_EPHEMERAL_LIMIT}` | `K6_EPHEMERAL_REQUEST` / `K6_EPHEMERAL_LIMIT`: ephemeral-storage request and limit (defaults `256Mi` / `1Gi`) |
+| `${K6_CPU_REQUEST}` | `K6_CPU_REQUEST`: CPU request in whole cores (`4`) or millicores (`3500m`), default `1`. The `k6cpu` gate voids a rep at 70% of it |
+| `${K6_CPU_LIMIT}` | `K6_CPU_LIMIT`: CPU limit, same format, default `2`. Zero, another format, or a limit below the request exits 2 |
 
 The env list carries `K6_BASE_URL` (`TARGET_URL`), `K6_API_PREFIX` (`API_PREFIX`),
 `PERF_RUN_ID`, `PERF_HARNESS_TAG`, `PERF_RATE`, `PERF_DURATION`, `PERF_SUMMARY_STDOUT=1`,
@@ -57,8 +59,8 @@ The env list carries `K6_BASE_URL` (`TARGET_URL`), `K6_API_PREFIX` (`API_PREFIX`
 `backoffLimit: 0`, `restartPolicy: Never` and `ttlSecondsAfterFinished: 86400`. It is
 labelled `app.kubernetes.io/part-of=k6-perf` and `app.kubernetes.io/component=load-generator`
 (the reset Job: `component=reset`), and annotated `karpenter.sh/do-not-disrupt:
-"true"`. Resources are requests 1 CPU / 512Mi and limits 2 CPU / 1Gi, plus the
-ephemeral-storage pair above. It runs as
+"true"`. Resources are requests 512Mi and limits 1Gi of memory, plus the CPU and
+ephemeral-storage pairs above. It runs as
 non-root with seccomp `RuntimeDefault` and a read-only root filesystem (`/tmp` is an
 `emptyDir`).
 

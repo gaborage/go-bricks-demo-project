@@ -129,7 +129,9 @@ One session per version, in this shape:
    the target, there was no 429 and under 0.1% 5xx, no VOID line falls inside
    its window, the pod and node did not change, the k6 container stayed under
    70% of its CPU request, and the database capacity stayed within 1 unit of
-   its warm level. A failing SLO threshold in a script is a result, not a void.
+   its warm level. The k6 CPU threshold is 70% of the configured request,
+   `K6_CPU_REQUEST` in the runner's env file (default 1 core), so a larger
+   request raises it. A failing SLO threshold in a script is a result, not a void.
    Re-queue a void rep at the end of the schedule, at most twice per scenario,
    and log every attempt.
 9. **Staircase.** S5 once per version, after the measured reps, with 3-minute
