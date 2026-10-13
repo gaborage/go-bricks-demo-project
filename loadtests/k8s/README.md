@@ -156,7 +156,9 @@ The runner voids any rep whose window contains such a line. The watchdog enforce
 - **App pod:** a restart, OOMKill or NotReady, or the pod disappearing.
 - **App node:** the node changing, a disruption or interruption on it, a pressure
   condition, or CPU above the threshold on two samples in a row.
-- **Shared dependencies:** broker memory, and the Aurora ACU ceiling.
+- **Shared dependencies:** broker memory, and the Aurora ACU ceiling held for
+  `--acu-sustain` one-minute CloudWatch readings in a row. One reading is not enough:
+  Aurora Serverless v2 can report a one-minute capacity spike with no database load.
 - **Time:** the session end.
 
 **Selectors.** Two label selectors, for two jobs:

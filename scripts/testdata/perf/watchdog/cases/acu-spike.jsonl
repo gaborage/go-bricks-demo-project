@@ -1,0 +1,3 @@
+{}
+{"acu":{"Datapoints":[{"Timestamp":"2026-10-13T23:55:00Z","Maximum":2.0},{"Timestamp":"2026-10-13T23:56:00Z","Maximum":2.5},{"Timestamp":"2026-10-13T23:57:00Z","Maximum":2.0},{"Timestamp":"2026-10-13T23:58:00Z","Maximum":2.5},{"Timestamp":"2026-10-13T23:59:00Z","Maximum":15.5}]}}
+{"acu":{"Datapoints":[{"Timestamp":"2026-10-13T23:56:00Z","Maximum":12.0},{"Timestamp":"2026-10-13T23:57:00Z","Maximum":2.0},{"Timestamp":"2026-10-13T23:58:00Z","Maximum":2.5},{"Timestamp":"2026-10-13T23:59:00Z","Maximum":2.0},{"Timestamp":"2026-10-14T00:00:00Z","Maximum":2.5}]}}

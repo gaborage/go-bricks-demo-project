@@ -315,7 +315,7 @@ The watchdog enforces these, and deleting the k6 Jobs is the kill switch.
 | App pod restart, NotReady or OOMKilled | Kill and void the rep. Investigate before going on. |
 | App node changed, or a spot interruption or node disruption event | Void the session. |
 | Node CPU above 90% for 2 samples, or any node pressure condition | Kill and void the rep. |
-| Database capacity at the agreed ceiling | Kill. The frozen rate is too high for the shared database: stop and re-plan. Never raise the ceiling mid-series. |
+| Database capacity at the agreed ceiling on 5 one-minute readings in a row (`--acu-sustain 5`) | Kill. The frozen rate is too high for the shared database: stop and re-plan. Never raise the ceiling mid-series. One reading at the ceiling is not enough: Aurora Serverless v2 can spike for a minute with no database load. |
 | Other-tenant database load above 0.5 average active sessions during a rep | Void the rep, without a kill. |
 | Broker memory above its limit, or a queue the app consumes keeps growing | Kill and void the rep. |
 | k6 sees a 429, an error rate above 2% (1% in the staircase), or a staircase p95 above 1000 ms | k6 aborts by itself. Void the rep. In the staircase the abort marks the knee, and the run is still read. |

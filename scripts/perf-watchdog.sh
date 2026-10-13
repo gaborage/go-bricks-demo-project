@@ -41,6 +41,7 @@
 #   node-cpu         node CPU above --node-cpu-pct on 2 samples in a row rep      kill
 #   broker-mem       broker pod memory above --broker-mem-mi             rep      kill
 #   acu-ceiling      Aurora ServerlessDatabaseCapacity >= --acu-ceiling  session  stop
+#                    on --acu-sustain 1-minute datapoints in a row
 #   session-end      wall clock past --session-end                       session  stop
 # A rep-scope rule is re-evaluated each sample. A session-scope rule latches:
 # from then on every Job that appears is killed (stop = the session is over;
@@ -48,6 +49,22 @@
 # starts firing, and again on every sample that finds a load Job running while
 # it fires, so the line always falls inside the voided rep's window. A sample
 # whose read failed fires nothing (logged as "?" in the CSV).
+#
+# acu-ceiling reads CloudWatch's 1-minute Maximum datapoints. It fires only when
+# the --acu-sustain newest datapoints are that many consecutive minutes (60 s
+# apart, ending at the newest) all at or above --acu-ceiling: Aurora Serverless
+# v2 can report a one-minute capacity spike with no database load, and one such
+# reading must not stop a session. A missing minute or a reading below the
+# ceiling breaks the run, and fewer datapoints than --acu-sustain never fire.
+# Each read covers max(5, --acu-sustain + 3) minutes, because CloudWatch publishes
+# this metric 1-2 minutes late, so --acu-sustain is 1 to 1436: CloudWatch refuses
+# a read of more than 1,440 one-minute datapoints, and an unaligned window holds
+# --acu-sustain + 4 of them. A timestamp may be
+# ISO-8601 with any UTC offset (the AWS CLI's default prints the local zone) or
+# epoch seconds (cli_timestamp_format = wire); one that is neither makes the
+# whole read count as failed, with a notice on stderr, because the newest
+# datapoint is then unknown. The CSV's acu column is the newest datapoint, and
+# acu_run the length of the run that ends at it.
 #
 # Abort criteria owned by other tools (none is visible through the commands
 # above): k6 429 / error-rate / p95 aborts (k6 thresholds), dropped iterations
@@ -62,7 +79,8 @@
 #              merge patch per line (jq `*`), applied to base in turn. A sample
 #              has keys now, deploy, hpa, pod, node, events, top_node,
 #              top_broker, acu, jobs holding the raw `kubectl get -o json` /
-#              `kubectl top --no-headers` / CloudWatch output; null means
+#              `kubectl top --no-headers` / CloudWatch output (acu.Datapoints
+#              is replaced whole, so each line carries the full set); null means
 #              NotFound and {"__error": "..."} means the read failed.
 #   wait-idle: <dir>/top.txt has one `kubectl top pod --no-headers` line per
 #              sample, or "ERROR <message>" for a failed read.
@@ -88,7 +106,7 @@ usage() {
     cat <<'EOF'
 Usage:
   perf-watchdog.sh watch --context CTX --namespace NS --deployment DEPLOY --pod POD --node NODE
-      --job-selector SEL --aurora-cluster ID --acu-ceiling ACU
+      --job-selector SEL --aurora-cluster ID --acu-ceiling ACU --acu-sustain MINUTES
       --broker-namespace NS --broker-pod POD --broker-mem-mi MI --node-cpu-pct PCT
       --interval SECONDS --session-end ISO --out CSV --void-log FILE [--simulate DIR]
 
@@ -236,11 +254,35 @@ FEATURES_JQ='
 def bad: type == "object" and has("__error");
 def ok: . != null and (bad | not);
 def q: if . == null then "?" elif . == "" then "-" else tostring end;
-def epoch: if type == "string" then (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) else null end;
+# ISO-8601 or epoch seconds -> whole epoch seconds, or null. Takes Z or a numeric
+# UTC offset: the AWS CLI can print CloudWatch timestamps in the local zone
+# (e.g. -05:00), and prints epoch seconds under cli_timestamp_format = wire.
+def epoch: if type == "number" then floor
+    elif type == "string" then
+    (first(try (capture("^(?<b>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\\.[0-9]+)?(?<z>Z|(?<sg>[+-])(?<oh>[0-9]{2}):?(?<om>[0-9]{2}))$")
+        | (.b + "Z" | fromdateiso8601)
+          - (if .z == "Z" then 0 else (if .sg == "+" then 1 else -1 end) * ((.oh | tonumber) * 3600 + (.om | tonumber) * 60) end)) catch null) // null)
+    else null end;
 def mem_mi: if test("Ki$") then (sub("Ki$"; "") | tonumber / 1024)
             elif test("Mi$") then (sub("Mi$"; "") | tonumber)
             elif test("Gi$") then (sub("Gi$"; "") | tonumber * 1024)
             elif test("^[0-9]+$") then (tonumber / 1048576) else null end;
+# Number of CloudWatch datapoints whose timestamp does not parse.
+def acu_unparsed: [.Datapoints // [] | .[] | select((.Timestamp | epoch) == null)] | length;
+# CloudWatch datapoints as {t: epoch, m: Maximum}, newest first, or null when a
+# timestamp does not parse: the order is then unknown, so the read counts as failed.
+def acu_points: if acu_unparsed > 0 then null
+    else [.Datapoints // [] | .[] | {t: (.Timestamp | epoch), m: .Maximum}] | sort_by(.t) | reverse end;
+# Length of the run of datapoints at or above $ceil that ends at the newest one,
+# each 60 s after the one before it. A gap or a lower reading ends the run.
+def acu_run: ($ceil | tonumber) as $c
+    | acu_points
+    | if . == null then null else
+        reduce .[] as $d ({n: 0, prev: null, open: true};
+            if .open and $d.t != null and ($d.m | type) == "number" and $d.m >= $c
+                and (.prev == null or .prev - $d.t == 60)
+            then .n += 1 | .prev = $d.t else .open = false end)
+        | .n end;
 . as $s
 | [ ($s.now | q),
     (if ($s.deploy | ok) then ([$s.deploy.spec.replicas // 0, $s.deploy.status.replicas // 0] | max) else null end | q),
@@ -262,12 +304,14 @@ def mem_mi: if test("Ki$") then (sub("Ki$"; "") | tonumber / 1024)
         | if test("^[0-9]+%$") then sub("%$"; "") else null end) else null end | q),
     (if ($s.top_broker | type) == "string" then ($s.top_broker | split(" ") | map(select(. != "")) | .[2] // "" | mem_mi
         | if . == null then null else floor end) else null end | q),
-    (if ($s.acu | ok) then ($s.acu.Datapoints // [] | sort_by(.Timestamp) | last | .Maximum // null) else null end | q),
-    (if ($s.jobs | ok) then [$s.jobs.items[]? | select(any(.status.conditions[]?; (.type == "Complete" or .type == "Failed") and .status == "True") | not)] | length else null end | q)
+    (if ($s.acu | ok) then ($s.acu | acu_points | if . == null then null else (first | .m // null) end) else null end | q),
+    (if ($s.jobs | ok) then [$s.jobs.items[]? | select(any(.status.conditions[]?; (.type == "Complete" or .type == "Failed") and .status == "True") | not)] | length else null end | q),
+    (if ($s.acu | ok) then ($s.acu | acu_run) else null end | q),
+    (if ($s.acu | ok) then ($s.acu | acu_unparsed) else 0 end | q)
   ] | @tsv'
 
-W_CTX="" W_NS="" W_DEPLOY="" W_POD="" W_NODE="" W_SEL="" W_CLUSTER="" W_ACU_CEIL="" W_BNS="" W_BPOD=""
-W_BMEM="" W_CPU_PCT="" W_INTERVAL="" W_END="" W_OUT="" W_VOID=""
+W_CTX="" W_NS="" W_DEPLOY="" W_POD="" W_NODE="" W_SEL="" W_CLUSTER="" W_ACU_CEIL="" W_ACU_SUSTAIN="" W_BNS=""
+W_BPOD="" W_BMEM="" W_CPU_PCT="" W_INTERVAL="" W_END="" W_OUT="" W_VOID="" W_ACU_WINDOW_S=""
 
 kc() {
     kubectl --context "$W_CTX" "$@"
@@ -309,7 +353,7 @@ collect_live() { # NOW_ISO
     fetch_text "$d/top_broker" kc --namespace "$W_BNS" top pod "$W_BPOD" --no-headers
     fetch_json "$d/acu" aws cloudwatch get-metric-statistics --namespace AWS/RDS \
         --metric-name ServerlessDatabaseCapacity --dimensions "Name=DBClusterIdentifier,Value=$W_CLUSTER" \
-        --start-time "$(epoch_to_iso $(($(clock_now) - 300)))" --end-time "$now" \
+        --start-time "$(epoch_to_iso $(($(iso_to_epoch "$now") - W_ACU_WINDOW_S)))" --end-time "$now" \
         --period 60 --statistics Maximum --output json
     fetch_json "$d/jobs" kc --namespace "$W_NS" get jobs -l "$W_SEL" -o json
     for f in deploy hpa pod node events top_node top_broker acu jobs; do
@@ -358,6 +402,7 @@ cmd_watch() {
             --job-selector) need_value "$arg" "$val"; W_SEL="$val"; shift 2 ;;
             --aurora-cluster) need_value "$arg" "$val"; W_CLUSTER="$val"; shift 2 ;;
             --acu-ceiling) need_value "$arg" "$val"; W_ACU_CEIL="$val"; shift 2 ;;
+            --acu-sustain) need_value "$arg" "$val"; W_ACU_SUSTAIN="$val"; shift 2 ;;
             --broker-namespace) need_value "$arg" "$val"; W_BNS="$val"; shift 2 ;;
             --broker-pod) need_value "$arg" "$val"; W_BPOD="$val"; shift 2 ;;
             --broker-mem-mi) need_value "$arg" "$val"; W_BMEM="$val"; shift 2 ;;
@@ -372,7 +417,7 @@ cmd_watch() {
     done
     local f flag
     for f in W_CTX:context W_NS:namespace W_DEPLOY:deployment W_POD:pod W_NODE:node W_SEL:job-selector \
-        W_CLUSTER:aurora-cluster W_ACU_CEIL:acu-ceiling W_BNS:broker-namespace W_BPOD:broker-pod \
+        W_CLUSTER:aurora-cluster W_ACU_CEIL:acu-ceiling W_ACU_SUSTAIN:acu-sustain W_BNS:broker-namespace W_BPOD:broker-pod \
         W_BMEM:broker-mem-mi W_CPU_PCT:node-cpu-pct W_INTERVAL:interval W_END:session-end W_OUT:out \
         W_VOID:void-log; do
         flag="${f#*:}"; f="${f%%:*}"
@@ -382,6 +427,15 @@ cmd_watch() {
     has_load_term "$W_SEL" \
         || usage_err "--job-selector must contain the term app.kubernetes.io/component=load-generator, so only load Jobs are counted and killed (e.g. app.kubernetes.io/part-of=k6-perf,app.kubernetes.io/component=load-generator)"
     [[ "$W_ACU_CEIL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || usage_err "--acu-ceiling must be a number"
+    # At most 1436: an unaligned read of N + 3 minutes holds N + 4 one-minute
+    # datapoints, and CloudWatch refuses a read of more than 1,440.
+    if ! [[ "$W_ACU_SUSTAIN" =~ ^[1-9][0-9]{0,3}$ ]] || ((W_ACU_SUSTAIN > 1436)); then
+        usage_err "--acu-sustain must be a whole number of minutes from 1 to 1436"
+    fi
+    # The read must hold the run plus three minutes, because CloudWatch publishes
+    # this metric 1-2 minutes late, and never less than 5 minutes.
+    W_ACU_WINDOW_S=$(((W_ACU_SUSTAIN + 3) * 60))
+    ((W_ACU_WINDOW_S >= 300)) || W_ACU_WINDOW_S=300
     [[ "$W_BMEM" =~ ^[0-9]+$ ]] || usage_err "--broker-mem-mi must be a whole number"
     [[ "$W_CPU_PCT" =~ ^[0-9]+$ ]] || usage_err "--node-cpu-pct must be a whole number"
     [[ "$W_INTERVAL" =~ ^[1-9][0-9]*$ ]] || usage_err "--interval must be whole seconds >= 1"
@@ -403,7 +457,7 @@ cmd_watch() {
     fi
     mkdir -p "$(dirname "$W_OUT")" "$(dirname "$W_VOID")"
     touch "$W_VOID"
-    [[ -s "$W_OUT" ]] || echo "ts,replicas,hpa_desired,pod,pod_ready,pod_restarts,pod_node,node,node_cpu_pct,node_pressure,node_disruption,broker_mem_mi,acu,active_jobs,violations,killed" >"$W_OUT"
+    [[ -s "$W_OUT" ]] || echo "ts,replicas,hpa_desired,pod,pod_ready,pod_restarts,pod_node,node,node_cpu_pct,node_pressure,node_disruption,broker_mem_mi,acu,active_jobs,violations,killed,acu_run" >"$W_OUT"
 
     local since
     since="$(clock_now)"
@@ -414,7 +468,7 @@ cmd_watch() {
     # sample's firing rules, the restart baseline and the node CPU streak.
     local latched_names=" " latched=() prev=" " baseline_restarts="" cpu_streak=0 i=0
     local raw now_iso replicas hpa pod pod_ready restarts pod_node last_reason node pressure disruption
-    local cpu_pct broker_mi acu jobs entry rule scope action detail names reason_list jobs_running v
+    local cpu_pct broker_mi acu jobs acu_run acu_unparsed minutes entry rule scope action detail names reason_list jobs_running v
     while :; do
         if [[ -n "$SIM_DIR" ]]; then
             [[ $i -lt ${#patches[@]} ]] || { log "simulation done after $i samples"; return 0; }
@@ -425,9 +479,9 @@ cmd_watch() {
         fi
         i=$((i + 1))
         IFS=$'\t' read -r now_iso replicas hpa pod pod_ready restarts pod_node last_reason node pressure disruption \
-            cpu_pct broker_mi acu jobs < <(printf '%s' "$raw" | jq -r --arg dep "$W_DEPLOY" --argjson since "$since" \
-                --arg taints "$DISRUPTION_TAINTS" --arg events "$DISRUPTION_EVENTS" "$FEATURES_JQ" || true)
-        for v in replicas hpa pod pod_ready restarts pod_node last_reason node pressure disruption cpu_pct broker_mi acu jobs; do
+            cpu_pct broker_mi acu jobs acu_run acu_unparsed < <(printf '%s' "$raw" | jq -r --arg dep "$W_DEPLOY" --argjson since "$since" \
+                --arg taints "$DISRUPTION_TAINTS" --arg events "$DISRUPTION_EVENTS" --arg ceil "$W_ACU_CEIL" "$FEATURES_JQ" || true)
+        for v in replicas hpa pod pod_ready restarts pod_node last_reason node pressure disruption cpu_pct broker_mi acu jobs acu_run acu_unparsed; do
             [[ -n "${!v}" ]] || printf -v "$v" '%s' "?"
         done
         is_iso "$now_iso" || now_iso="$(now_iso)"
@@ -465,8 +519,12 @@ cmd_watch() {
         ((cpu_streak < 2)) || fire node-cpu rep kill "node CPU ${cpu_pct}% > ${W_CPU_PCT}% on $cpu_streak samples in a row"
         [[ "$broker_mi" == "?" ]] || ((broker_mi <= W_BMEM)) \
             || fire broker-mem rep kill "broker $W_BNS/$W_BPOD memory ${broker_mi}Mi > ${W_BMEM}Mi"
-        [[ "$acu" == "?" ]] || ! fge "$acu" "$W_ACU_CEIL" \
-            || fire acu-ceiling session stop "Aurora ACU $acu >= ceiling $W_ACU_CEIL; stop and re-plan"
+        [[ "$acu_unparsed" == "?" || "$acu_unparsed" == 0 ]] \
+            || log "notice: $acu_unparsed CloudWatch datapoint timestamp(s) are neither ISO-8601 nor epoch seconds; the ACU read counts as failed (\"?\") and acu-ceiling cannot fire on this sample"
+        minutes=minutes
+        [[ "$acu_run" != 1 ]] || minutes=minute
+        [[ "$acu" == "?" || "$acu_run" == "?" ]] || ((acu_run < W_ACU_SUSTAIN)) \
+            || fire acu-ceiling session stop "Aurora ACU >= ceiling $W_ACU_CEIL for $acu_run consecutive $minutes (latest $acu); stop and re-plan"
         (($(iso_to_epoch "$now_iso") < end_epoch)) || fire session-end session stop "past --session-end $W_END"
 
         # A latched session rule keeps firing after its trigger clears.
@@ -496,7 +554,7 @@ cmd_watch() {
         prev="$names"
 
         local viol="${reason_list//,/|}"
-        echo "$now_iso,$replicas,$hpa,$pod,$pod_ready,$restarts,$pod_node,$node,$cpu_pct,${pressure//,/|},${disruption//,/|},$broker_mi,$acu,$jobs,${viol:--},$killed" >>"$W_OUT"
+        echo "$now_iso,$replicas,$hpa,$pod,$pod_ready,$restarts,$pod_node,$node,$cpu_pct,${pressure//,/|},${disruption//,/|},$broker_mi,$acu,$jobs,${viol:--},$killed,$acu_run" >>"$W_OUT"
         clock_sleep "$W_INTERVAL"
     done
     return 0
