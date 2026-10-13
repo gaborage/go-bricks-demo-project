@@ -115,7 +115,9 @@ queries:
       skip them. A relay scenario yields a relay row plus a simulator row per
       k6 request; perf-report leaves the /__sim/ rows out of the rate gap and
       of the per-request divisor. LIMIT MAX, because perf-report sums every
-      facet row. Gate: rps within 2% of the offered rate.
+      facet row. Gate: rps summed over the rows without /__sim/ in the route
+      is within 2% of the offered rate, the same client-only sum perf-report
+      uses.
 
   - id: Q3
     purpose: Server latency

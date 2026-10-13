@@ -188,7 +188,7 @@ logs a notice and waits a fixed 5 minutes.
 
 ```bash
 security add-generic-password -a "$USER" -s nr-user-key -w     # once: the User key lives in the Keychain
-export PERF_NRQL_VARS="SERVICE=...,ROUTE_PREFIX=...,NS=...,CONTAINER=...,BROKER_NS=...,NR_NS=...,NR_COLLECTOR=..."
+export PERF_NRQL_VARS="SERVICE=...,ROUTE_PREFIX=...,NS=...,CONTAINER=...,BROKER_NS=...,NR_NS=...,NR_COLLECTOR=...,JOSE_METRIC=jose.operation.duration"
 scripts/perf-nrql.sh --queries loadtests/nrql/queries.yaml --windows results/base/windows.tsv --trim 1m \
   --vars "V=<service.version>,POD=<pod>,NODE=<node>,CNS=<attr>,CCT=<attr>,CPOD=<attr>,CNODE=<attr>" \
   --out results/base/nr
