@@ -2,7 +2,8 @@
 # scripts/test-perf-harness.sh
 #
 # Offline tests for the in-cluster perf harness: perf-k8s-run.sh,
-# perf-watchdog.sh, perf-nrql.sh, the Job templates and the NRQL query set.
+# perf-watchdog.sh, perf-nrql.sh, the Job templates, the NRQL query set and the
+# name tags that keep the products load scripts' metric series bounded.
 # Nothing here reaches a cluster, AWS or New Relic:
 #   - KUBECONFIG=/dev/null and the AWS config files point nowhere;
 #   - kubectl, curl, security and the reset SQL generator are fakes from
@@ -886,6 +887,202 @@ if [[ $HAVE_RUBY -eq 1 ]]; then
     fi
 else
     skip "nrql parser vs YAML (ruby not installed)"
+fi
+
+# ---------------------------------------------------------------------------
+section "loadtests: per-request URLs carry a fixed name tag"
+# ---------------------------------------------------------------------------
+
+# k6 tags every HTTP sample with the full URL (as both url and name) unless the
+# request sets a name tag, which then replaces the URL in both. A URL that
+# interpolates an id or a page number therefore opens new time series on every
+# request: a 400 rps get-by-id run over a 250k-row seed passed 400k series and
+# k6 was OOMKilled at its 1Gi limit.
+#
+# untagged_url_requests FILE -> "FILE:LINE" for each http.get/post/put/del whose
+# URL is a template literal with ${...}, bare or as a call's first argument
+# (getURL(...)), or a variable whose last assignment earlier in the same
+# top-level function was one, and whose params carry no quoted name tag. The
+# last line is "sites N", the number of such requests found, so a parser that
+# matches nothing cannot pass.
+#
+# The file is read as one text, so line breaks inside a call or a declaration do
+# not matter. Two copies of it keep the same offsets: src blanks comments, code
+# also blanks the contents of string and template literals, so parens, "=" and
+# "http.get(" inside them are not structure. Declarations may carry a type
+# (const url: string = ...); plain reassignments (url = ...) count too.
+untagged_url_requests() {
+    awk -v q="'" '
+        # dynamic(s): s starts with a template literal that interpolates ${...},
+        # bare or as the first argument of a call such as getURL(...).
+        function dynamic(s) {
+            return s ~ ("^[[:space:]]*(" ID "[[:space:]]*[(][[:space:]]*)?`[^`]*[$][{]")
+        }
+        # closing(i): offset in code of the ")" that closes the "(" just before i.
+        function closing(i,    d, n, c) {
+            n = length(code)
+            for (d = 1; i <= n; i++) {
+                c = substr(code, i, 1)
+                if (c == "(") d++
+                else if (c == ")" && --d == 0) return i
+            }
+            return n + 1
+        }
+        function lineof(p,    t) { t = substr(code, 1, p); return gsub(/\n/, "", t) }
+        BEGIN { ID = "[A-Za-z_$][A-Za-z0-9_$]*" }
+        {
+            file = FILENAME
+            if (st == q || st == "\"") st = ""   # only /* */ and template literals span lines
+            nc = ""; cd = ""; n = length($0)
+            for (i = 1; i <= n; i++) {
+                c = substr($0, i, 1); c2 = substr($0, i, 2)
+                if (st == "*") {
+                    if (c2 == "*/") { st = ""; c = "  "; i++ } else c = " "
+                    nc = nc c; cd = cd c
+                } else if (st != "") {
+                    if (c == "\\" && i < n) { nc = nc c2; cd = cd "  "; i++; continue }
+                    if (c == st) st = ""
+                    nc = nc c; cd = cd (st == "" ? c : " ")
+                } else if (c2 == "//") {
+                    c = substr($0, i); gsub(/./, " ", c); nc = nc c; cd = cd c; break
+                } else if (c2 == "/*") {
+                    st = "*"; nc = nc "  "; cd = cd "  "; i++
+                } else {
+                    if (c == q || c == "\"" || c == "`") st = c
+                    nc = nc c; cd = cd c
+                }
+            }
+            src = src "\n" nc; code = code "\n" cd
+        }
+        END {
+            FN = "\n(export[[:space:]]+)?(default[[:space:]]+)?(async[[:space:]]+)?function[^A-Za-z0-9_$]"
+            SET = "[^A-Za-z0-9_$.]((const|let|var)[[:space:]]+" ID "([[:space:]]*:[^=;]*)?|" ID ")[[:space:]]*=[^=>]"
+            CALL = "http[.](get|post|put|del)[(]"
+            NAME = "tags[[:space:]]*:[[:space:]]*[{]([^}]*[^}A-Za-z0-9_$])?name[[:space:]]*:[[:space:]]*[\"" q "]"
+            for (off = 1; match(substr(code, off), FN "|" SET "|" CALL); ) {
+                s = off + RSTART - 1; e = s + RLENGTH - 1; tok = substr(code, s, RLENGTH); off = e
+                if (tok ~ /^http/) {
+                    off = closing(e + 1)
+                    args = substr(src, e + 1, off - e - 1); argc = substr(code, e + 1, off - e - 1)
+                    off++
+                    if (!match(argc, /[^[:space:]]/)) continue
+                    first = substr(argc, RSTART); url = substr(args, RSTART)
+                    if (first ~ ("^" ID "[[:space:]]*(,|$)")) {
+                        match(first, "^" ID); id = substr(first, 1, RLENGTH)
+                        url_dyn = (id in dyn) ? dyn[id] : 0
+                    } else {
+                        url_dyn = dynamic(url)
+                    }
+                    if (!url_dyn) continue
+                    sites++
+                    if (argc !~ NAME) print file ":" lineof(s)
+                } else if (tok ~ ("^" FN "$")) {
+                    split("", dyn)
+                } else {
+                    id = substr(tok, 2); sub(/^(const|let|var)[[:space:]]+/, "", id)
+                    match(id, "^" ID); id = substr(id, 1, RLENGTH)
+                    dyn[id] = dynamic(substr(src, e))   # e: the first character after "="
+                }
+            }
+            print "sites " sites + 0
+        }
+    ' "$1"
+}
+
+# check_name_tags FILE MIN_SITES: ok when every per-request URL in FILE carries
+# a name tag and at least MIN_SITES such requests were found.
+check_name_tags() {
+    local file="$1" min="$2" out sites missing
+    out="$(untagged_url_requests "$file")"
+    sites="$(sed -n 's/^sites //p' <<<"$out")"
+    missing="$(grep -v '^sites ' <<<"$out" || true)"
+    if [[ -n "$missing" ]]; then
+        bad "$file: requests with a per-request URL and no fixed name tag (k6 makes a time series per URL): ${missing//$'\n'/ }"
+    elif (( sites < min )); then
+        bad "$file: found $sites per-request URL requests, expected at least $min (the parser no longer sees them; update it or this floor)"
+    else
+        ok "$file: all $sites per-request URL requests carry a fixed name tag"
+    fi
+    return 0
+}
+
+check_name_tags loadtests/products-read-only.ts 3
+check_name_tags loadtests/products-crud.ts 4
+
+# The check must bite: drop the first name tag from a copy and expect exactly
+# that request back.
+awk -v q="'" '!done && sub(", name: " q "[^" q "]*" q, "") { done = 1 } { print }' \
+    loadtests/products-crud.ts >"$WORK/products-crud-untagged.ts"
+mutant="$(untagged_url_requests "$WORK/products-crud-untagged.ts" | grep -v '^sites ' || true)"
+if [[ "$mutant" == "$WORK/products-crud-untagged.ts:"* && "$(wc -l <<<"$mutant")" -eq 1 ]]; then
+    ok "name-tag check flags a request whose name tag was removed (line ${mutant##*:})"
+else
+    bad "name-tag check missed a removed name tag: '${mutant:-nothing flagged}'"
+fi
+
+# Shapes the two scripts do not use today but a new request could. A request
+# marked "// flag" must be reported, "// site" is a per-request URL with a name
+# tag, and an unmarked request has a fixed URL and must not count.
+shapes="$WORK/name-tag-shapes.ts"
+cat >"$shapes" <<'EOF'
+function fixedURLs(id: string) {
+  const healthURL = getURL('/health');
+  http.get(healthURL);
+  http.get(getURL('/ready'), { headers });
+  let url = getURL(`/products/${id}`);
+  url = getURL('/health');
+  http.get(url, { headers });
+}
+
+function argumentOnNextLine(id: string) {
+  const url = getURL(`/products/${id}`);
+  http.get( // flag
+    url,
+    { headers, tags: { endpoint: 'get_product' } },
+  );
+  http.get( // flag
+    getURL(`/products/${id}`),
+    { headers },
+  );
+}
+
+function templateOnNextLine(id: string) {
+  const url = getURL(
+    `/products/${id}`,
+  );
+  http.get(url, { headers }); // flag
+  const other =
+    `${base}/products/${id}`;
+  http.del(other, null, { headers }); // flag
+}
+
+function spaceTypeAndReassignment(id: string) {
+  http.get(getURL( `/products/${id}`), { headers }); // flag
+  const typed: string = getURL(`/products/${id}`);
+  http.put(typed, '{}', { headers }); // flag
+  let url = getURL('/health'); url = getURL(`/products/${id}`);
+  http.get(url, { headers }); // flag
+}
+
+function commentsAndStrings(id: string) {
+  const url = getURL(`/products/${id}`); // http.get(url) in a comment is not a request
+  http.get(url, { headers /* tags: { name: 'x' } */ }); // flag
+  http.get(url, { headers, tags: { endpoint: 'get_product', name: 'GET /products/:id' } }); // site
+  http.post( // site
+    `${base}/products/${id}`,
+    JSON.stringify({ note: 'a ) paren and an = sign' }),
+    { headers, tags: { name: 'POST /products/:id' } },
+  );
+}
+EOF
+want_flags="$(grep -n '// flag$' "$shapes" | cut -d: -f1 | sed "s|^|$shapes:|")"
+want_sites="$(grep -cE '// (flag|site)$' "$shapes")"
+got="$(untagged_url_requests "$shapes")"
+got_flags="$(grep -v '^sites ' <<<"$got" || true)"
+if [[ "$got_flags" == "$want_flags" && "$got" == *$'\n'"sites $want_sites" ]]; then
+    ok "name-tag check reads multi-line calls and declarations, typed declarations, reassignments, comments and strings"
+else
+    bad "name-tag check misread the shapes fixture: want sites $want_sites and lines ${want_flags//$'\n'/ }; got ${got//$'\n'/ }"
 fi
 
 # ---------------------------------------------------------------------------
