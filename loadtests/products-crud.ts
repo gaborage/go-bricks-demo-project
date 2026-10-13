@@ -125,7 +125,7 @@ function listProducts(): void {
 
   const response = http.get(url, {
     headers,
-    tags: { endpoint: 'list_products' },
+    tags: { endpoint: 'list_products', name: 'GET /products' },
   });
 
   const success = check(response, {
@@ -176,7 +176,7 @@ function getProduct(): void {
 
   const response = http.get(url, {
     headers,
-    tags: { endpoint: 'get_product' },
+    tags: { endpoint: 'get_product', name: 'GET /products/:id' },
   });
 
   // A 404 is accepted for the default ids, but never for a seed id: the reset
@@ -268,7 +268,7 @@ function performUpdate(productID: string): void {
 
   const response = http.put(url, JSON.stringify(updates), {
     headers,
-    tags: { endpoint: 'update_product' },
+    tags: { endpoint: 'update_product', name: 'PUT /products/:id' },
   });
 
   const success = check(response, {
@@ -306,7 +306,7 @@ function deleteProduct(): void {
 
   const response = http.del(url, null, {
     headers,
-    tags: { endpoint: 'delete_product' },
+    tags: { endpoint: 'delete_product', name: 'DELETE /products/:id' },
   });
 
   const success = check(response, {

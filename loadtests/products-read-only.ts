@@ -119,7 +119,7 @@ function listProducts(): void {
 
   const response = http.get(url, {
     headers,
-    tags: { endpoint: 'list_products', operation: 'read' },
+    tags: { endpoint: 'list_products', operation: 'read', name: 'GET /products' },
   });
 
   const success = check(response, {
@@ -182,7 +182,7 @@ function getProduct(): void {
 
   const response = http.get(url, {
     headers,
-    tags: { endpoint: 'get_product', operation: 'read' },
+    tags: { endpoint: 'get_product', operation: 'read', name: 'GET /products/:id' },
   });
 
   const success = check(response, {
@@ -260,7 +260,7 @@ export function setup(): PerfSetupData {
   console.log('🔥 Warming up - fetching initial product IDs...');
   for (let i = 1; i <= 3; i++) {
     const url = getURL(`/products?page=${i}&pageSize=10`);
-    const resp = http.get(url, { headers });
+    const resp = http.get(url, { headers, tags: { name: 'GET /products' } });
     if (resp.status === 200) {
       try {
         const body = JSON.parse(resp.body as string) as ProductListResponse;
