@@ -1,0 +1,2 @@
+VOID rule=acu-ceiling scope=session action=stop
+KILLS 1

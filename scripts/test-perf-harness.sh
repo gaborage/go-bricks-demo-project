@@ -491,12 +491,16 @@ for expect in "$TD"/watchdog/cases/*.expect; do
     cp "$TD/watchdog/cases/$name.jsonl" "$dir/sim/samples.jsonl"
     end="2026-10-14T06:00:00Z"
     [[ ! -f "$TD/watchdog/cases/$name.session_end" ]] || end="$(cat "$TD/watchdog/cases/$name.session_end")"
+    sustain=5 sustain_note=""
+    if [[ -f "$TD/watchdog/cases/$name.acu_sustain" ]]; then
+        sustain="$(cat "$TD/watchdog/cases/$name.acu_sustain")"; sustain_note=" (--acu-sustain $sustain)"
+    fi
     RC=0
     PATH="$FORBIDDEN_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test \
         --deployment demo-app --pod demo-app-0 --node node-a --job-selector "$LOAD_SEL" \
-        --aurora-cluster db-test --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 \
-        --node-cpu-pct 90 --interval 15 --session-end "$end" --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
-        --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || RC=$?
+        --aurora-cluster db-test --acu-ceiling 6 --acu-sustain "$sustain" --broker-namespace broker-ns --broker-pod broker-0 \
+        --broker-mem-mi 1024 --node-cpu-pct 90 --interval 15 --session-end "$end" --out "$dir/watchdog.csv" \
+        --void-log "$dir/void.log" --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || RC=$?
     {
         grep '^VOID ' "$dir/stdout" | sed -E 's/^VOID [^ ]+ (rule=[^ ]+ scope=[^ ]+ action=[^ ]+).*/VOID \1/' || true
         echo "KILLS $(grep -c '^KILL ' "$dir/stdout" || true)"
@@ -506,7 +510,7 @@ for expect in "$TD"/watchdog/cases/*.expect; do
     if ! diff -u "$expect" "$dir/got" >"$dir/diff"; then bad "watchdog $name"; show "$dir/diff"; continue; fi
     if ! diff -q <(grep '^VOID ' "$dir/stdout" || true) "$dir/void.log" >/dev/null; then bad "watchdog $name: void.log differs from the reported VOID lines"; continue; fi
     if [[ $(wc -l <"$dir/watchdog.csv") -ne $(($(wc -l <"$dir/sim/samples.jsonl") + 1)) ]]; then bad "watchdog $name: one CSV row per sample"; continue; fi
-    ok "watchdog $name: $(tr '\n' ' ' <"$expect" | sed 's/ $//')"
+    ok "watchdog $name$sustain_note: $(tr '\n' ' ' <"$expect" | sed 's/ $//')"
 done
 
 if grep -q 'VOID 2026-10-14T00:00:15Z rule=node-changed scope=session action=kill detail=pod demo-app-0 is on node-b, expected node-a' "$WORK/watch-node-changed/void.log"; then
@@ -514,20 +518,56 @@ if grep -q 'VOID 2026-10-14T00:00:15Z rule=node-changed scope=session action=kil
 else
     bad "watchdog VOID line format"; cat "$WORK/watch-node-changed/void.log"
 fi
+# The acu-ceiling detail names the run; the CSV keeps the newest datapoint in acu
+# and adds the run length as the trailing acu_run column.
+dir="$WORK/watch-acu-five"
+if grep -qxF 'VOID 2026-10-14T00:00:30Z rule=acu-ceiling scope=session action=stop detail=Aurora ACU >= ceiling 6 for 5 consecutive minutes (latest 6.5); stop and re-plan' "$dir/void.log" \
+    && [[ "$(head -n 1 "$dir/watchdog.csv" | cut -d, -f13,17)" == "acu,acu_run" ]] \
+    && [[ "$(sed -n '2,4p' "$dir/watchdog.csv" | cut -d, -f13,17 | tr '\n' ' ')" == "2.5,0 8.5,4 6.5,5 " ]]; then
+    ok "watchdog acu-ceiling: VOID detail names the run; CSV acu is the newest datapoint, acu_run the run length"
+else
+    bad "watchdog acu-ceiling detail or CSV"; show "$dir/void.log"; show "$dir/watchdog.csv"
+fi
+# acu_csv CASE ROWS -> the acu,acu_run columns of those CSV rows, space-separated
+acu_csv() {
+    sed -n "$2p" "$WORK/watch-$1/watchdog.csv" | cut -d, -f13,17 | tr '\n' ' '
+    return 0
+}
+# Timestamps in mixed UTC offsets are ordered by the instant they name.
+if [[ "$(acu_csv acu-five-offset 3)" == "6.5,5 " ]]; then
+    ok "watchdog acu-five-offset: Z, -05:00, +05:30 and +0000 timestamps form one 5-minute run"
+else
+    bad "watchdog acu-five-offset CSV: '$(acu_csv acu-five-offset 3)', want '6.5,5 '"; show "$WORK/watch-acu-five-offset/watchdog.csv"
+fi
+# Epoch-second timestamps (cli_timestamp_format = wire), newest printed first:
+# acu is the newest by time, not the last one printed.
+if [[ "$(acu_csv acu-wire 3,4)" == "3.0,0 9.0,1 " ]]; then
+    ok "watchdog acu-wire: epoch-second timestamps are ordered by time (acu,acu_run 3.0,0 then 9.0,1)"
+else
+    bad "watchdog acu-wire CSV: '$(acu_csv acu-wire 3,4)', want '3.0,0 9.0,1 '"; show "$WORK/watch-acu-wire/watchdog.csv"
+fi
+# A timestamp that does not parse makes the whole ACU read a failed one.
+if [[ "$(acu_csv acu-badtime 3)" == "?,? " ]] \
+    && grep -qF 'notice: 1 CloudWatch datapoint timestamp(s) are neither ISO-8601 nor epoch seconds' "$WORK/watch-acu-badtime/stderr"; then
+    ok "watchdog acu-badtime: an unparsable timestamp reads as ? in acu and acu_run, with a notice"
+else
+    bad "watchdog acu-badtime: CSV '$(acu_csv acu-badtime 3)', want '?,? ', plus a notice"
+    show "$WORK/watch-acu-badtime/watchdog.csv"; show "$WORK/watch-acu-badtime/stderr"
+fi
 
 # Live collection (no --simulate), through the fake kubectl and a fake aws that
 # serve base.json: covers the reads, NotFound detection, sample assembly and the
 # delete call that --simulate replaces.
-watch_live() { # NAME [ENV=VALUE...]
-    local name="$1" pid n
+watch_live() { # NAME ACU_SUSTAIN [ENV=VALUE...]
+    local name="$1" sustain="$2" pid n
     local dir="$WORK/watch-live-$name"
-    shift
+    shift 2
     mkdir -p "$dir"
     env "$@" PATH="$TD/bin-watch:$TD/bin-fake:$PATH" FAKE_DIR="$dir" FAKE_WATCH_BASE="$TD/watchdog/base.json" \
         "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test --deployment demo-app \
         --pod demo-app-0 --node node-a --job-selector "$LOAD_SEL" --aurora-cluster db-test \
-        --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 --node-cpu-pct 90 \
-        --interval 1 --session-end 2099-01-01T00:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
+        --acu-ceiling 6 --acu-sustain "$sustain" --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 \
+        --node-cpu-pct 90 --interval 1 --session-end 2099-01-01T00:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
         >"$dir/stdout" 2>"$dir/stderr" &
     pid=$!
     for n in $(seq 1 60); do
@@ -539,16 +579,30 @@ watch_live() { # NAME [ENV=VALUE...]
     : "$n"
     return 0
 }
-watch_live healthy
+# acu_windows DIR -> the distinct end - start spans (seconds) of the CloudWatch reads
+acu_windows() {
+    local dir="$1"
+    sed -nE 's/.* --start-time ([^ ]+) --end-time ([^ ]+) .*/\1 \2/p' "$dir/aws.calls" \
+        | while read -r start end; do jq -rn --arg s "$start" --arg e "$end" '($e | fromdateiso8601) - ($s | fromdateiso8601)'; done \
+        | sort -u | tr '\n' ' '
+    return 0
+}
+watch_live healthy 5
 dir="$WORK/watch-live-healthy"
-if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f2-)" == "1,1,present,True,0,node-a,present,45,-,-,600,2.5,1,-,0" ]] \
+if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f2-)" == "1,1,present,True,0,node-a,present,45,-,-,600,2.5,1,-,0,0" ]] \
     && [[ ! -s "$dir/void.log" ]] && ! grep -qv -E '^--context ctx-test (--namespace (ns-test|broker-ns) )?(get|top) ' "$dir/kubectl.calls" \
     && grep -q '^cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ServerlessDatabaseCapacity' <(sed 's/^aws //' "$dir/aws.calls"); then
     ok "watchdog live reads: kubectl get/top + CloudWatch only, one CSV row per sample"
 else
     bad "watchdog live reads"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"; show "$dir/stderr"
 fi
-watch_live pod-notfound FAKE_WATCH_POD_NOTFOUND=1
+# The CloudWatch read spans --acu-sustain + 3 minutes, and never less than 5.
+if [[ "$(acu_windows "$dir")" == "480 " ]]; then
+    ok "watchdog live: --acu-sustain 5 reads an 8-minute CloudWatch window"
+else
+    bad "watchdog live: --acu-sustain 5 window spans '$(acu_windows "$dir")', want 480"; show "$dir/aws.calls"
+fi
+watch_live pod-notfound 2 FAKE_WATCH_POD_NOTFOUND=1
 dir="$WORK/watch-live-pod-notfound"
 if sed -n 2p "$dir/watchdog.csv" | grep -q ',gone,' && grep -q 'rule=pod-gone scope=session action=kill' "$dir/void.log" \
     && grep -qxF -- "--context ctx-test --namespace ns-test delete job -l $LOAD_SEL --wait=false" "$dir/kubectl.calls" \
@@ -557,8 +611,13 @@ if sed -n 2p "$dir/watchdog.csv" | grep -q ',gone,' && grep -q 'rule=pod-gone sc
 else
     bad "watchdog live NotFound"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"; show "$dir/stderr"
 fi
+if [[ "$(acu_windows "$dir")" == "300 " ]]; then
+    ok "watchdog live: --acu-sustain 2 keeps the 5-minute CloudWatch window floor"
+else
+    bad "watchdog live: --acu-sustain 2 window spans '$(acu_windows "$dir")', want 300"; show "$dir/aws.calls"
+fi
 # A reset Job (component=reset) running alone: not counted, not deleted.
-watch_live reset-only FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-reset-only.json"
+watch_live reset-only 5 FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-reset-only.json"
 dir="$WORK/watch-live-reset-only"
 if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f14,16)" == "0,0" ]] && grep -q 'rule=pod-gone' "$dir/void.log" \
     && ! grep -q ' delete ' "$dir/kubectl.calls" && [[ ! -e "$dir/deleted.jobs" ]]; then
@@ -567,7 +626,7 @@ else
     bad "watchdog reset-only"; show "$dir/watchdog.csv"; show "$dir/kubectl.calls"
 fi
 # A load Job and a reset Job together: only the load Job is deleted.
-watch_live load-and-reset FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-load-and-reset.json"
+watch_live load-and-reset 5 FAKE_WATCH_POD_NOTFOUND=1 FAKE_WATCH_JOBS="$TD/watchdog/jobs-load-and-reset.json"
 dir="$WORK/watch-live-load-and-reset"
 if [[ "$(sed -n 2p "$dir/watchdog.csv" | cut -d, -f14,16)" == "1,1" ]] \
     && [[ "$(sort -u "$dir/deleted.jobs" 2>/dev/null)" == "k6-labela-s4-r1-1014000000" ]]; then
@@ -585,9 +644,9 @@ selector_case() { # NAME WANT_RC SELECTOR
     cp "$TD/watchdog/cases/healthy.jsonl" "$dir/sim/samples.jsonl"
     PATH="$FORBIDDEN_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test \
         --deployment demo-app --pod demo-app-0 --node node-a --job-selector "$selector" \
-        --aurora-cluster db-test --acu-ceiling 6 --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 \
-        --node-cpu-pct 90 --interval 15 --session-end 2026-10-14T06:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
-        --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || rc=$?
+        --aurora-cluster db-test --acu-ceiling 6 --acu-sustain 5 --broker-namespace broker-ns --broker-pod broker-0 \
+        --broker-mem-mi 1024 --node-cpu-pct 90 --interval 15 --session-end 2026-10-14T06:00:00Z --out "$dir/watchdog.csv" \
+        --void-log "$dir/void.log" --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || rc=$?
     if [[ $rc -ne $want_rc ]]; then bad "watchdog selector $name: exit $rc, want $want_rc"; show "$dir/stderr"; return 0; fi
     if [[ $want_rc -eq 2 ]] && ! grep -q 'must contain the term app.kubernetes.io/component=load-generator' "$dir/stderr"; then
         bad "watchdog selector $name: the usage error does not name the required term"; return 0
@@ -601,6 +660,37 @@ selector_case lookalike-value 2 "app.kubernetes.io/part-of=k6-perf,app.kubernete
 selector_case not-equal 2 "app.kubernetes.io/component!=load-generator"
 selector_case documented 0 "$LOAD_SEL"
 selector_case double-equals-spaces 0 "app.kubernetes.io/part-of=k6-perf, app.kubernetes.io/component == load-generator"
+
+# --acu-sustain is required, and must be a whole number of minutes from 1 to 1436.
+sustain_case() { # NAME WANT_RC WANT_MESSAGE [--acu-sustain VALUE]
+    local name="$1" want_rc="$2" want="$3" rc=0
+    local dir="$WORK/watch-sustain-$name"
+    shift 3
+    mkdir -p "$dir/sim"
+    cp "$TD/watchdog/base.json" "$dir/sim/base.json"
+    cp "$TD/watchdog/cases/healthy.jsonl" "$dir/sim/samples.jsonl"
+    PATH="$FORBIDDEN_PATH" FAKE_DIR="$dir" "$TEST_BASH" scripts/perf-watchdog.sh watch --context ctx-test --namespace ns-test \
+        --deployment demo-app --pod demo-app-0 --node node-a --job-selector "$LOAD_SEL" --aurora-cluster db-test \
+        --acu-ceiling 6 "$@" --broker-namespace broker-ns --broker-pod broker-0 --broker-mem-mi 1024 --node-cpu-pct 90 \
+        --interval 15 --session-end 2026-10-14T06:00:00Z --out "$dir/watchdog.csv" --void-log "$dir/void.log" \
+        --simulate "$dir/sim" >"$dir/stdout" 2>"$dir/stderr" || rc=$?
+    if [[ $want_rc -eq 0 && $rc -eq 0 && -s "$dir/watchdog.csv" ]]; then
+        ok "watchdog --acu-sustain $name -> accepted"
+    elif [[ $want_rc -eq 2 && $rc -eq 2 ]] && grep -qF -- "$want" "$dir/stderr" && [[ ! -e "$dir/watchdog.csv" ]]; then
+        ok "watchdog --acu-sustain $name -> exit 2"
+    else
+        bad "watchdog --acu-sustain $name: exit $rc, want $want_rc ${want:+with \"$want\"}"; show "$dir/stderr"
+    fi
+    return 0
+}
+sustain_range="--acu-sustain must be a whole number of minutes from 1 to 1436"
+sustain_case zero 2 "$sustain_range" --acu-sustain 0
+sustain_case abc 2 "$sustain_range" --acu-sustain abc
+sustain_case leading-zero 2 "$sustain_range" --acu-sustain 05
+sustain_case 1437 2 "$sustain_range" --acu-sustain 1437
+sustain_case 20-digits 2 "$sustain_range" --acu-sustain 99999999999999999999
+sustain_case 1436 0 "" --acu-sustain 1436
+sustain_case missing 2 "every flag is required (missing --acu-sustain)"
 
 usage_rc=0
 PATH="$FORBIDDEN_PATH" "$TEST_BASH" scripts/perf-watchdog.sh watch --context c --namespace n >/dev/null 2>"$WORK/watch-usage.err" || usage_rc=$?
