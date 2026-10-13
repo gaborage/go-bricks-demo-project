@@ -152,6 +152,7 @@ there is nothing to opt into.
 | Termination grace period | Consumer stop can take up to 5s inside the 10s shutdown budget; the outer hard stop is 15s. | Keep the pod grace period at 15s or more (the Kubernetes default of 30s covers it), and at least `SERVER_TIMEOUT_SHUTDOWN` + 5s if that is raised. |
 | Seal key rotation | One generation per seal family today. | A second generation (for example `paymentssign-v2`) is role-tagged as seal material at startup, before it is activated. Never give it a kid that a `jose:` route resolves. The WARN is `keystore entry resolved by both HTTP jose and sealing; never reuse a kid across them`. |
 | `MESSAGING_BROKER_URL` | Still mandatory. | Without it, outbox `Init` fails as before, now worded through `MessagingConfigured`. |
+| `OBSERVABILITY_METRICS_TEMPORALITY` | Unchanged in v0.71.1: under `delta`, the exporter's selector returns delta for every instrument kind, UpDownCounters included (`observability/metrics.go`). | A backend that rejects non-monotonic delta sums, such as New Relic, drops the runtime and pool gauges (`go.goroutine.count`, `go.memory.used`, `db.client.connection.*`). Export `cumulative` to keep them until a release carries the per-kind selector. |
 
 ### Multi-tenant migrate CLI (`config.multitenant.yaml`, `go-bricks-migrate`, `make migrate-multitenant-check-roles`)
 
