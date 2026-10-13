@@ -9,9 +9,12 @@ described in the operator tables below. The previous record is
 
 ## At a glance
 
-- **No source change, no schema migration and no required config key.** Every
-  environment boots as it is. The only edits are the pins, one `config.yml`
-  comment, one README note and pointer cases in the redaction tests.
+- **No source change, no schema migration and no required config key.** The
+  repo's own configs boot unchanged. A deploy that overrides `SOURCE_TYPE`, or
+  `APP_NAME` with the OTLP export on, can now fail at startup: check its
+  overrides against the must-dos below before deploying. The only edits are the
+  pins, one `config.yml` comment, one README note and pointer cases in the
+  redaction tests.
 - **No feature adopted.** Every candidate is skipped below, with its reason.
 - **Operator must-dos:** keep `SOURCE_TYPE` unset or `static`; keep `APP_NAME`
   a valid `host[:port]` when the OTLP export is on; set
