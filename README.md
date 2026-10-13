@@ -225,7 +225,7 @@ shell from the demo's own DER keys, and it is published straight to the exchange
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.69.0 \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.71.1 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
@@ -272,7 +272,7 @@ PRIVATE to decrypt. Both demo scripts use it:
   `SEAL_EVENT_TYPE_MISMATCH` without the app log.
 
 ```bash
-go install github.com/gaborage/go-bricks/cmd/open-event@v0.69.0
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.71.1
 
 # The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
 open-event \
@@ -293,7 +293,7 @@ open-event \
   is `{"code":…,"details":{…}}` on stdout. Its details carry only presence and
   length facts.
 - **The scripts install the CLI, never `go run` it.** They use
-  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.69.0`, because `go run`
+  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.71.1`, because `go run`
   reports any non-zero exit as its own `1` and would hide the refusal's `3`.
 - **Both kids are required flags.** The CLI never reads them from the
   unauthenticated header, so after a rotation you pass the new generation
@@ -662,6 +662,10 @@ Framework supports:
 - LRU connection management
 
 To enable: Set `multitenant.enabled: true` in config and configure tenant resolver.
+Under the default per-tenant messaging tenancy, also give every static tenant a
+broker with `multitenant.tenants.<id>.messaging.url`: the modules declare
+messaging and the outbox relays, and since go-bricks v0.70.0 startup refuses a
+fleet where no tenant sets one.
 
 ## Named Databases
 

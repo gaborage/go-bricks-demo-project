@@ -24,8 +24,11 @@
 # framework default is gobricks-service. app.name is stamped as the AMQP app_id
 # of every publish, logged as app/service at startup, shown on
 # /_sys/health-debug and, with the OTLP export on, names the tracer and becomes
-# server.address on HTTP spans and metrics. It is NOT the OTel resource
-# service.name — that is observability.service.name (OBSERVABILITY_SERVICE_NAME).
+# server.address on HTTP server spans. HTTP server metrics no longer carry
+# server.address (go-bricks v0.70.0, echo-otel/v5), so tell apps apart there by
+# service.name. With the export on, app.name must also parse as host[:port], or
+# the server refuses to start. It is NOT the OTel resource service.name — that
+# is observability.service.name (OBSERVABILITY_SERVICE_NAME).
 #
 # app.version is the release version, and the place a build pipeline reads it
 # from: bump it here per release. v1.0.0 matches the framework default, so it

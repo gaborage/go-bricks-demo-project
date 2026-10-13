@@ -105,7 +105,7 @@ func configureTestSealing(t *testing.T, ks messaging.SealKeyStore) {
 // broker: Init, then DeclareMessaging into one shared set.
 //
 // The framework modules (scheduler, outbox, inbox, keystore) implement no
-// DeclareMessaging in go-bricks v0.67.0, so the framework skips them and so does
+// DeclareMessaging in go-bricks v0.71.1, so the framework skips them and so does
 // this loop — which matters, because their Init needs a validated config, a database
 // or DER files on disk.
 func declareAllMessaging(t *testing.T, deps *app.ModuleDeps) *messaging.Declarations {

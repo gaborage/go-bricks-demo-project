@@ -222,7 +222,7 @@ GO_BRICKS_MIGRATE           := go-bricks-migrate
 # go-bricks version in go.mod: the `-url=` argv rewrite in
 # scripts/flyway-docker.sh only fires against an ADR-085 CLI (go-bricks v0.61.0+),
 # so a v0.60.0 pin here silently defeats it.
-GO_BRICKS_REF               ?= v0.69.0
+GO_BRICKS_REF               ?= v0.71.1
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \

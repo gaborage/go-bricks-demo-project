@@ -29,10 +29,13 @@ func captureFilteredLogger(t *testing.T, filter *logger.FilterConfig) (logger.Lo
 	return logger.NewWithFilter("info", false, filter).WithContext(sink.WithContext(t.Context())), &buf
 }
 
-// Each PAN-bearing request logged whole renders only its last four digits. The
-// app filter adds the `pan` needle config.yml sets under
-// log.sensitivefields; the framework-default filter has no such needle, so that
-// row proves the RedactedForLog hook itself keeps the PAN out.
+// Each PAN-bearing request logged whole, by value or through a pointer, renders
+// only its last four digits. The app filter adds the `pan` needle config.yml
+// sets under log.sensitivefields; the framework-default filter has no such
+// needle, so that row proves the RedactedForLog hook itself keeps the PAN out.
+// The pointer-to-map door is filtered only since go-bricks v0.71.1
+// (GHSA-3m9p-48v4-c9vp): before it, the map reached the sink unfiltered and the
+// request rendered with its PAN.
 func TestPANBearingRequestsLogOnlyLast4(t *testing.T) {
 	appFilter := func() *logger.FilterConfig {
 		cfg := logger.DefaultFilterConfig()
@@ -49,25 +52,37 @@ func TestPANBearingRequestsLogOnlyLast4(t *testing.T) {
 	requests := []struct {
 		name string
 		req  any
+		ptr  any // the same request, through a pointer
 	}{
-		{"TokenizeRequest", TokenizeRequest{PAN: redactFixturePAN}},
-		{"PeerSimRequest", PeerSimRequest{PAN: redactFixturePAN}},
-		{"RelayRequest", RelayRequest{PAN: redactFixturePAN}},
-		{"MLERelayRequest", MLERelayRequest{PAN: redactFixturePAN}},
+		{"TokenizeRequest", TokenizeRequest{PAN: redactFixturePAN}, &TokenizeRequest{PAN: redactFixturePAN}},
+		{"PeerSimRequest", PeerSimRequest{PAN: redactFixturePAN}, &PeerSimRequest{PAN: redactFixturePAN}},
+		{"RelayRequest", RelayRequest{PAN: redactFixturePAN}, &RelayRequest{PAN: redactFixturePAN}},
+		{"MLERelayRequest", MLERelayRequest{PAN: redactFixturePAN}, &MLERelayRequest{PAN: redactFixturePAN}},
+	}
+	doors := []struct {
+		name  string
+		value func(req, ptr any) any
+		want  string
+	}{
+		{"by value", func(req, _ any) any { return req }, `"request":{"last4":"1111"}`},
+		{"through a pointer", func(_, ptr any) any { return ptr }, `"request":{"last4":"1111"}`},
+		{"through a pointer to a map", func(req, _ any) any { return &map[string]any{"body": req} }, `"request":{"body":{"last4":"1111"}}`},
 	}
 
 	for _, filter := range filters {
 		for _, tc := range requests {
-			t.Run(filter.name+"/"+tc.name, func(t *testing.T) {
-				log, buf := captureFilteredLogger(t, filter.config())
-				log.Info().Interface("request", tc.req).Msg("request received")
-				line := buf.String()
-				require.NotEmpty(t, line)
+			for _, door := range doors {
+				t.Run(filter.name+"/"+tc.name+"/"+door.name, func(t *testing.T) {
+					log, buf := captureFilteredLogger(t, filter.config())
+					log.Info().Interface("request", door.value(tc.req, tc.ptr)).Msg("request received")
+					line := buf.String()
+					require.NotEmpty(t, line)
 
-				assert.NotContains(t, line, redactFixturePAN)
-				assert.NotRegexp(t, longDigitRun, line, "no digit run longer than 4 may reach the sink")
-				assert.Contains(t, line, `"request":{"last4":"1111"}`)
-			})
+					assert.NotContains(t, line, redactFixturePAN)
+					assert.NotRegexp(t, longDigitRun, line, "no digit run longer than 4 may reach the sink")
+					assert.Contains(t, line, door.want)
+				})
+			}
 		}
 	}
 }

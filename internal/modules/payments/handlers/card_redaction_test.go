@@ -15,6 +15,9 @@ import (
 // Visa test PAN every payments fixture uses — never a real card.
 const redactFixtureHolder = "Ada Lovelace"
 
+// The field each door logs the card under.
+const cardField = "card"
+
 // longDigitRun matches anything PAN-shaped: a log line may carry at most four
 // consecutive digits (last4, the fixture amount).
 var longDigitRun = regexp.MustCompile(`\d{5,}`)
@@ -40,10 +43,13 @@ func captureFilteredLogger(t *testing.T, filter *logger.FilterConfig) (logger.Lo
 }
 
 // The decoded HTTP card reaching a filtered logger — directly, nested in the
-// whole request body, or through WithFields — renders the domain card's
-// RedactedForLog shape. The framework-default filter has no `pan` needle, so
-// that row proves the hook itself masks the PAN; no filter has a needle for
-// the holder, so every row proves the hook drops it.
+// whole request body, or through WithFields, by value or through a pointer —
+// renders the domain card's RedactedForLog shape. The framework-default filter
+// has no `pan` needle, so that row proves the hook itself masks the PAN; no
+// filter has a needle for the holder, so every row proves the hook drops it.
+// The pointer-to-map door is filtered only since go-bricks v0.71.1
+// (GHSA-3m9p-48v4-c9vp): before it, the map reached the sink unfiltered and the
+// card rendered with its PAN.
 func TestCardRequestLogsItsRedactedShape(t *testing.T) {
 	body := validBody()
 	card := body.Card
@@ -61,9 +67,17 @@ func TestCardRequestLogsItsRedactedShape(t *testing.T) {
 		name string
 		log  func(logger.Logger)
 	}{
-		{"Interface", func(l logger.Logger) { l.Info().Interface("card", card).Msg("card") }},
+		{"Interface", func(l logger.Logger) { l.Info().Interface(cardField, card).Msg("card") }},
 		{"Interface nested in the request body", func(l logger.Logger) { l.Info().Interface("request", body).Msg("request") }},
-		{"WithFields", func(l logger.Logger) { l.WithFields(map[string]any{"card": card}).Info().Msg("card") }},
+		{"WithFields", func(l logger.Logger) { l.WithFields(map[string]any{cardField: card}).Info().Msg("card") }},
+		{"Interface through a pointer", func(l logger.Logger) { l.Info().Interface(cardField, &card).Msg("card") }},
+		{"Interface nested in the request body through a pointer", func(l logger.Logger) {
+			l.Info().Interface("request", &body).Msg("request")
+		}},
+		{"WithFields through a pointer", func(l logger.Logger) { l.WithFields(map[string]any{cardField: &card}).Info().Msg("card") }},
+		{"Interface through a pointer to a map", func(l logger.Logger) {
+			l.Info().Interface("fields", &map[string]any{cardField: card}).Msg("card")
+		}},
 	}
 
 	for _, filter := range filters {
