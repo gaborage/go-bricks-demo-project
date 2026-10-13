@@ -13,7 +13,8 @@
 #   envsubst '${JOB_NAME} ${NAMESPACE} ${RUN_ID_LABEL} ${K6_IMAGE}
 #     ${ACTIVE_DEADLINE_SECONDS} ${K6_RUN_AS_USER} ${K6_NODE_SELECTOR}
 #     ${K6_AFFINITY} ${K6_ENV} ${SCRIPTS_CONFIGMAP} ${TYPES_CONFIGMAP}
-#     ${K6_EPHEMERAL_REQUEST} ${K6_EPHEMERAL_LIMIT}' \
+#     ${K6_EPHEMERAL_REQUEST} ${K6_EPHEMERAL_LIMIT} ${K6_CPU_REQUEST}
+#     ${K6_CPU_LIMIT}' \
 #     < loadtests/k8s/k6-job.yaml
 #
 # K6_NODE_SELECTOR, K6_AFFINITY and K6_ENV are single-line JSON (valid YAML flow
@@ -97,11 +98,11 @@ spec:
           env: ${K6_ENV}
           resources:
             requests:
-              cpu: "1"
+              cpu: "${K6_CPU_REQUEST}"
               memory: 512Mi
               ephemeral-storage: ${K6_EPHEMERAL_REQUEST}
             limits:
-              cpu: "2"
+              cpu: "${K6_CPU_LIMIT}"
               memory: 1Gi
               ephemeral-storage: ${K6_EPHEMERAL_LIMIT}
           securityContext:

@@ -145,6 +145,23 @@ runner_case cluster-facts    valid.log            3 "pod;node;k6cpu;acu"  facts-
 JOB_STATE=Deleted runner_case killed-job killed.log 3 "void;missing-summary" facts-clean.env void-inside.log
 FAKE_PODS_JSON="$TD/runner/pods.json" runner_case live-facts valid.log 0 "" "" ""
 
+# k6cpu scales with K6_CPU_REQUEST: with 4 cores the threshold is 2800m, not 700m.
+# --env and --facts are last-wins, so the extra args replace runner_case's own.
+env_cpu4="$WORK/cpu4.env"
+{ cat "$ENV_EXAMPLE"; echo 'export K6_CPU_REQUEST=4 K6_CPU_LIMIT=4'; } >"$env_cpu4"
+for m in 2000 2800 3000; do
+    sed "s/^k6_cpu_max_m=.*/k6_cpu_max_m=$m/" "$TD/runner/facts-clean.env" >"$WORK/facts-cpu-$m.env"
+done
+runner_case k6cpu-4-cores-2000m valid.log 0 ""      "" "" --env "$env_cpu4" --facts "$WORK/facts-cpu-2000.env"
+runner_case k6cpu-4-cores-2800m valid.log 3 "k6cpu" "" "" --env "$env_cpu4" --facts "$WORK/facts-cpu-2800.env"
+runner_case k6cpu-4-cores-3000m valid.log 3 "k6cpu" "" "" --env "$env_cpu4" --facts "$WORK/facts-cpu-3000.env"
+if grep -q 'gate k6cpu: max 3000m reached 70% of the 4000m request' "$WORK/runner-k6cpu-4-cores-3000m/stderr" \
+    && grep -q 'gate k6cpu: max 750m reached 70% of the 1000m request' "$WORK/runner-cluster-facts/stderr"; then
+    ok "runner k6cpu log names the configured request in millicores (4000m; default 1000m)"
+else
+    bad "runner k6cpu log line"; show "$WORK/runner-k6cpu-4-cores-3000m/stderr"
+fi
+
 if grep -q 'gate 5xx: 120 of 90000 requests (perf_http_5xx)' "$WORK/runner-5xx-counter/stderr" \
     && ! grep -q 'fell back' "$WORK/runner-valid/stderr" \
     && ! grep -q 'fell back' "$WORK/runner-5xx-counter/stderr" \
@@ -184,6 +201,11 @@ if grep -q '^pod_before=uid-app-1$' "$dir/out/facts/S4-r1.env" && grep -q '^node
     ok "runner gathered app pod facts through kubectl get pods"
 else
     bad "runner live facts"; cat "$dir/out/facts/S4-r1.env"
+fi
+if grep -q '^k6_cpu_request_m=1000$' "$dir/out/facts/S4-r1.env" && grep -q '^k6_cpu_limit_m=2000$' "$dir/out/facts/S4-r1.env"; then
+    ok "runner recorded the k6 CPU request and limit (millicores) in the facts file"
+else
+    bad "runner CPU facts"; cat "$dir/out/facts/S4-r1.env"
 fi
 
 # Staircase: --rate 0 + PERF_STEPS, no rate gate.
@@ -248,6 +270,28 @@ usage_case bad-script --env "$ENV_EXAMPLE" --kind k6 --label l --scenario S4 --r
 bad_storage_env="$WORK/bad-storage.env"
 { cat "$ENV_EXAMPLE"; echo 'export K6_EPHEMERAL_LIMIT=1GB'; } >"$bad_storage_env"
 usage_case bad-ephemeral-storage --env "$bad_storage_env" --kind k6 --label l --scenario S4 --rep 1 --script a.ts --rate 1 --warm 0 --duration 1m --render-only
+
+cpu_usage_case() { # NAME ENV_LINE WANT_MESSAGE -> exit 2, and stderr names the variable
+    local name="$1" line="$2" want="$3"
+    local dir="$WORK/usage-$name"
+    mkdir -p "$dir"
+    { cat "$ENV_EXAMPLE"; echo "$line"; } >"$dir/env"
+    run_runner "$dir" --env "$dir/env" --kind k6 --label l --scenario S4 --rep 1 --script a.ts --rate 1 --warm 0 \
+        --duration 1m --render-only
+    if [[ $RC -eq 2 ]] && grep -Fq "$want" "$dir/stderr"; then
+        ok "runner usage: $name -> exit 2 ($want)"
+    else
+        bad "runner usage: $name -> exit $RC, want 2 and '$want'"; show "$dir/stderr"
+    fi
+    return 0
+}
+cpu_usage_case cpu-request-abc 'export K6_CPU_REQUEST=abc' "K6_CPU_REQUEST must be a CPU quantity"
+cpu_usage_case cpu-request-decimal 'export K6_CPU_REQUEST=1.5' "K6_CPU_REQUEST must be a CPU quantity"
+cpu_usage_case cpu-request-zero 'export K6_CPU_REQUEST=0' "K6_CPU_REQUEST must be above zero"
+cpu_usage_case cpu-request-zero-m 'export K6_CPU_REQUEST=0m' "K6_CPU_REQUEST must be above zero"
+cpu_usage_case cpu-limit-zero-m 'export K6_CPU_LIMIT=0m' "K6_CPU_LIMIT must be above zero"
+cpu_usage_case cpu-limit-below-request 'export K6_CPU_REQUEST=4 K6_CPU_LIMIT=3500m' \
+    "K6_CPU_LIMIT (3500m) must not be below K6_CPU_REQUEST (4)"
 usage_case reset-bad-base-rows --env "$ENV_EXAMPLE" --kind reset --rows 10 --watermark 2026-01-01T00:00:00Z --out "$WORK/x" --base-rows abc
 
 # ---------------------------------------------------------------------------
@@ -339,6 +383,32 @@ else
     else
         skip "render k6: Job shape (ruby not installed, no YAML parser)"
     fi
+fi
+
+# K6_CPU_REQUEST / K6_CPU_LIMIT reach the template as spelled, quoted, request first.
+render_cpu_case() { # NAME WANT ENV_LINE -> WANT is the rendered cpu values, in order
+    local name="$1" want="$2" line="$3" got
+    local dir="$WORK/render-cpu-$name"
+    mkdir -p "$dir"
+    { cat "$ENV_EXAMPLE"; echo "$line"; } >"$dir/env"
+    run_runner "$dir" --env "$dir/env" --render-only --kind k6 --label dryrun --scenario S4 --rep 0 \
+        --script products-read-only.ts --rate 5 --warm 2m --duration 30s
+    got="$(awk '/^ +cpu: / { printf "%s%s", sep, $2; sep = " " }' "$dir/stdout")"
+    if [[ $RC -eq 0 && "$got" == "$want" ]]; then
+        ok "render k6 cpu $name: $want"
+    else
+        bad "render k6 cpu $name (exit $RC): got '$got', want '$want'"; show "$dir/stderr"
+    fi
+    return 0
+}
+render_cpu_case unset '"1" "2"' 'unset K6_CPU_REQUEST K6_CPU_LIMIT'
+render_cpu_case explicit-defaults '"1" "2"' 'export K6_CPU_REQUEST=1 K6_CPU_LIMIT=2'
+render_cpu_case cores '"4" "4"' 'export K6_CPU_REQUEST=4 K6_CPU_LIMIT=4'
+render_cpu_case millicores '"3500m" "4"' 'export K6_CPU_REQUEST=3500m K6_CPU_LIMIT=4'
+if cmp -s "$WORK/render-cpu-unset/stdout" "$WORK/render-cpu-explicit-defaults/stdout"; then
+    ok "render k6 cpu: unset knobs render byte-for-byte what K6_CPU_REQUEST=1 K6_CPU_LIMIT=2 renders"
+else
+    bad "render k6 cpu: unset knobs differ from 1 / 2"; diff "$WORK/render-cpu-unset/stdout" "$WORK/render-cpu-explicit-defaults/stdout" | head -n 20
 fi
 
 dir="$WORK/render-reset"
