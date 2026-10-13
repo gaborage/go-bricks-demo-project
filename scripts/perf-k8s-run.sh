@@ -236,11 +236,12 @@ storage_quantity() {
     return 0
 }
 
-# cpu_quantity NAME DEFAULT -> the env value of NAME, or DEFAULT; refuses anything but
-# whole cores (4) or millicores (3500m), and refuses zero
+# cpu_quantity NAME DEFAULT -> the env value of NAME, or DEFAULT when NAME is unset;
+# refuses anything but whole cores (4) or millicores (3500m), and refuses zero and an
+# explicitly empty value
 cpu_quantity() {
     local name="$1" default="$2" value
-    value="${!name:-$default}"
+    value="${!name-$default}"
     [[ "$value" =~ ^(0|[1-9][0-9]{0,8})m?$ ]] \
         || usage_err "$name must be a CPU quantity in whole cores such as 4 or millicores such as 3500m, got '$value'"
     [[ "$(cpu_millicores "$value")" -gt 0 ]] || usage_err "$name must be above zero, got '$value'"

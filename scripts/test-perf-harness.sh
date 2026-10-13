@@ -286,6 +286,7 @@ cpu_usage_case() { # NAME ENV_LINE WANT_MESSAGE -> exit 2, and stderr names the 
     return 0
 }
 cpu_usage_case cpu-request-abc 'export K6_CPU_REQUEST=abc' "K6_CPU_REQUEST must be a CPU quantity"
+cpu_usage_case cpu-request-empty 'export K6_CPU_REQUEST=' "K6_CPU_REQUEST must be a CPU quantity"
 cpu_usage_case cpu-request-decimal 'export K6_CPU_REQUEST=1.5' "K6_CPU_REQUEST must be a CPU quantity"
 cpu_usage_case cpu-request-zero 'export K6_CPU_REQUEST=0' "K6_CPU_REQUEST must be above zero"
 cpu_usage_case cpu-request-zero-m 'export K6_CPU_REQUEST=0m' "K6_CPU_REQUEST must be above zero"
