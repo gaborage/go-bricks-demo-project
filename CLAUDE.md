@@ -467,12 +467,12 @@ make test                                        # Run all tests (uses race dete
 
 ### Cross-Module Messaging Validation
 
-[cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
+[cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Payments is the one exception, as the first bullet below explains. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
 
-- **Sealing needs no `certs/`.** The payments module's sealed publisher and consumer resolve their key generations at declaration time. The test therefore configures the sealing runtime with a `keystore/testing` mock holding `paymentssign-v1` and `paymentsencrypt-v1`, and restores the previous runtime in `t.Cleanup`.
-- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging in v0.71.1, and their `Init` needs a validated config, a database or DER files.
+- **Payments is validated apart, at the sealing seam.** Its seal-tagged publisher and consumer resolve their key generations against a sealing runtime that only `app.Run()` can configure since go-bricks C72.9 (ADR-139). Outside an App, `Validate()` reports that runtime's not-configured error before any topology rule. So the pass and the defect tests run on the set without payments, and a third test asserts that the full set stops at exactly that error, which also proves the `messaging/sealed` codec is linked. A fourth test declares payments alone and asserts that none of its exchange or queue names appears in the other modules' set, so a name conflict with another module still fails CI. Payments' dead-letter routing (C72.13), its publisher destinations and its key resolution are now proven only by a real boot.
+- **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging at the pinned go-bricks, and their `Init` needs a validated config, a database or DER files.
 - **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
-- **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`.
+- **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`. One with a seal-tagged type fails the pass until it joins payments outside the validated set.
 
 ### API Testing
 ```bash
@@ -574,12 +574,15 @@ make loadtest-smoke
 
 ## Framework Dependency
 
-**go-bricks version:** `go.mod` is pinned to go-bricks `v0.71.1`. There is no
-`replace` directive — builds and CI resolve the framework from the module proxy
-like any other dependency. The per-environment operator decisions for the
-v0.69.0 → v0.71.1 upgrade live in
-[wiki/GOBRICKS_V071_UPGRADE.md](wiki/GOBRICKS_V071_UPGRADE.md), those for
-v0.67.0 → v0.69.0 in [wiki/GOBRICKS_V069_UPGRADE.md](wiki/GOBRICKS_V069_UPGRADE.md),
+**go-bricks version:** `go.mod` is pinned to go-bricks main commit `8cfb522f`
+(pseudo-version `v0.71.2-0.20261011230701-8cfb522fbbaa`), pending the v0.72.0
+tag. The pin is that exact commit, not the latest main, for a performance test
+series. There is no `replace` directive — builds and CI resolve the
+framework from the module proxy like any other dependency. The per-environment
+operator decisions for the v0.71.1 → `8cfb522f` bump live in
+[wiki/GOBRICKS_V072_UPGRADE.md](wiki/GOBRICKS_V072_UPGRADE.md), those for
+v0.69.0 → v0.71.1 in [wiki/GOBRICKS_V071_UPGRADE.md](wiki/GOBRICKS_V071_UPGRADE.md),
+those for v0.67.0 → v0.69.0 in [wiki/GOBRICKS_V069_UPGRADE.md](wiki/GOBRICKS_V069_UPGRADE.md),
 and those for v0.64.0 → v0.67.0 in [wiki/GOBRICKS_V067_UPGRADE.md](wiki/GOBRICKS_V067_UPGRADE.md).
 
 **Local iteration** against a sibling checkout at `../go-bricks` uses a `go.work`
@@ -928,7 +931,7 @@ back off the parked bytes with `open-event` (below): exit `3` plus
 under the sealed type opens cleanly, which shows that rule 7 alone refused it.
 
 ```bash
-printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.71.1 \
+printf '%s' "$DOCUMENT" | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.71.2-0.20261011230701-8cfb522fbbaa \
   -sign-key-file certs/payments_sign_v1_private.der \
   -encrypt-key-file certs/payments_encrypt_v1_public.der \
   -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
@@ -1698,7 +1701,7 @@ curl -s http://localhost:8080/_sys/health-debug | jq .data.components.messaging.
 # Symptom: a script that read any non-zero go-bricks-migrate exit as "a tenant
 # failed", or scraped "N tenants total, M failed", misreads the v0.67.0 CLI
 # (#1771/#1770, ADR-115). Rebuild the CLI after the pin moves:
-make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (v0.71.1)
+make migrate-multitenant-install   # builds Makefile GO_BRICKS_REF (8cfb522fbbaa)
 # Exit codes: 0 clean; 1 fleet split (something was attempted and something
 # failed or was never attempted); 2 nothing attempted, no schema touched (empty
 # or failed tenant listing, unreadable tenant store, credential provider that
