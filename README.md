@@ -218,14 +218,15 @@ make show-sealed-message
 
 `make show-sealed-message` proves the **producer** half. `make seal-event-demo`
 proves the **consumer** half by taking the app out of the producing role: the
-framework's `seal-event` CLI (go-bricks v0.63.0) builds the event body in the
-shell from the demo's own DER keys, and it is published straight to the exchange.
+framework's `seal-event` CLI (added in go-bricks v0.63.0) builds the event body
+in the shell from the demo's own DER keys, and it is published straight to the
+exchange.
 
 ```bash
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.71.2-0.20261015181756-92883628ae2a \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.72.0 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid paymentssign-v1 -encrypt-kid paymentsencrypt-v1 \
@@ -260,11 +261,11 @@ framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0
 
 #### Opening events outside the app (`open-event` CLI)
 
-`open-event` (go-bricks v0.65.0) is the mirror of `seal-event`. It verifies and
-decrypts one sealed body through the framework's `sealed.OpenDocument`, running
-the consume door's open rules in the same order with the same `SEAL_*` codes. It
-holds the **consumer** half of both families: sign PUBLIC to verify, encrypt
-PRIVATE to decrypt. Both demo scripts use it:
+`open-event` (added in go-bricks v0.65.0) is the mirror of `seal-event`. It
+verifies and decrypts one sealed body through the framework's
+`sealed.OpenDocument`, running the consume door's open rules in the same order
+with the same `SEAL_*` codes. It holds the **consumer** half of both families:
+sign PUBLIC to verify, encrypt PRIVATE to decrypt. Both demo scripts use it:
 
 - `make show-sealed-message` opens the tapped body and prints the verified
   envelope and document, asserting that they match the raw-wire view.
@@ -272,7 +273,7 @@ PRIVATE to decrypt. Both demo scripts use it:
   `SEAL_EVENT_TYPE_MISMATCH` without the app log.
 
 ```bash
-go install github.com/gaborage/go-bricks/cmd/open-event@v0.71.2-0.20261015181756-92883628ae2a
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.72.0
 
 # The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
 open-event \
@@ -293,7 +294,7 @@ open-event \
   is `{"code":…,"details":{…}}` on stdout. Its details carry only presence and
   length facts.
 - **The scripts install the CLI, never `go run` it.** They use
-  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.71.2-0.20261015181756-92883628ae2a`, because `go run`
+  `GOBIN=<scratch dir> go install …/cmd/open-event@v0.72.0`, because `go run`
   reports any non-zero exit as its own `1` and would hide the refusal's `3`.
 - **Both kids are required flags.** The CLI never reads them from the
   unauthenticated header, so after a rotation you pass the new generation
