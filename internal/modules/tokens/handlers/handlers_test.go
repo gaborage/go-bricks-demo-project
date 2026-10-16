@@ -224,8 +224,8 @@ func TestRegisterRoutes(t *testing.T) {
 	ourPriv, _ := jositest.GenerateTestKeyPair(t)
 	peerPriv, _ := jositest.GenerateTestKeyPair(t)
 	resolver := jositest.NewTestResolver(map[string]any{
-		"tokensour":  ourPriv,
-		"tokenspeer": peerPriv,
+		"tokens.our":  ourPriv,
+		"tokens.peer": peerPriv,
 	})
 
 	hr := server.NewHandlerRegistry(newMLEConfig(), server.WithJOSEResolver(resolver))

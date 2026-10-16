@@ -14,10 +14,13 @@ import (
 	"github.com/gaborage/go-bricks/app"
 )
 
-const (
-	algorithm = "RS256"
-	keyName   = "webhooksigning"
-)
+const algorithm = "RS256"
+
+// KeyName is the keystore entry the service signs and verifies with. It is a
+// dotted name (go-bricks ADR-144), written nested in YAML as
+// keystore.keys.webhooks.signing, and it travels in every signed payload as
+// keyName, so a verifier outside this service sees it too.
+const KeyName = "webhooks.signing"
 
 // ErrMalformedSignature indicates a client-provided signature that cannot be decoded.
 var ErrMalformedSignature = errors.New("malformed signature")
@@ -35,9 +38,9 @@ func NewSigningService(ks app.KeyStore) *SigningService {
 
 // Sign produces an RSA-SHA256 signature for the given payload.
 func (s *SigningService) Sign(_ context.Context, payload string) (*domain.SignedPayload, error) {
-	privKey, err := s.keyStore.PrivateKey(keyName)
+	privKey, err := s.keyStore.PrivateKey(KeyName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get private key %q: %w", keyName, err)
+		return nil, fmt.Errorf("failed to get private key %q: %w", KeyName, err)
 	}
 
 	hash := sha256.Sum256([]byte(payload))
@@ -50,16 +53,16 @@ func (s *SigningService) Sign(_ context.Context, payload string) (*domain.Signed
 		Payload:   payload,
 		Signature: base64.StdEncoding.EncodeToString(sig),
 		Algorithm: algorithm,
-		KeyName:   keyName,
+		KeyName:   KeyName,
 	}, nil
 }
 
 // Verify checks whether the base64-encoded signature is valid for the payload.
 // Returns ErrMalformedSignature for invalid base64 input (client error).
 func (s *SigningService) Verify(_ context.Context, payload, signatureB64 string) (bool, error) {
-	pubKey, err := s.keyStore.PublicKey(keyName)
+	pubKey, err := s.keyStore.PublicKey(KeyName)
 	if err != nil {
-		return false, fmt.Errorf("failed to get public key %q: %w", keyName, err)
+		return false, fmt.Errorf("failed to get public key %q: %w", KeyName, err)
 	}
 
 	sig, err := base64.StdEncoding.DecodeString(signatureB64)

@@ -69,9 +69,10 @@ TAP_QUEUE="${TAP_QUEUE:-payments.authorized.tap}"
 TAP_ATTEMPTS="${TAP_ATTEMPTS:-10}"
 
 EXPECTED_TYP="vnd.gobricks.sealed.v1+json"
-SIGN_FAMILY="paymentssign"        # Logical kid from the seal tag; the wire kid
-                                  # is a GENERATION of it (paymentssign-v<N>)
-ENCRYPT_FAMILY="paymentsencrypt"
+SIGN_FAMILY="payments.sign"       # Logical kid from the seal tag; the wire kid
+                                  # is a GENERATION of it (payments.sign.v<N>:
+                                  # a dotted family's marker is a final segment)
+ENCRYPT_FAMILY="payments.encrypt"
 
 # What the payments consumer declares — must match internal/modules/payments.
 EVENT_TYPE="payment.authorized"
@@ -87,11 +88,22 @@ SEAL_EVENT_VERSION="${SEAL_EVENT_VERSION:-}"
 # verifies, which is why the CLI takes both kids as required flags. Override
 # them after a rotation. The consumer-half key files follow the DER naming
 # `make generate-keys` writes, which is not the entry name, so only the
-# generation suffix carries over (paymentssign-v1 -> certs/payments_sign_v1_public.der).
-OPEN_SIGN_KID="${OPEN_SIGN_KID:-paymentssign-v1}"
-OPEN_ENCRYPT_KID="${OPEN_ENCRYPT_KID:-paymentsencrypt-v1}"
-OPEN_SIGN_KEY_FILE="certs/payments_sign_${OPEN_SIGN_KID##*-}_public.der"            # consumer half: PUBLIC
-OPEN_ENCRYPT_KEY_FILE="certs/payments_encrypt_${OPEN_ENCRYPT_KID##*-}_private.der"  # consumer half: PRIVATE
+# generation's last segment carries over
+# (payments.sign.v1 -> certs/payments_sign_v1_public.der).
+OPEN_SIGN_KID="${OPEN_SIGN_KID:-payments.sign.v1}"
+OPEN_ENCRYPT_KID="${OPEN_ENCRYPT_KID:-payments.encrypt.v1}"
+OPEN_SIGN_KEY_FILE="certs/payments_sign_${OPEN_SIGN_KID##*.}_public.der"            # consumer half: PUBLIC
+OPEN_ENCRYPT_KEY_FILE="certs/payments_encrypt_${OPEN_ENCRYPT_KID##*.}_private.der"  # consumer half: PRIVATE
+
+# is_generation_of KID FAMILY — true when KID is a generation of the dotted
+# FAMILY: "<FAMILY>.v<N>", N a positive integer without a leading zero (the
+# framework's grammar, ADR-144). FAMILY is matched literally: its '.' is not a
+# regex wildcard here, so "paymentsXsign.v1" is no generation of payments.sign.
+is_generation_of() {
+    local kid="$1" family="$2"
+    [[ "$kid" == "$family".v* ]] || return 1
+    [[ "${kid#"$family".v}" =~ ^[1-9][0-9]*$ ]]
+}
 
 # The order id is NOT an input: the service mints it and returns it, and this
 # script uses that value to prove the message on the broker is the one it just
@@ -196,10 +208,10 @@ curl -fsS -o /dev/null -K "$CURL_CFG" "$RABBIT_MGMT/api/overview" 2>/dev/null \
     || fail "RabbitMQ management API not reachable at $RABBIT_MGMT — run 'make docker-up'"
 
 # The kid shapes are checked before they become file paths.
-[[ "$OPEN_SIGN_KID" =~ ^${SIGN_FAMILY}-v[0-9]+$ ]] \
-    || fail "OPEN_SIGN_KID='$OPEN_SIGN_KID' is not a generation of the '$SIGN_FAMILY' family"
-[[ "$OPEN_ENCRYPT_KID" =~ ^${ENCRYPT_FAMILY}-v[0-9]+$ ]] \
-    || fail "OPEN_ENCRYPT_KID='$OPEN_ENCRYPT_KID' is not a generation of the '$ENCRYPT_FAMILY' family"
+is_generation_of "$OPEN_SIGN_KID" "$SIGN_FAMILY" \
+    || fail "OPEN_SIGN_KID='$OPEN_SIGN_KID' is not a generation of the '$SIGN_FAMILY' family (expected $SIGN_FAMILY.v<N>)"
+is_generation_of "$OPEN_ENCRYPT_KID" "$ENCRYPT_FAMILY" \
+    || fail "OPEN_ENCRYPT_KID='$OPEN_ENCRYPT_KID' is not a generation of the '$ENCRYPT_FAMILY' family (expected $ENCRYPT_FAMILY.v<N>)"
 for f in "$OPEN_SIGN_KEY_FILE" "$OPEN_ENCRYPT_KEY_FILE"; do
     [[ -r "$f" ]] || fail "missing consumer key '$f' — run 'make generate-keys'"
 done
@@ -317,7 +329,7 @@ ETYP="$(jq -r '.etyp // empty' <<<"$HEADER_JSON")"
 [[ "$TYP" == "$EXPECTED_TYP" ]] || fail "typ is '$TYP', expected '$EXPECTED_TYP'"
 [[ "$ALG" == "PS256" ]] \
     || fail "alg is '$ALG', expected PS256 — this demo's producer signs with PS256 only, so anything else on this wire is a foreign producer"
-[[ "$KID" =~ ^${SIGN_FAMILY}-v[0-9]+$ ]] \
+is_generation_of "$KID" "$SIGN_FAMILY" \
     || fail "kid '$KID' is not a generation of the '$SIGN_FAMILY' family"
 
 echo
@@ -359,7 +371,7 @@ JWE_KID="$(jq -r '.kid // empty' <<<"$JWE_HEADER_JSON")"
 JWE_ISS="$(jq -r '.iss // empty' <<<"$JWE_HEADER_JSON")"
 JWE_ALG="$(jq -r '.alg // empty' <<<"$JWE_HEADER_JSON")"
 JWE_ENC="$(jq -r '.enc // empty' <<<"$JWE_HEADER_JSON")"
-[[ "$JWE_KID" =~ ^${ENCRYPT_FAMILY}-v[0-9]+$ ]] \
+is_generation_of "$JWE_KID" "$ENCRYPT_FAMILY" \
     || fail "inner kid '$JWE_KID' is not a generation of the '$ENCRYPT_FAMILY' family"
 [[ "$JWE_ISS" == "$KID" ]] \
     || fail "inner iss '$JWE_ISS' != outer kid '$KID' — the authorship binding is broken"
@@ -484,9 +496,9 @@ echo "Next:"
 echo "  * consumer side: after the open the handler holds the card in memory only —"
 echo "    the app log line for the 'payments.authorized' delivery carries cardLast4,"
 echo "    never the plaintext card, and the delivery is deduped through the inbox."
-echo "  * rotation: provision paymentssign-v2, then pin it with the commented-out"
+echo "  * rotation: provision payments.sign.v2, then pin it with the commented-out"
 echo "    'messaging.seal.active' selector in config.yml, and re-run"
-echo "    this script with OPEN_SIGN_KID=paymentssign-v2 — the kid above moves, the"
+echo "    this script with OPEN_SIGN_KID=payments.sign.v2 — the kid above moves, the"
 echo "    seal tag never changes, and open-event has to be told the new generation"
 echo "    because it never trusts the header's."
 echo "  * refusals: 'make seal-event-demo' parks a wrong-event-type body on the DLQ"

@@ -86,10 +86,12 @@ QUEUE="payments.authorized"
 DLQ="payments.authorized.dlq"
 
 # Keystore generations. The seal tag names only the LOGICAL kids
-# (paymentssign / paymentsencrypt); the wire carries these generations.
-SIGN_KID="paymentssign-v1"
-ENCRYPT_KID="paymentsencrypt-v1"
-SIGN_FAMILY="paymentssign"
+# (payments.sign / payments.encrypt); the wire carries these generations. A
+# dotted family names its generations with a final v<N> segment (ADR-144).
+# The DER files keep their own naming (certs/payments_sign_v1_*.der).
+SIGN_KID="payments.sign.v1"
+ENCRYPT_KID="payments.encrypt.v1"
+SIGN_FAMILY="payments.sign"
 SIGN_KEY_FILE="certs/payments_sign_v1_private.der"    # producer half: PRIVATE
 ENCRYPT_KEY_FILE="certs/payments_encrypt_v1_public.der" # producer half: PUBLIC
 OPEN_SIGN_KEY_FILE="certs/payments_sign_v1_public.der"       # consumer half: PUBLIC
@@ -644,10 +646,12 @@ echo "   used here."
 echo
 echo "Other codes the same trick reaches, one seal-event flag at a time — and"
 echo "open-event names each one from the parked bytes the same way:"
-echo "  -sign-kid paymentssign-v9       -> SEAL_KID_UNKNOWN_GENERATION (recoverable:"
+echo "  -sign-kid payments.sign.v9      -> SEAL_KID_UNKNOWN_GENERATION (recoverable:"
 echo "                                     right family, generation not provisioned —"
 echo "                                     this is the rotation-lag signature)"
-echo "  -sign-kid tokensour-v1          -> SEAL_KID_FAMILY_MISMATCH"
+echo "  -sign-kid paymentssign-v1       -> SEAL_KID_FAMILY_MISMATCH (the pre-rename"
+echo "                                     family: what a body left over from before"
+echo "                                     the dotted-name cutover gets)"
 echo "  flip one byte in the body       -> a rule-class, not one code: a payload or"
 echo "                                     signature byte fails rule 5"
 echo "                                     (SEAL_SIGNATURE_INVALID); a header byte"

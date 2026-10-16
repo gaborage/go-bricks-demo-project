@@ -30,7 +30,7 @@ func TestRelayServiceRoundTripsThroughJOSETransport(t *testing.T) {
 	ourPriv, _ := jositest.GenerateTestKeyPair(t)
 	peerPriv, _ := jositest.GenerateTestKeyPair(t)
 
-	const ourKid, peerKid = "tokensour", "tokenspeer"
+	const ourKid, peerKid = "tokens.our", "tokens.peer"
 	resolver := jositest.NewTestResolver(map[string]any{
 		ourKid:  ourPriv,
 		peerKid: peerPriv,
@@ -117,16 +117,16 @@ func TestRelayServiceRejectsMissingKeyStore(t *testing.T) {
 func TestRelayServiceSurfacesBuildError(t *testing.T) {
 	ourPriv, _ := jositest.GenerateTestKeyPair(t)
 	ks := kstest.NewMockKeyStore().
-		WithPublicKey("tokensour", &ourPriv.PublicKey).
-		WithPrivateKey("tokensour", ourPriv)
+		WithPublicKey("tokens.our", &ourPriv.PublicKey).
+		WithPrivateKey("tokens.our", ourPriv)
 
 	_, err := NewRelayService(&RelayConfig{
 		PartnerURL: "http://example",
 		KeyStore:   ks,
 		SignKid:    "", // outbound policy requires both sign and encrypt kids
-		EncryptKid: "tokenspeer",
-		VerifyKid:  "tokenspeer",
-		DecryptKid: "tokensour",
+		EncryptKid: "tokens.peer",
+		VerifyKid:  "tokens.peer",
+		DecryptKid: "tokens.our",
 		Logger:     logger.New("disabled", false),
 	})
 	require.ErrorContains(t, err, "build relay client")
