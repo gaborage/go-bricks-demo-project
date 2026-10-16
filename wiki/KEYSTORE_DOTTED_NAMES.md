@@ -149,11 +149,19 @@ needed whatever stays provisioned.
    broker.
 4. **Pass the drain gate:**
    - `payments.authorized`: zero ready and zero unacknowledged messages.
-   - `payments.authorized.dlq`: empty, or every message triaged. Each parked
-     message is a payment that was never processed: reconcile it on its clear
-     `orderId`, and replay it now if it must be processed, while the old binary
-     can still open it. In the demo the DLQ also accumulates the seal-event
-     demo's test bodies across runs; purge those.
+   - `payments.authorized.dlq`: empty, or every message triaged. Not every
+     parked body is a payment:
+     - **Worth replaying, before the cutover:** a valid `payment.authorized`
+       event sealed under the old family that was parked because its handler
+       failed. Only the old binary can open it. Its clear `orderId` identifies
+       it. In this demo the handler has no payment side effect: it writes the
+       inbox dedup row and logs (`onPaymentAuthorized` in
+       `internal/modules/payments/module.go`), so a replay only completes that
+       record.
+     - **Discard:** test bodies, such as the seal-event demo's wrong-event-type
+       body (`SEAL_EVENT_TYPE_MISMATCH`), which piles up across runs, and any
+       body the opener refused with a non-recoverable `SEAL_*` code, which
+       fails the same way on replay.
    - `payments.authorized.tap`: consumerless and demo-only, never on the
      payment path. Purge it, or let its 1h TTL empty it.
    - The demo seals nothing through the outbox, enables no inbox hold, and

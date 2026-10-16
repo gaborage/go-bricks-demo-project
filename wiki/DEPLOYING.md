@@ -89,8 +89,16 @@ mounted path rather than `..._VALUE`, never both for one half.
 
 These names replaced the flat ones (`WEBHOOKSIGNING`, `TOKENSOUR`,
 `TOKENSPEER`, `PAYMENTSSIGN-V1`, `PAYMENTSENCRYPT-V1`). The secrets keep their
-contents; only the variable names change, and the sealing families need a
-drain before the cutover. See
+contents, but the names are wire identifiers too, so more than the variable
+names changes:
+
+- the tokens JOSE kids become `tokens.our` and `tokens.peer`;
+- the signed webhook payload's `keyName` becomes `webhooks.signing`;
+- the sealed `kid` and inner `iss` become `payments.sign.v1`, and the inner
+  JWE `kid` becomes `payments.encrypt.v1`.
+
+A JOSE partner or webhook verifier that pins the old strings must accept the
+new ones before the cutover, and the sealing families need a drain first. See
 [KEYSTORE_DOTTED_NAMES.md](KEYSTORE_DOTTED_NAMES.md) for the deploy order.
 
 ## Optional per-environment settings

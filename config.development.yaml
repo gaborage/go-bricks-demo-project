@@ -147,11 +147,17 @@ databases:
 # Entry names are dotted paths (go-bricks ADR-144), written as nested maps: the
 # path below `keys`, joined with '.', is the name. `tokens:` below is a
 # namespace, not an entry: a node is an entry only when it holds public,
-# private, secret or pkcs12. The joined name is used verbatim as the
-# app.KeyStore argument, the jose:/seal: tag value and the wire kid, and the
-# environment reaches the same path (KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE is
-# tokens.our). wiki/KEYSTORE_DOTTED_NAMES.md records the rename from the old
-# flat names.
+# private, secret or pkcs12. The environment reaches the same path
+# (KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE is tokens.our).
+#
+# An ordinary entry's name is used verbatim: as the app.KeyStore argument
+# (webhooks.signing), the jose: tag value and the wire kid (tokens.our,
+# tokens.peer). A sealing entry is a GENERATION of a family instead: the
+# family is the name without its final v<N> segment. The seal: tag and the
+# inbox key prefix name the family (payments.sign, payments.encrypt), while
+# the provisioned entry and the wire kid are the generation (payments.sign.v1,
+# payments.encrypt.v1). wiki/KEYSTORE_DOTTED_NAMES.md records the rename from
+# the old flat names.
 keystore:
   keys:
     # webhooks.signing — both halves loaded from DER files.
