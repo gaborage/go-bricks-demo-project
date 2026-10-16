@@ -218,8 +218,9 @@ make show-sealed-message
 
 `make show-sealed-message` proves the **producer** half. `make seal-event-demo`
 proves the **consumer** half by taking the app out of the producing role: the
-framework's `seal-event` CLI (go-bricks v0.63.0) builds the event body in the
-shell from the demo's own DER keys, and it is published straight to the exchange.
+framework's `seal-event` CLI (added in go-bricks v0.63.0) builds the event body
+in the shell from the demo's own DER keys, and it is published straight to the
+exchange.
 
 ```bash
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
@@ -260,11 +261,11 @@ framework's [wiki/sealing.md](https://github.com/gaborage/go-bricks/blob/v0.67.0
 
 #### Opening events outside the app (`open-event` CLI)
 
-`open-event` (go-bricks v0.65.0) is the mirror of `seal-event`. It verifies and
-decrypts one sealed body through the framework's `sealed.OpenDocument`, running
-the consume door's open rules in the same order with the same `SEAL_*` codes. It
-holds the **consumer** half of both families: sign PUBLIC to verify, encrypt
-PRIVATE to decrypt. Both demo scripts use it:
+`open-event` (added in go-bricks v0.65.0) is the mirror of `seal-event`. It
+verifies and decrypts one sealed body through the framework's
+`sealed.OpenDocument`, running the consume door's open rules in the same order
+with the same `SEAL_*` codes. It holds the **consumer** half of both families:
+sign PUBLIC to verify, encrypt PRIVATE to decrypt. Both demo scripts use it:
 
 - `make show-sealed-message` opens the tapped body and prints the verified
   envelope and document, asserting that they match the raw-wire view.
