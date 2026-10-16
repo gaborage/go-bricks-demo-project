@@ -1,12 +1,20 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	paymentsdomain "github.com/gaborage/go-bricks-demo-project/internal/modules/payments/domain"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/tokens"
+	webhooksservice "github.com/gaborage/go-bricks-demo-project/internal/modules/webhooks/service"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/jose/sealed"
+	"github.com/gaborage/go-bricks/keystore"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -71,12 +79,47 @@ func TestConfigLayoutDevelopmentLoadsBaseAndOverlay(t *testing.T) {
 	// The asserted keys come from the files, not from the caller's environment.
 	unsetEnv(t, "SERVER_PATH_BASE")
 	unsetEnv(t, "DATABASE_HOST")
+	// A KEYSTORE_KEYS_* variable adds or overrides an entry, so the keystore
+	// assertion below would judge the caller's environment instead of the overlay.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "KEYSTORE_KEYS_") {
+			unsetEnv(t, name)
+		}
+	}
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
 	assert.Equal(t, baseOnlyKeyValue, cfg.String(baseOnlyKey), "%s comes from %s", baseOnlyKey, baseConfigFile)
 	assert.Equal(t, devOnlyKeyValue, cfg.String(devOnlyKey), "%s comes from %s", devOnlyKey, devOverlayFile)
+
+	// The overlay provisions exactly the entries the modules ask for. The names
+	// are dotted paths written as nested YAML (ADR-144), so a nesting typo such
+	// as `webhook: {signing: …}` loads green as another entry: it has to fail
+	// here, not at the first request that reads the key. Every expected name
+	// comes from the code that reads it.
+	assert.ElementsMatch(t, moduleKeystoreEntries(t), slices.Collect(maps.Keys(cfg.KeyStore.Keys)),
+		"%s must provision exactly the keystore entries the modules resolve", devOverlayFile)
+}
+
+// moduleKeystoreEntries returns the keystore entry names the demo's modules
+// resolve, taken from the modules themselves: the webhooks key name, the tokens
+// JOSE kids, and generation v1 of the two sealing families the payments event's
+// seal: tag names, composed by the keystore's own generation grammar.
+func moduleKeystoreEntries(t *testing.T) []string {
+	t.Helper()
+
+	spec, err := sealed.ScanType(reflect.TypeOf(paymentsdomain.PaymentAuthorized{}))
+	require.NoError(t, err)
+	require.NotNil(t, spec, "PaymentAuthorized must carry a seal declaration")
+
+	return []string{
+		webhooksservice.KeyName,
+		tokens.OurKid,
+		tokens.PeerKid,
+		keystore.Generation{Logical: spec.SignLogical, Version: "v1"}.Kid(),
+		keystore.Generation{Logical: spec.EncryptLogical, Version: "v1"}.Kid(),
+	}
 }
 
 // The base is loaded in every environment, so it must carry nothing that only

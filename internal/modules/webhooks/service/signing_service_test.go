@@ -17,8 +17,8 @@ func testKeyStore(t *testing.T) *kstest.MockKeyStore {
 		t.Fatal(err)
 	}
 	return kstest.NewMockKeyStore().
-		WithPrivateKey("webhooksigning", privKey).
-		WithPublicKey("webhooksigning", &privKey.PublicKey)
+		WithPrivateKey("webhooks.signing", privKey).
+		WithPublicKey("webhooks.signing", &privKey.PublicKey)
 }
 
 func TestSignAndVerify(t *testing.T) {
@@ -36,8 +36,8 @@ func TestSignAndVerify(t *testing.T) {
 	if signed.Algorithm != "RS256" {
 		t.Errorf("Algorithm = %q, want RS256", signed.Algorithm)
 	}
-	if signed.KeyName != "webhooksigning" {
-		t.Errorf("KeyName = %q, want webhooksigning", signed.KeyName)
+	if signed.KeyName != "webhooks.signing" {
+		t.Errorf("KeyName = %q, want webhooks.signing", signed.KeyName)
 	}
 	if signed.Payload != payload {
 		t.Errorf("Payload mismatch")

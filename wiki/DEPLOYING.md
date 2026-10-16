@@ -67,25 +67,39 @@ environments therefore run with the framework defaults:
 | `KEYSTORE_KEYS_<NAME>_PUBLIC_VALUE`, `KEYSTORE_KEYS_<NAME>_PRIVATE_VALUE` | Base64 DER for each `<NAME>` below. |
 | `CORS_ORIGINS` | Comma-separated browser origins. Outside development, no value means no `Access-Control-Allow-Origin`. Not needed for server-to-server callers. |
 
-The keystore entries the modules resolve at startup, both halves each:
+The keystore entries the modules use, both halves each:
 
-| `<NAME>` | Used by |
-|----------|---------|
-| `WEBHOOKSIGNING` | webhooks module: sign and verify |
-| `TOKENSOUR` | tokens module: this service's JOSE keypair |
-| `TOKENSPEER` | tokens module: the in-process peer simulators' keypair |
-| `PAYMENTSSIGN-V1` | payments module: sealing sign family, generation v1 |
-| `PAYMENTSENCRYPT-V1` | payments module: sealing encrypt family, generation v1 |
+| Entry | `<NAME>` | Used by |
+|-------|----------|---------|
+| `webhooks.signing` | `WEBHOOKS_SIGNING` | webhooks module: sign and verify. Read on each request, not at startup |
+| `tokens.our` | `TOKENS_OUR` | tokens module: this service's JOSE keypair |
+| `tokens.peer` | `TOKENS_PEER` | tokens module: the in-process peer simulators' keypair |
+| `payments.sign.v1` | `PAYMENTS_SIGN_V1` | payments module: sealing sign family `payments.sign`, generation v1 |
+| `payments.encrypt.v1` | `PAYMENTS_ENCRYPT_V1` | payments module: sealing encrypt family `payments.encrypt`, generation v1 |
 
-The variable name is the config path upper-cased with `.` turned into `_`, so
-an entry name carries no separator: an `_` would read back as a path separator,
-and a POSIX shell `export` refuses a `-`. The two sealing entries keep their
-`-v<N>` suffix anyway, because go-bricks treats only a name ending in
-`-v<digits>` as a sealing generation. Their variables, for example
-`KEYSTORE_KEYS_PAYMENTSSIGN-V1_PRIVATE_VALUE`, work through Docker `-e` /
-`--env-file`, Kubernetes `env` and `env(1)`, but not through a shell `export`.
-To mount DER files instead, set `..._FILE` to the mounted path rather than
-`..._VALUE`, never both for one half.
+Entry names are dotted paths (go-bricks ADR-144). The variable name is the
+config path upper-cased with `.` turned into `_`, so
+`KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_VALUE` reaches entry `payments.sign.v1`
+and `KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE` reaches `tokens.our`. Every name
+above is a valid shell identifier, so it can be set with a POSIX `export` as
+well as through Docker `-e` / `--env-file`, Kubernetes `env` and `env(1)`. The
+sealing entries end in a `v<N>` segment because a dotted family names its
+generations `<family>.v<N>`. To mount DER files instead, set `..._FILE` to the
+mounted path rather than `..._VALUE`, never both for one half.
+
+These names replaced the flat ones (`WEBHOOKSIGNING`, `TOKENSOUR`,
+`TOKENSPEER`, `PAYMENTSSIGN-V1`, `PAYMENTSENCRYPT-V1`). The secrets keep their
+contents, but the names are wire identifiers too, so more than the variable
+names changes:
+
+- the tokens JOSE kids become `tokens.our` and `tokens.peer`;
+- the signed webhook payload's `keyName` becomes `webhooks.signing`;
+- the sealed `kid` and inner `iss` become `payments.sign.v1`, and the inner
+  JWE `kid` becomes `payments.encrypt.v1`.
+
+A JOSE partner or webhook verifier that pins the old strings must accept the
+new ones before the cutover, and the sealing families need a drain first. See
+[KEYSTORE_DOTTED_NAMES.md](KEYSTORE_DOTTED_NAMES.md) for the deploy order.
 
 ## Optional per-environment settings
 
@@ -99,7 +113,8 @@ commented out:
   the framework's reconnect defaults.
 - `MESSAGING_DECLARE_EXTERNALWAIT` and `CUSTOM_PARTNERFEED_ENABLED`: only where a
   partner service owns `partner-events`.
-- `messaging.seal.active`: only during a sealing key rotation.
+- `messaging.seal.active`: only during a sealing key rotation. The selector for
+  family `payments.sign` is `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2`.
 - `OBSERVABILITY_ENABLED=true` with `OBSERVABILITY_SERVICE_NAME`,
   `OBSERVABILITY_TRACE_ENDPOINT` / `_PROTOCOL` / `_INSECURE` and
   `OBSERVABILITY_METRICS_ENDPOINT` / `_PROTOCOL` / `_INSECURE` to export telemetry

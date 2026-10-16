@@ -143,63 +143,85 @@ databases:
 #            KEYSTORE_KEYS_<NAME>_{PUBLIC,PRIVATE}_VALUE (see wiki/DEPLOYING.md).
 # Development uses `file:` for every half: `make generate-keys` writes the DER
 # files to certs/ (gitignored) and never edits this file.
+#
+# Entry names are dotted paths (go-bricks ADR-144), written as nested maps: the
+# path below `keys`, joined with '.', is the name. `tokens:` below is a
+# namespace, not an entry: a node is an entry only when it holds public,
+# private, secret or pkcs12. The environment reaches the same path
+# (KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE is tokens.our).
+#
+# An ordinary entry's name is used verbatim: as the app.KeyStore argument
+# (webhooks.signing), the jose: tag value and the wire kid (tokens.our,
+# tokens.peer). A sealing entry is a GENERATION of a family instead: the
+# family is the name without its final v<N> segment. The seal: tag and the
+# inbox key prefix name the family (payments.sign, payments.encrypt), while
+# the provisioned entry and the wire kid are the generation (payments.sign.v1,
+# payments.encrypt.v1). wiki/KEYSTORE_DOTTED_NAMES.md records the rename from
+# the old flat names.
 keystore:
   keys:
-    # Webhook signing — both halves loaded from DER files.
-    webhooksigning:
-      public:
-        file: "certs/webhook_signing_public.der"
-      private:
-        file: "certs/webhook_signing_private.der"
+    # webhooks.signing — both halves loaded from DER files.
+    webhooks:
+      signing:
+        public:
+          file: "certs/webhook_signing_public.der"
+        private:
+          file: "certs/webhook_signing_private.der"
 
-    # tokensour: our app's keypair for the JOSE-protected /tokens flow.
-    # Both halves on disk — production pattern when keys are mounted via Kubernetes
-    # secrets or external secret-manager projection (e.g., AWS Secrets Manager CSI).
-    tokensour:
-      public:
-        file: "certs/tokens_our_public.der"
-      private:
-        file: "certs/tokens_our_private.der"
+    tokens:
+      # tokens.our: our app's keypair for the JOSE-protected /tokens flow.
+      # Both halves on disk — production pattern when keys are mounted via Kubernetes
+      # secrets or external secret-manager projection (e.g., AWS Secrets Manager CSI).
+      our:
+        public:
+          file: "certs/tokens_our_public.der"
+        private:
+          file: "certs/tokens_our_private.der"
 
-    # tokenspeer: the simulated counterparty keypair (in production this would
-    # be Visa Token Services or similar). Both halves on disk: the private half
-    # lets the in-process simulators decrypt+sign as the peer would.
-    tokenspeer:
-      public:
-        file: "certs/tokens_peer_public.der"
-      private:
-        file: "certs/tokens_peer_private.der"
+      # tokens.peer: the simulated counterparty keypair (in production this would
+      # be Visa Token Services or similar). Both halves on disk: the private half
+      # lets the in-process simulators decrypt+sign as the peer would.
+      peer:
+        public:
+          file: "certs/tokens_peer_public.der"
+        private:
+          file: "certs/tokens_peer_private.der"
 
     # --- Sealed messages: payments module (go-bricks v0.63.0, ADR-097) --------
-    # These two are sealing GENERATION entries, not plain named keys. The
-    # "-v<N>" name suffix is what gives an entry family semantics: the event
-    # struct names only the LOGICAL kids —
-    #     _ struct{} `seal:"sign=paymentssign,encrypt=paymentsencrypt"`
+    # These two are sealing GENERATION entries, not plain named keys. A final
+    # "v<N>" segment under a dotted family is what gives an entry family
+    # semantics (ADR-144: a family containing '.' names its generations
+    # <family>.v<N>). The event struct names only the LOGICAL kids —
+    #     _ struct{} `seal:"sign=payments.sign,encrypt=payments.encrypt"`
     # — and the keystore resolves each family to its provisioned generations.
-    # Rotation therefore never touches Go code: it adds paymentssign-v2 next to
-    # v1 and flips messaging.seal.active (see the commented selector in the
-    # messaging section of config.yml). Each family here has exactly ONE generation, so
-    # that single generation auto-activates and no selector is needed.
+    # Rotation therefore never touches Go code: it adds payments.sign.v2 (a v2
+    # node next to v1 below) and flips messaging.seal.active (see the commented
+    # selector in the messaging section of config.yml). Each family here has
+    # exactly ONE generation, so that single generation auto-activates and no
+    # selector is needed.
     #
     # Both halves are provisioned for both families because this demo publishes
-    # AND consumes in one process: the producer signs with paymentssign-v1
-    # PRIVATE and encrypts to paymentsencrypt-v1 PUBLIC, while the consumer
-    # verifies with paymentssign-v1 PUBLIC and decrypts with
-    # paymentsencrypt-v1 PRIVATE. Split across two services, each side holds
+    # AND consumes in one process: the producer signs with payments.sign.v1
+    # PRIVATE and encrypts to payments.encrypt.v1 PUBLIC, while the consumer
+    # verifies with payments.sign.v1 PUBLIC and decrypts with
+    # payments.encrypt.v1 PRIVATE. Split across two services, each side holds
     # only its own two halves — the roles invert, which is why the two families
     # rotate in opposite order. Deep dive: go-bricks wiki/sealing.md.
     #
     # Never reuse an entry name between the HTTP jose keys above and these: the
     # framework records which role tag resolved an entry and WARNs at startup
     # when one entry serves both.
-    paymentssign-v1:
-      public:
-        file: "certs/payments_sign_v1_public.der"
-      private:
-        file: "certs/payments_sign_v1_private.der"
+    payments:
+      sign:
+        v1:
+          public:
+            file: "certs/payments_sign_v1_public.der"
+          private:
+            file: "certs/payments_sign_v1_private.der"
 
-    paymentsencrypt-v1:
-      public:
-        file: "certs/payments_encrypt_v1_public.der"
-      private:
-        file: "certs/payments_encrypt_v1_private.der"
+      encrypt:
+        v1:
+          public:
+            file: "certs/payments_encrypt_v1_public.der"
+          private:
+            file: "certs/payments_encrypt_v1_private.der"

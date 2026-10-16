@@ -133,7 +133,7 @@ server:
 # --- Sealed messages — payments module (go-bricks v0.63.0, ADR-097) ---------
 # A `seal:`-tagged event type encrypts its one declared Subject and signs the
 # whole document. Key material lives in keystore.keys (generations
-# paymentssign-v1 / paymentsencrypt-v1, supplied per environment — see the
+# payments.sign.v1 / payments.encrypt.v1, supplied per environment — see the
 # KeyStore section below); seal.active only SELECTS which provisioned
 # generation seals NEW traffic — it never widens what can be opened, since
 # every message names the generation that sealed it.
@@ -146,6 +146,11 @@ server:
 # everywhere FIRST, then flip the selector and redeploy. Both at once strands
 # in-flight and outbox-replayed v1 traffic in the DLQ as
 # SEAL_KID_UNKNOWN_GENERATION.
+#
+# A selector key is the family name, written nested like its keystore entries
+# (ADR-144): the selector for family payments.sign is active.payments.sign
+# below, and the environment reaches it as
+# MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2 from any shell.
 #
 # --- Startup wait for an EXTERNAL exchange (go-bricks v0.67.0, #1774, ADR-119)
 # Only matters once a module references an exchange another service owns —
@@ -175,7 +180,8 @@ server:
 #   publishtimeout: 40s
 #   seal:
 #     active:
-#       paymentssign: "v2"
+#       payments:
+#         sign: "v2"
 #   declare:
 #     externalwait: 60s
 
@@ -346,12 +352,14 @@ scheduler:
 # `value:` raw base64 DER, never both for one half. config.development.yaml
 # points at the DER files `make generate-keys` writes to certs/; a deploy
 # usually injects base64 from a secret manager, e.g.
-# KEYSTORE_KEYS_PAYMENTSSIGN-V1_PRIVATE_VALUE (the -v<N> hyphen passes through
-# as-is; see wiki/DEPLOYING.md for why names carry no other separator).
+# KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_VALUE. Entry names are dotted paths
+# (ADR-144): YAML writes them nested (keys.payments.sign.v1.private), and the
+# variable reaches the same path, so every name below can be set from any
+# shell. See wiki/DEPLOYING.md and wiki/KEYSTORE_DOTTED_NAMES.md.
 #
-# Entries the modules resolve at startup, both halves each:
-#   webhooksigning      webhooks module (sign + verify)
-#   tokensour           tokens module, our JOSE keypair
-#   tokenspeer          tokens module, the in-process peer simulator's keypair
-#   paymentssign-v1     payments module, sealing sign family (generation v1)
-#   paymentsencrypt-v1  payments module, sealing encrypt family (generation v1)
+# Entries the modules use, both halves each:
+#   webhooks.signing     webhooks module (sign + verify)
+#   tokens.our           tokens module, our JOSE keypair
+#   tokens.peer          tokens module, the in-process peer simulator's keypair
+#   payments.sign.v1     payments module, sealing sign family (generation v1)
+#   payments.encrypt.v1  payments module, sealing encrypt family (generation v1)

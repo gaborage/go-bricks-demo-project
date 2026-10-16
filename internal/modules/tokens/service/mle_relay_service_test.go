@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	testOurKid  = "tokensour"
-	testPeerKid = "tokenspeer"
+	testOurKid  = "tokens.our"
+	testPeerKid = "tokens.peer"
 	testPAN     = "4111111111111111"
 	testPeerURL = "http://example"
 )
