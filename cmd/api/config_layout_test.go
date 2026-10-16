@@ -79,6 +79,13 @@ func TestConfigLayoutDevelopmentLoadsBaseAndOverlay(t *testing.T) {
 	// The asserted keys come from the files, not from the caller's environment.
 	unsetEnv(t, "SERVER_PATH_BASE")
 	unsetEnv(t, "DATABASE_HOST")
+	// A KEYSTORE_KEYS_* variable adds or overrides an entry, so the keystore
+	// assertion below would judge the caller's environment instead of the overlay.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "KEYSTORE_KEYS_") {
+			unsetEnv(t, name)
+		}
+	}
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
