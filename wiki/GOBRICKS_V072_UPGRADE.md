@@ -1,15 +1,19 @@
-# go-bricks v0.71.1 → main `92883628`: operator decision record
+# go-bricks v0.71.1 → v0.72.0: operator decision record
 
-This record covers two pins to go-bricks main, taken ahead of the v0.72.0 tag
-for a performance test series. The first was commit `8cfb522f`
-(pseudo-version `v0.71.2-0.20261011230701-8cfb522fbbaa`). The current one is
-commit `92883628` (pseudo-version `v0.71.2-0.20261015181756-92883628ae2a`).
-Each pin is that exact commit, not whatever main is later.
-The framework's CHANGELOG stops at 0.71.1 at both; the changes are the atoms
-in its migration guide (`wiki/migrations.md`, section E72): C72.1 to C72.25 for
-the first hop and C72.26 to C72.35 for the second (there is no C72.34). This
-record lists the ones that reach the demo, the decision for each, and what an
-operator must do before deploying. The previous record is
+This record covers the move from go-bricks v0.71.1 to the v0.72.0 tag in three
+hops. The first two were pins to go-bricks main, taken ahead of the tag for a
+performance test series: commit `8cfb522f` (pseudo-version
+`v0.71.2-0.20261011230701-8cfb522fbbaa`), then commit `92883628`
+(pseudo-version `v0.71.2-0.20261015181756-92883628ae2a`). Each pin was that
+exact commit, not whatever main was later. The third hop moves to the tag,
+`v0.72.0` (commit `745a59d7`).
+The framework's CHANGELOG stopped at 0.71.1 at both main pins; the tag adds its
+0.72.0 section. The changes are the atoms in its migration guide
+(`wiki/migrations.md`, section E72): C72.1 to C72.25 for the first hop, C72.26
+to C72.35 except C72.34 for the second, and C72.34 and C72.36 for the third.
+C72.34 had no entry at `92883628`; it is go-bricks #2127, which landed after it.
+This record lists the ones that reach the demo, the decision for each, and what
+an operator must do before deploying. The previous record is
 [GOBRICKS_V071_UPGRADE.md](GOBRICKS_V071_UPGRADE.md).
 
 ## At a glance
@@ -48,15 +52,30 @@ operator must do before deploying. The previous record is
   not compare runtime series (the gauges and the allocation counters) or relay
   log volume across the two pins.
 
+### `92883628` → v0.72.0
+
+- **No source change, no schema migration and no config key.** `config.yml` and
+  every `.go` file are unchanged, so the binary's only new inputs are `go.mod`
+  and `go.sum`. The other edits are the pins in the Makefile and the docs, one
+  script comment, and this record.
+- **No compile or test break.** Neither atom, C72.34 nor C72.36, matches a demo
+  call site.
+- **No feature adopted.** The skipped ones and why are under
+  [Features](#features-92883628--v0720).
+- **Operator must-dos (non-development deploys):** none new for this hop. A
+  deploy that comes from behind `92883628` still owes the earlier hops'
+  must-dos above.
+
 ## Version path
 
 | Hop | Commit date | What moves in `go.mod` |
 |-----|-------------|------------------------|
 | v0.71.1 → `8cfb522f` | 2026-10-11 | go-bricks (the only direct change), plus 32 indirect modules: OpenTelemetry 1.46.0 → 1.47.0, `otel/log` and `sdk/log` 0.22.0 → 1.47.0, the OTLP log exporters 0.22.0 → 0.23.0, `go-redis/v9` 9.22.0 → 9.23.0, and smaller bumps |
 | `8cfb522f` → `92883628` | 2026-10-15 | go-bricks and `go-jose/v4` 4.1.5 → 4.1.6, which is a direct module (the tokens relays import it), plus 9 indirect modules: `x/crypto` 0.57.0 → 0.58.0, `x/net` 0.60.0 → 0.61.0, `x/text` 0.42.0 → 0.43.0, `grpc-gateway/v2` 2.31.0 → 2.32.0, `klauspost/compress` 1.20.1 → 1.20.3, `go-colorable` 0.1.15 → 0.1.16, the two `genproto/googleapis` modules (`api`, `rpc`), and `go-pkcs12` 0.7.3 → 0.7.4 |
+| `92883628` → v0.72.0 | 2026-10-15 | go-bricks only. Its own `go.mod` and `go.sum` are unchanged in `92883628..v0.72.0`, so no other module moves and `go mod tidy` changes nothing further |
 
 The `go` directive (`go 1.27.0`) and the `toolchain` line (`go1.27.2`) are
-unchanged at both hops.
+unchanged at every hop.
 
 ## Compile break (v0.71.1 → `8cfb522f`): C72.9 and the cross-module messaging test
 
@@ -143,6 +162,65 @@ arguments were byte-identical under both pins.
 its own `FOR UPDATE NOWAIT` leader row, and its retry and poison handling is
 the same. Only how it reports moves.
 
+## Changes that reach this demo: `92883628` → v0.72.0
+
+The range is 3 commits: two query-builder fixes and the release commit.
+
+| Commit | Atom | Hits | Decision |
+|--------|------|------|----------|
+| `1e43eb65` (#2127, ADR-147): a `jf` value door refuses an aliased `RawExpression` with `dbtypes.ErrAliasInPredicate` at `ToSQL()` | C72.34 | No. The demo builds no join filter: no `qb.JoinFilter()`, no `*JoinOn` call, and no `errors.Is` on `ErrInvalidAlias`. Its two `qb.MustExpr` calls sit in `Select`, which still renders `AS <alias>`: [products/repository/repository.go:135](../internal/modules/products/repository/repository.go) (no alias) and [analytics/repository/repository.go:147](../internal/modules/analytics/repository/repository.go) (aliased). | None. |
+| `aede5c9d` (#2129): PostgreSQL `BuildUpsert` keeps a `?` in a quoted insert key as written | C72.36 | No. The demo calls no `BuildUpsert`. The framework's two callers at the tag have no `?` in a key: the inbox dedup ledger (`inbox/store_postgres.go:46`: `tenant_id`, `event_id`, `processed_at`) and the hold store (`inbox/hold_store_postgres.go:115`, registered only with `inbox.hold.enabled`, which is unset). The new escaping leaves such keys as they are, so the rendered SQL is byte-identical. | None. |
+| `745a59d7`: release 0.72.0 | — | No. CHANGELOG, release manifest and docs. | None. |
+
+Only `database/internal/builder/helpers.go` and `postgres.go` change behaviour in
+the range. `database/types` gains the `ErrAliasInPredicate` sentinel and doc
+comments; the rest is go-bricks tests and docs (`llms.txt`, `wiki/`, ADR-147).
+
+**CHANGELOG entries that do not reach the demo.** The 0.72.0 CHANGELOG covers the
+whole v0.71.1 → v0.72.0 range, so most of its entries are atoms judged in the
+earlier hops. These were checked against the repo again at the tag:
+
+- #2065 (`go-bricks-migrate` decodes `--source-config` with the framework's own
+  decoder): the Makefile passes `config.multitenant.yaml`, whose only top-level
+  keys are `app` and `multitenant`. It holds no keystore block, no seal selector
+  and no dotted key for the decoder to refuse.
+- #2071 (seal selectors judged from every layer before the merge): the only
+  selector is the commented-out `messaging.seal.active` example in `config.yml`
+  (lines 176–178). Nothing sets `MESSAGING_SEAL_ACTIVE`.
+- #2025 (opt-in at-least-once dead-lettering): `DeadLetterSpec.DeadLetterStrategy`
+  is not set. Payments (`internal/modules/payments/module.go:149`) and the partner
+  feed (`internal/modules/partnerfeed/module.go:106`) set only `QueueType`.
+- #2031 (`WillFailBegin`, recorded `BeginTx` options): additive `database/testing`
+  helpers.
+- #2021, #2023 (`--shared-migrator`): not in `MULTITENANT_FLAGS`, and nothing sets
+  `GOBRICKS_MIGRATE_SHARED_MIGRATOR`.
+- #2028, #2032 (SCRAM-SHA-256 `PGRoleSpec` passwords, `ForEachTenant`): the repo
+  uses neither.
+- #1997 (`observability.metrics.cardinalitylimit`): unset in every config and env
+  file, so the OTel SDK default applies.
+- #1984 (semconv imports consolidated on v1.43.0): the non-test diff changes
+  import paths, comments and one helper call
+  (`DeploymentEnvironmentName(…)` → `DeploymentEnvironmentNameKey.String(…)`). No
+  attribute constant is renamed, so queries keyed on attribute names keep working.
+
+## Features: `92883628` → v0.72.0
+
+None adopted. Skipped, with the reason:
+
+- **`WillFailBegin` (#2031).** No hand-rolled Begin-failure double exists for it
+  to replace: no service test fails a `Begin`. Adopting it would add tests, not
+  replace code.
+- **At-least-once dead-lettering (#2025).** A new opt-in capability that changes
+  the DLQ and retry semantics of the payments and partner feed queues. It
+  replaces nothing.
+- **ADR-144 dotted keystore names (#2058 to #2072).** They replace no hand-rolled
+  code. Renaming the payments sealing families to dotted names changes the wire
+  kid, the inner JWE `iss` (the outer sign kid) and the inbox dedup key spelling
+  (`<sign family>:<jti>`). That is a drain-then-cutover on the cardholder-data
+  path, parked for a separate, explicitly approved change. Until then keep
+  `PAYMENTSSIGN-V1` and `PAYMENTSENCRYPT-V1` hyphenated (the `KEYSTORE_KEYS_*` row
+  below).
+
 ## Per-environment operator config changes required before deploy
 
 ### Development (`config.development.yaml`, docker compose)
@@ -150,9 +228,15 @@ the same. Only how it reports moves.
 None. `TestConfigLayoutDevelopmentLoadsBaseAndOverlay` loads and validates the
 base and the development overlay on each pin, keystore block included. On
 `92883628` it does so with `scheduler.summary.window` unset, so the 5m default
-passes the window check.
+passes the window check. On v0.72.0 nothing new: `config.development.yaml`,
+`config.yml` and the compose file are unchanged, and the app booted on the
+docker stack (see Verification).
 
 ### Non-development deploy (env vars, per [DEPLOYING.md](DEPLOYING.md))
+
+No new item for `92883628` → v0.72.0: neither atom reads configuration, and no
+key or variable in DEPLOYING.md moves. Every row below still applies to a deploy
+that comes from behind `92883628`.
 
 | Item | Decision | Before deploy |
 |------|----------|---------------|
@@ -172,14 +256,20 @@ passes the window check.
 
 | Item | Decision | Before deploy |
 |------|----------|---------------|
-| `GO_BRICKS_REF` | Now `92883628ae2a` (was `8cfb522fbbaa`), the commit in the `go.mod` pseudo-version. The recipe checks the ref out with git, which cannot resolve a pseudo-version. | Rebuild with `make migrate-multitenant-install`. With `GO_BRICKS_PATH` set, check out `92883628` there first. |
+| `GO_BRICKS_REF` | Now `v0.72.0` (was `92883628ae2a`, and `8cfb522fbbaa` before it). The recipe checks the ref out with git, which takes a tag as it is but cannot resolve a pseudo-version, so the main pins were written as their commit hashes. `tools/migration` has no `v0.72.0` tag; that does not matter, because the recipe builds the CLI from the checkout's `go.work`. | Rebuild with `make migrate-multitenant-install`. With `GO_BRICKS_PATH` set, check out `v0.72.0` there first. |
 | Tenant migration targets (C72.14) | `acme`, `globex` and `initech` set no schema and have distinct usernames, so no two share a target. | None. |
 
-### `.env`, `Dockerfile`, compose, CI
+No new must-do for `92883628` → v0.72.0 beyond the rebuild: `config.multitenant.yaml`
+decodes under the #2065 decoder, and `--shared-migrator` stays off.
+
+### `.env`, `Dockerfile`, compose, CI, load-test jobs
 
 No change. The `Dockerfile` builds with `GOWORK=off`, so the image resolves the
-pseudo-version from `go.mod` through the module proxy. The seal-event and
-open-event scripts read their version from `go.mod`.
+`go.mod` version (a pseudo-version on the main pins, `v0.72.0` now) through the
+module proxy. The seal-event and open-event scripts read their version from
+`go.mod`, and both CI workflows read the Go version from it. `.env.example`,
+`loadtests/k8s/.env.example`, `k6-job.yaml` and `psql-job.yaml` name no framework
+version and no key these hops touch. There is no Helm chart.
 
 ## Verification
 
@@ -214,3 +304,38 @@ open-event scripts read their version from `go.mod`.
   boot on the docker stack. Until one runs, the relay's window line and
   `outbox.relay.*` counters on this pin have not been observed in this repo, and
   the payments items above remain unproven.
+
+### `92883628` → v0.72.0
+
+- The gates ran with `GOWORK=off`, so they compiled against the `go.mod` pin.
+  No test changed.
+- The C72.34 and C72.36 detects from the go-bricks migration guide have no hit:
+  `git grep` finds no `JoinFilter()` or `*JoinOn(` call, no `ErrInvalidAlias`
+  match and no `BuildUpsert(` call.
+- `make migrate-multitenant-install` checked out `v0.72.0` in a scratch clone,
+  built the CLI and confirmed it linked the in-tree go-bricks.
+  `go-bricks-migrate list --source-config config.multitenant.yaml
+  --credentials-from config-file` decoded the file and listed `acme`, `globex`
+  and `initech` (exit 0) without dialing a database. `make
+  migrate-multitenant-verdict` did not run: its validate runs dial the tenants
+  at `localhost:5432`, which another project's Postgres held on that host.
+- Live boot on the docker stack: `postgres`, `postgres-analytics` and `rabbitmq`,
+  with the default database and the broker moved to other host ports by a
+  scratch compose override for the same reason, then `flyway migrate` on both
+  databases. `/api/v1/health` answered 200, `/api/v1/ready` 200 with
+  `{"status":"ready"}`, and `GET /api/v1/products?page=1&pageSize=2` and
+  `GET /api/v1/analytics/views?limit=1` 200. The boot loaded five keystore
+  entries, validated the full messaging declaration set with payments in it,
+  declared the payments exchange, DLX and three queues, and started the payments
+  consumer. So what the first hop's test rework left to a real boot holds on
+  v0.72.0: the keystore resolves the payments sign and encrypt generations, and
+  the payments topology passes the set-wide `Validate` rules on dead-letter
+  routing and publisher destinations. No payment was published, so a live
+  sealed publish and its delivery are not covered here.
+- The boot logged no ERROR line. Its one WARN was the expected development CORS
+  wildcard notice, and `Messaging topology redeclared on new channel` appeared
+  once with `channel_generation` 1, the benign boot case CLAUDE.md describes.
+- The relay's first `Job 'outbox-relay' window summary` line arrived at the 5m
+  boundary at INFO: `job.state` `clean`, 24 runs, none failing, with the
+  `outbox.relay.*` counts on the line. It is the first time C72.30's window line
+  was observed in this repo.

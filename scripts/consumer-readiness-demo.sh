@@ -99,7 +99,7 @@ QUEUE="payments.authorized"
 # Everything the default dev grant ('.*') allows, except that one queue. Erlang
 # `re` is PCRE, so the negative lookahead is honored.
 REVOKED_READ='^(?!payments\.authorized$).*'
-# Framework constants (messaging/registry.go, app/readiness.go at v0.71.1).
+# Framework constants (messaging/registry.go, app/readiness.go at v0.72.0).
 GIVEUP_STREAK=5
 CONSUMER_ARM_ERROR="consumer re-subscribe exhausted"
 
