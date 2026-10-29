@@ -4,8 +4,9 @@ The demo renames its five keystore entries to dotted names. go-bricks
 [ADR-144](https://github.com/gaborage/go-bricks/blob/v0.72.0/wiki/adr_144_dotted_keystore_entry_names.md)
 (migration atom C72.17) makes a `keystore.keys` name a path of segments,
 written as nested YAML. The environment reaches the same path, so every new
-name can be set from any shell. The pin in `go.mod`, go-bricks `v0.72.0`, is
-the first release that carries C72.17; this change moves no dependency. The
+name can be set from any shell. The pin in `go.mod` at the time of this change,
+go-bricks `v0.72.0`, was the first release that carries C72.17; this change
+moved no dependency. The
 upgrade that brought the grammar in is
 [GOBRICKS_V072_UPGRADE.md](GOBRICKS_V072_UPGRADE.md).
 

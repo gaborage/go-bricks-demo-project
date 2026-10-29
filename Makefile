@@ -223,7 +223,7 @@ GO_BRICKS_MIGRATE           := go-bricks-migrate
 # scripts/flyway-docker.sh only fires against an ADR-085 CLI (go-bricks v0.61.0+),
 # so a v0.60.0 pin here silently defeats it. It is a git ref, so a go.mod
 # pseudo-version is written as its commit hash (the suffix after the last dash).
-GO_BRICKS_REF               ?= v0.72.0
+GO_BRICKS_REF               ?= 4cacc99c4fad
 
 MULTITENANT_FLAGS := \
 	--source-config $(MULTITENANT_CONFIG) \
