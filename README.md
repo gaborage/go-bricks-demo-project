@@ -28,7 +28,7 @@ make docker-up
 # Run database migrations
 make migrate
 
-# Generate RSA keys for KeyStore demo (first time only)
+# Generate RSA keys for KeyStore demo (re-run after pulling: existing pairs are kept)
 make generate-keys
 
 # Build and run application
@@ -458,7 +458,7 @@ attempt, plus `externalwait`, plus one final attempt.
 # script starts its own instance (twice) and refuses to run if the port is taken.
 make docker-up
 make migrate
-make generate-keys   # first time only
+make generate-keys   # adds missing pairs, keeps existing ones
 make external-exchange-demo
 ```
 
