@@ -6,7 +6,8 @@
 //
 // Consume side: Project is the typed super-stream consumer's handler. It feeds an
 // in-memory projection — per-product counts, per-partition delivery counts and a
-// ring of the most recent events — that GET /products/activity renders.
+// ring of the most recent events — that GET /products/activity renders whole and
+// GET /products/:id\:activity renders for one product.
 package service
 
 import (
@@ -97,6 +98,28 @@ type Snapshot struct {
 	// handle, and while the handle is reconnecting or closed. It is a snapshot,
 	// not a delivery guarantee — a true answer can be stale by the next publish.
 	PublisherReady bool `json:"publisherReady"`
+}
+
+// ProductSlice is one product's share of the projection. It is the wire contract
+// of GET /products/:id\:activity and, like Snapshot, a defensive copy.
+//
+// An id the projection has not seen gets zero counts, never an error. The
+// projection cannot tell a product that does not exist from one whose events it
+// has not seen: it has no database access, and it starts empty after every
+// restart, because a stored offset always wins over OffsetFirst. GET
+// /products/:id is where a product's existence is decided.
+type ProductSlice struct {
+	ProductID string `json:"productId"`
+	// Delivered is the number of events projected for this product. It is the
+	// sum of Counts.
+	Delivered int64 `json:"delivered"`
+	// Counts is the projected events per action. Empty, never null, for an id the
+	// projection has not seen.
+	Counts map[string]int64 `json:"counts"`
+	// Recent is this product's events among the ring's most recent ones, newest
+	// first. Every product shares that ring, so it can hold fewer events than
+	// Delivered. Empty, never null, when none are left in it.
+	Recent []RecentEvent `json:"recent"`
 }
 
 // ActivityService projects the product-activity super stream and publishes onto it.
@@ -364,5 +387,35 @@ func (s *ActivityService) Snapshot(limit int) Snapshot {
 		PartitionCounts: partitions,
 		Recent:          recent,
 		PublisherReady:  publisherReady,
+	}
+}
+
+// ProductSlice copies one product's counts and recent events out of the
+// projection. An unknown id answers an empty slice; see ProductSlice.
+func (s *ActivityService) ProductSlice(productID string) ProductSlice {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := make(map[string]int64, len(s.productCounts[productID]))
+	var delivered int64
+	for action, n := range s.productCounts[productID] {
+		counts[action] = n
+		delivered += n
+	}
+
+	// Newest first, as Snapshot walks the ring, keeping this product's events only.
+	recent := make([]RecentEvent, 0)
+	for i := range s.recentLen {
+		idx := ((s.recentNext-1-i)%recentCapacity + recentCapacity) % recentCapacity
+		if s.recent[idx].ProductID == productID {
+			recent = append(recent, s.recent[idx])
+		}
+	}
+
+	return ProductSlice{
+		ProductID: productID,
+		Delivered: delivered,
+		Counts:    counts,
+		Recent:    recent,
 	}
 }
