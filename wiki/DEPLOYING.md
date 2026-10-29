@@ -74,8 +74,35 @@ The keystore entries the modules use, both halves each:
 | `webhooks.signing` | `WEBHOOKS_SIGNING` | webhooks module: sign and verify. Read on each request, not at startup |
 | `tokens.our` | `TOKENS_OUR` | tokens module: this service's JOSE keypair |
 | `tokens.peer` | `TOKENS_PEER` | tokens module: the in-process peer simulators' keypair |
+| `tokens.detached.our` | `TOKENS_DETACHED_OUR` | tokens module: the detached-signature gateway's own keypair. It decrypts the request JWE. **Required at boot** (see below) |
+| `tokens.detached.peer` | `TOKENS_DETACHED_PEER` | tokens module: the kid-less peer's keypair. The gateway verifies the RS512 signature and seals replies with the public half; only the in-process simulator uses the private half. **Required at boot** (see below) |
 | `payments.sign.v1` | `PAYMENTS_SIGN_V1` | payments module: sealing sign family `payments.sign`, generation v1 |
 | `payments.encrypt.v1` | `PAYMENTS_ENCRYPT_V1` | payments module: sealing encrypt family `payments.encrypt`, generation v1 |
+
+> [!IMPORTANT]
+> **Set these four variables before an image with the detached-signature
+> gateway (`POST /api/v1/tokens/detached`) boots:**
+>
+> - `KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PUBLIC_VALUE`
+> - `KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PRIVATE_VALUE`
+> - `KEYSTORE_KEYS_TOKENS_DETACHED_PEER_PUBLIC_VALUE`
+> - `KEYSTORE_KEYS_TOKENS_DETACHED_PEER_PRIVATE_VALUE`
+>
+> Without them the tokens module's `Init` refuses to start, the process exits,
+> and the error names each missing half and its variable. Each value is the base64
+> DER of a **new, dedicated** 2048-bit RSA pair. Never reuse the `tokens.our` or
+> `tokens.peer` key material: the gateway's decrypt key must back no other route.
+> `make generate-keys` writes development pairs to
+> `certs/tokens_detached_{our,peer}_{public,private}.der`, and
+> `base64 < <file> | tr -d '\n'` turns a DER file into a value. Generate
+> production pairs in your secret pipeline instead.
+>
+> **Order:** provision the four secrets first, then roll the image. An image
+> without the gateway ignores the extra entries.
+>
+> A real gateway holds only `tokens.detached.our` private and
+> `tokens.detached.peer` public. This demo needs all four halves because its
+> simulator plays the peer in the same process.
 
 Entry names are dotted paths (go-bricks ADR-144). The variable name is the
 config path upper-cased with `.` turned into `_`, so

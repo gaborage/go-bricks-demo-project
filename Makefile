@@ -41,7 +41,7 @@ help:
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate missing RSA keypairs (webhooks.signing, tokens.our, tokens.peer, payments.sign.v1, payments.encrypt.v1) into certs/; existing pairs are kept"
+	@echo "  generate-keys     Generate missing RSA keypairs (webhooks.signing, tokens.our, tokens.peer, tokens.detached.our, tokens.detached.peer, payments.sign.v1, payments.encrypt.v1) into certs/; existing pairs are kept"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -54,6 +54,7 @@ help:
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
 	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
 	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
+	@echo "  detached-envelope-demo Kid-less detached-signature gateway: exchange, kid-less headers, replay, refusal codes (needs make run)"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -454,6 +455,19 @@ seal-payload:
 seal-mle:
 	@./scripts/seal-payload.sh mle
 
+# --- Detached-signature gateway (go-bricks v0.73.0, ADR-150) -----------------
+# POST /api/v1/tokens/detached serves a kid-less peer: an RS512 detached JWS in
+# the X-Peer-Signature header, the JWE in {"data":...}, no kid on either token,
+# and a reply whose data is a kid-less bare JWE. The in-process simulator
+# (POST /api/v1/__sim/peer/detached) plays that peer. The script runs one
+# exchange, decodes the three kid-less protected headers, replays the captured
+# request (accepted: the gateway keeps no replay ledger), then asserts each
+# refusal code. It never echoes the test PAN. Requires the app running
+# (make run) with keys present (make generate-keys); honors APP_URL.
+.PHONY: detached-envelope-demo
+detached-envelope-demo:
+	@./scripts/detached-envelope-demo.sh
+
 # --- Consumer-aware readiness (go-bricks v0.65.0, #1686/#1684, ADR-114) -------
 # /ready fails closed once the payments.authorized consumer gives up
 # re-subscribing. The script builds and boots its OWN app with
@@ -503,6 +517,8 @@ update:
 #   - webhooks.signing     : webhooks module (file/file)
 #   - tokens.our           : tokens module, our half  (file/file)
 #   - tokens.peer          : tokens module, peer half (file/file)
+#   - tokens.detached.our  : tokens module, detached-signature gateway, our half
+#   - tokens.detached.peer : tokens module, detached-signature gateway, peer half
 #   - payments.sign.v1     : payments module, sealed-event SIGN family generation v1
 #   - payments.encrypt.v1  : payments module, sealed-event ENCRYPT family generation v1
 #
@@ -534,6 +550,8 @@ KEY_PAIRS := \
 	webhooks.signing:webhook_signing \
 	tokens.our:tokens_our \
 	tokens.peer:tokens_peer \
+	tokens.detached.our:tokens_detached_our \
+	tokens.detached.peer:tokens_detached_peer \
 	payments.sign.v1:payments_sign_v1 \
 	payments.encrypt.v1:payments_encrypt_v1
 

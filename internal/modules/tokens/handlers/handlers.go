@@ -40,6 +40,7 @@ var (
 	_ logger.Redactor = PeerSimRequest{}
 	_ logger.Redactor = RelayRequest{}
 	_ logger.Redactor = MLERelayRequest{}
+	_ logger.Redactor = DetachedSimRequest{}
 )
 
 // RedactedForLog implements logger.Redactor (go-bricks v0.65.0, ADR-110): a

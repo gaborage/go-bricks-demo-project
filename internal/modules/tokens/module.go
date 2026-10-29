@@ -2,7 +2,9 @@
 // Services–style POST /tokens endpoint. Both inbound (decrypt + verify) and
 // outbound (sign + encrypt) directions are exercised, plus httpclient
 // JOSETransport relays in all three seal modes (nested JWE-of-JWS, Visa MLE
-// bare JWE, VTS Issuer JWS-of-JWE) against in-process peer simulators.
+// bare JWE, VTS Issuer JWS-of-JWE) against in-process peer simulators, and a
+// detached-signature gateway that serves a kid-less peer (minimal JWS-of-JWE,
+// go-bricks ADR-150) called by its own in-process simulator.
 package tokens
 
 import (
@@ -30,19 +32,32 @@ const (
 	PeerKid = "tokens.peer"
 )
 
+// Keystore entries of the detached-signature gateway. They are dedicated: the
+// gateway's decrypt key must back no other route, and no body of the other three
+// modes is encrypted to or signed by them (key separation, go-bricks ADR-150).
+// The peer sends no kid, so these name resolver keys, never wire headers.
+// scripts/detached-envelope-demo.sh repeats them and the DER file names.
+const (
+	DetachedOurKid  = "tokens.detached.our"
+	DetachedPeerKid = "tokens.detached.peer"
+)
+
 // Module wires the partner-facing /tokens route, the in-process peer simulator,
 // and the relay endpoint that exercises httpclient.JOSETransport.
 type Module struct {
-	handler      *handlers.Handler
-	relayHandler *handlers.RelayHandler
-	mleHandler   *handlers.MLEHandler
-	vtsHandler   *handlers.RelayHandler
-	logger       logger.Logger
+	handler         *handlers.Handler
+	relayHandler    *handlers.RelayHandler
+	mleHandler      *handlers.MLEHandler
+	vtsHandler      *handlers.RelayHandler
+	detachedHandler *handlers.DetachedHandler
+	logger          logger.Logger
 
-	// Absolute URLs of the in-process peer simulators, built in Init from
-	// deps.Config.Server so the relays follow the listener's port and base path.
+	// Absolute URLs of the in-process peer simulators, and of the gateway the
+	// detached simulator calls, built in Init from deps.Config.Server so every
+	// loopback call follows the listener's port and base path.
 	peerSimulatorURL    string
 	mlePeerSimulatorURL string
+	detachedGatewayURL  string
 }
 
 var _ app.MessagingDeclarer = (*Module)(nil)
@@ -64,6 +79,11 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if deps.KeyStore == nil {
 		return errors.New("tokens module requires a registered keystore module")
 	}
+	// First, so a deploy that lacks the dedicated entries fails with this message
+	// rather than with whatever the first request would have hit.
+	if err := requireDetachedKeys(deps.KeyStore); err != nil {
+		return err
+	}
 
 	selfURL, err := selfBaseURL(deps.Config)
 	if err != nil {
@@ -71,6 +91,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 	m.peerSimulatorURL = selfURL + handlers.PeerSimulatorPath
 	m.mlePeerSimulatorURL = selfURL + handlers.MLEPeerSimulatorPath
+	m.detachedGatewayURL = selfURL + handlers.DetachedGatewayPath
 
 	tokenSvc := service.NewTokenizationService()
 	m.handler = handlers.NewHandler(tokenSvc, m.logger)
@@ -96,12 +117,16 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if err := m.initVTSIssuer(deps); err != nil {
 		return err
 	}
+	if err := m.initDetached(deps); err != nil {
+		return err
+	}
 
 	m.logger.Info().
 		Str("partner_url", m.peerSimulatorURL).
 		Str("mle_partner_url", m.mlePeerSimulatorURL).
 		Str("vts_issuer_partner_url", vtsIssuerPeerURL).
-		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + VTS Issuer relay + peer simulators")
+		Str("detached_gateway_url", m.detachedGatewayURL).
+		Msg("tokens module initialized — JOSE-protected /tokens + relay + MLE relay + VTS Issuer relay + detached gateway + peer simulators")
 	return nil
 }
 
@@ -179,16 +204,92 @@ func (m *Module) initVTSIssuer(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// RegisterRoutes attaches the partner route, the three relay routes, and the
-// two HTTP peer simulators. All live under the same /api/v1 base group; the
-// simulator paths are prefixed with /__sim/ to make their demo-only nature
-// obvious. The VTS Issuer counterparty has no route (see initVTSIssuer).
+// initDetached wires the detached-signature gateway and the kid-less peer that
+// calls it. The roles invert relative to the relays: the gateway is the demo's
+// real endpoint, and the simulator plays the partner CLIENT, calling the gateway
+// over loopback HTTP.
+//
+// Both use the two dedicated entries, never tokens.our/tokens.peer: the gateway
+// decrypts with tokens.detached.our and verifies with tokens.detached.peer; the
+// simulator encrypts to the first and signs with the second; the reply is sealed
+// to tokens.detached.peer. A real gateway holds only our private half and the
+// peer's public half; all four are present here because the simulator runs
+// in-process.
+func (m *Module) initDetached(deps *app.ModuleDeps) error {
+	gateway, err := service.NewDetachedGateway(&service.DetachedGatewayConfig{
+		KeyStore:   deps.KeyStore,
+		DecryptKid: DetachedOurKid,
+		VerifyKid:  DetachedPeerKid,
+		ReplyKid:   DetachedPeerKid,
+	})
+	if err != nil {
+		return fmt.Errorf("init detached gateway: %w", err)
+	}
+
+	peer, err := service.NewDetachedPeerSimulator(&service.DetachedPeerConfig{
+		GatewayURL:      m.detachedGatewayURL,
+		KeyStore:        deps.KeyStore,
+		EncryptKid:      DetachedOurKid,
+		SignKid:         DetachedPeerKid,
+		DecryptKid:      DetachedPeerKid,
+		SignatureHeader: handlers.DetachedSignatureHeader,
+		PeerName:        detachedGatewayName,
+		Logger:          m.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("init detached peer simulator: %w", err)
+	}
+
+	m.detachedHandler = handlers.NewDetachedHandler(gateway, peer, m.logger)
+	return nil
+}
+
+// requireDetachedKeys refuses startup unless both halves of both dedicated
+// entries resolve. The gateway and its simulator use all four; failing here
+// names every missing half and the variable a deployed environment sets for it,
+// instead of letting the boot pass and the gateway answer 500 later.
+func requireDetachedKeys(ks app.KeyStore) error {
+	privateHalf := func(name string) error { _, err := ks.PrivateKey(name); return err }
+	publicHalf := func(name string) error { _, err := ks.PublicKey(name); return err }
+
+	var missing []error
+	for _, kid := range []string{DetachedOurKid, DetachedPeerKid} {
+		for _, half := range []struct {
+			name   string
+			lookup func(string) error
+		}{{"private", privateHalf}, {"public", publicHalf}} {
+			if err := half.lookup(kid); err != nil {
+				missing = append(missing, fmt.Errorf("entry %q has no usable %s half (set %s): %w",
+					kid, half.name, keystoreValueEnv(kid, half.name), err))
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("tokens module: the detached-signature gateway requires keystore entries %s and %s, both halves each; "+
+		"provide them as base64 DER in a deployed environment, or run `make generate-keys` in development: %w",
+		DetachedOurKid, DetachedPeerKid, errors.Join(missing...))
+}
+
+// keystoreValueEnv is the environment variable that delivers one half of a
+// keystore entry as base64 DER: the config path upper-cased, dots to underscores.
+func keystoreValueEnv(kid, half string) string {
+	return "KEYSTORE_KEYS_" + strings.ToUpper(strings.ReplaceAll(kid, ".", "_")) + "_" + strings.ToUpper(half) + "_VALUE"
+}
+
+// RegisterRoutes attaches the partner route, the three relay routes, the
+// detached-signature gateway, and the three HTTP peer simulators. All live under
+// the same /api/v1 base group; the simulator paths are prefixed with /__sim/ to
+// make their demo-only nature obvious. The VTS Issuer counterparty has no route
+// (see initVTSIssuer).
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	m.handler.RegisterPartnerRoute(hr, r)
 	m.handler.RegisterSimulatorRoute(hr, r)
 	m.relayHandler.RegisterRoute(hr, r)
 	m.mleHandler.RegisterRoutes(hr, r)
 	m.vtsHandler.RegisterRoute(hr, r)
+	m.detachedHandler.RegisterRoutes(hr, r)
 }
 
 // DeclareMessaging is a no-op — the module only speaks HTTP.
@@ -263,9 +364,11 @@ const vtsIssuerPeerURL = "http://vts-issuer-peer-sim.invalid/tokens"
 // v0.65.0 #1648). Each one labels its client's outbound metrics with a
 // low-cardinality partner name, and names the partner when the transport refuses
 // a plaintext 2xx. One name per counterparty: the two simulator routes and the
-// VTS Issuer transport.
+// VTS Issuer transport. detachedGatewayName labels the other direction: the
+// detached simulator's plain client calling the gateway.
 const (
 	peerSimulatorName    = "tokens-peer-sim"
 	mlePeerSimulatorName = "visa-mle-peer-sim"
 	vtsIssuerPeerName    = "visa-vts-issuer-peer-sim"
+	detachedGatewayName  = "tokens-detached-gateway"
 )

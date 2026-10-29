@@ -187,6 +187,26 @@ keystore:
         private:
           file: "certs/tokens_peer_private.der"
 
+      # tokens.detached.*: the kid-less detached-signature gateway, POST
+      # /tokens/detached (go-bricks v0.73.0, ADR-150). Dedicated pairs, never
+      # tokens.our/tokens.peer: the gateway's decrypt key must back no other route
+      # (key separation). `tokens` is now a namespace holding two entries and the
+      # `detached` namespace (ADR-144). The tokens module refuses to start unless
+      # both halves of both entries resolve. A real gateway holds only our private
+      # half and the peer's public half; all four are here because the simulator
+      # that plays the peer runs in-process. `make generate-keys` writes the files.
+      detached:
+        our:
+          public:
+            file: "certs/tokens_detached_our_public.der"
+          private:
+            file: "certs/tokens_detached_our_private.der"
+        peer:
+          public:
+            file: "certs/tokens_detached_peer_public.der"
+          private:
+            file: "certs/tokens_detached_peer_private.der"
+
     # --- Sealed messages: payments module (go-bricks v0.63.0, ADR-097) --------
     # These two are sealing GENERATION entries, not plain named keys. A final
     # "v<N>" segment under a dotted family is what gives an entry family

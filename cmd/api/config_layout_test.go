@@ -104,8 +104,9 @@ func TestConfigLayoutDevelopmentLoadsBaseAndOverlay(t *testing.T) {
 
 // moduleKeystoreEntries returns the keystore entry names the demo's modules
 // resolve, taken from the modules themselves: the webhooks key name, the tokens
-// JOSE kids, and generation v1 of the two sealing families the payments event's
-// seal: tag names, composed by the keystore's own generation grammar.
+// JOSE kids (the detached gateway's two included), and generation v1 of the two
+// sealing families the payments event's seal: tag names, composed by the
+// keystore's own generation grammar.
 func moduleKeystoreEntries(t *testing.T) []string {
 	t.Helper()
 
@@ -117,6 +118,8 @@ func moduleKeystoreEntries(t *testing.T) []string {
 		webhooksservice.KeyName,
 		tokens.OurKid,
 		tokens.PeerKid,
+		tokens.DetachedOurKid,
+		tokens.DetachedPeerKid,
 		keystore.Generation{Logical: spec.SignLogical, Version: "v1"}.Kid(),
 		keystore.Generation{Logical: spec.EncryptLogical, Version: "v1"}.Kid(),
 	}

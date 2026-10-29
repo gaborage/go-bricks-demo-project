@@ -151,6 +151,7 @@ func TestDemoRouteTablePassesSimulatorPolicy(t *testing.T) {
 	assert.Subset(t, simulators, []string{
 		"POST /api/v1/__sim/peer/tokens",
 		"POST /api/v1/__sim/peer/mle",
+		"POST /api/v1/__sim/peer/detached",
 		"POST /api/v1/__sim/streams/poison",
 	})
 }
