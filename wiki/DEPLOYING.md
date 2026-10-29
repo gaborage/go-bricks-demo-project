@@ -120,6 +120,60 @@ commented out:
   `OBSERVABILITY_METRICS_ENDPOINT` / `_PROTOCOL` / `_INSECURE` to export telemetry
   over OTLP.
 
+## Streams over TLS
+
+`MESSAGING_STREAMS_URI` can use `rabbitmq-stream+tls://`, usually on port 5551:
+`rabbitmq-stream+tls://user:pass@broker:5551/%2f`. Such a URI failed startup
+before go-bricks v0.73.0 and connects since (C73.11). The client verifies the
+broker certificate against the process trust store: the system roots, which on
+Linux honor `SSL_CERT_FILE` and `SSL_CERT_DIR` or the image's CA bundle.
+go-bricks has no setting for a CA file or a server name.
+
+The certificate must name every host the client dials: the URI host and each
+leader or replica host the broker advertises, or only
+`MESSAGING_STREAMS_ADDRESSRESOLVER_HOST` when it is set, because the resolver
+then replaces the advertised hosts. Otherwise startup fails with an x509 error.
+Development stays on plaintext 5552.
+
+## Keep-alive idle timeout
+
+`SERVER_TIMEOUT_IDLE` (`server.timeout.idle`) is how long the app keeps an idle
+keep-alive connection open. Unset, it is 75s; it was 60s before go-bricks
+v0.73.0. `0` also means 75s, and a negative value fails startup
+([ADR-154](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_154_server_idle_timeout_zero_takes_default.md)).
+The probe listener uses the same value.
+
+The side that closes an idle connection first should be the one that does not
+send on it:
+
+- **Behind an L7 proxy** (an AWS ALB, ingress-nginx), the proxy's upstream idle
+  must be shorter than the app's, or the proxy can send a request down a
+  connection the app is closing and answer 502. Both proxies default to 60s,
+  below the new default. If the proxy's idle is 75s or more, set
+  `SERVER_TIMEOUT_IDLE` above it.
+- **Behind an L4 load balancer** (an AWS NLB holds a flow 350s), the app's idle
+  must be shorter than the balancer's, so the balancer never drops a flow the
+  app still holds.
+
+## Keys a deploy must not set
+
+go-bricks v0.73.0 refuses four messaging keys that no framework code ever read
+([ADR-153](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_153_retired_messaging_keys_refused.md)). Each one fails
+startup with `config_invalid` when it is delivered, an empty value or a YAML null
+included. The demo sets none of them.
+
+| Variable | Instead |
+|----------|---------|
+| `MESSAGING_BROKER_VIRTUALHOST` | The vhost has always been the path of `MESSAGING_BROKER_URL`. Put a vhost other than `/` there, percent-encoded: `amqps://host:5671/orders`, or `amqps://host:5671/%2Forders` for `/orders`. That changes the vhost the service connects to, so check that it exists and that the user has permissions on it first. |
+| `MESSAGING_ROUTING_EXCHANGE`, `MESSAGING_ROUTING_KEY` | Nothing. Each publisher sets its exchange and routing key in code. |
+| `MESSAGING_HEADERS*` | Nothing. Each publisher sets its headers in code. |
+
+A config file rendered for a deploy must spell every key in lowercase, once. A
+root section such as `Server:` and two keys of one map that differ only by case
+both fail startup now, where decode used to keep one silently
+([ADR-157](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_157_config_key_spelling_refused.md)). A variable reaches the
+lowercase spelling, so a mixed-case YAML key beside one is such a pair too.
+
 ## Before the first start
 
 The demo owns its outbox and inbox DDL (`autocreatetable: false`), so apply the

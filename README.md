@@ -310,6 +310,10 @@ product ID as the routing key and projected back by a typed consumer.
 - `GET /api/v1/products/activity` — the projection: per-product event counts,
   per-partition delivery counts, and a ring of the last 50 events with the
   partition each arrived on.
+- `GET /api/v1/products/<id>:activity` — one product's slice of it: its counts per
+  action and its events still in the ring. An inline-verb route (go-bricks
+  v0.73.0) beside `GET /api/v1/products/:id`; an id with no projected events
+  answers 200 with zero counts.
 - `POST /api/v1/__sim/streams/poison` — publishes malformed bytes through the same
   publisher handle. Demo-only; it exists to show the consumer *skipping* poison.
 
@@ -378,6 +382,15 @@ under RabbitMQ's shared seed and takes the remainder over the partition list. Th
 the cross-client default, so the Java, .NET and Python clients would place the same
 key on the same partition. Order is guaranteed *within* a partition, not across the
 super stream — which is exactly why a per-product key is the right key here.
+
+One product's slice uses the inline-verb route. The `:activity` after the id is the
+verb, so this reaches the activity module, not `GET /api/v1/products/:id`. Keep the
+braces: in zsh, `$GADGET:a` would be read as a path modifier.
+
+```bash
+curl -s "http://localhost:8080/api/v1/products/${GADGET}:activity" | jq -c '.data | {productId, counts}'
+# {"productId":"<GADGET>","counts":{"created":1}}
+```
 
 `offset` counts **within** its partition, so the numbers are only comparable between
 events sharing a `partition`. Gaps in that sequence (0, 1, 2, 3, 5, 6 …) are normal:
