@@ -215,7 +215,9 @@ schema. They add one route and some assertions, and document the rest.
   server and checks the dispatch, including that a percent-encoded colon
   reaches `GET /products/:id`. The route adds a router node beside
   `GET /products/:id`, which the products load tests call often; its cost was
-  not measured.
+  not measured. The route also made an old gap easy to hit: a malformed product
+  id reached PostgreSQL's UUID column and answered 500. The products routes now
+  validate the id as a UUID and answer 400 before any query.
 - **`+json` binding (`424a51e9`).** `scripts/test-products-api.sh` posts a
   product as `application/vnd.gobricks.product+json` and as `Application/JSON`,
   and expects 201 for both. No route was added for it.

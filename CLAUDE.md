@@ -628,7 +628,7 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 - `GET /api/v1/_sys/job` - List the registered jobs (the products report job is `test-job`)
 - `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once. An unknown id answers 404 without echoing the id (go-bricks v0.73.0)
 
-**Products module:**
+**Products module** (every `:id` is validated as a UUID at the boundary, as Security First asks; a malformed one answers 400 before any query, where it used to fail in PostgreSQL's UUID column with 500):
 - `GET /api/v1/products?page=1&pageSize=10` - List products (paginated; `page` and `pageSize` are required, a bare call answers 400)
 - `GET /api/v1/products/:id` - Get product by ID
 - `POST /api/v1/products` - Create product
@@ -637,7 +637,7 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 
 **Legacy module** (raw response, no APIResponse envelope):
 - `GET /api/v1/legacy/products?page=1&pageSize=10` - List products (raw JSON; same required pagination)
-- `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
+- `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON; it reuses the products request type, so a malformed id answers 400 here too)
 
 **Webhooks module** (KeyStore signing demo):
 - `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
@@ -1145,7 +1145,7 @@ curl -s "http://localhost:8080/api/v1/products/550e8400-e29b-41d4-a716-446655440
 ```
 
 - **Three routes share the segment after `/products/`.** The static `GET /products/activity` wins over both parameter routes. `<id>:activity` reaches the verb route. Anything else reaches `GET /products/:id`, and registration order does not matter.
-- **The colon must arrive as written.** A percent-encoded colon is not a verb: `/products/<id>%3Aactivity` reaches `GET /products/:id` with `id` = `<id>%3Aactivity`. The products table keys on a UUID, so that lookup fails with 500. The verb also needs a value before it: `/products/:activity` reaches `GET /products/:id` as well.
+- **The colon must arrive as written.** A percent-encoded colon is not a verb: `/products/<id>%3Aactivity` reaches `GET /products/:id` with `id` = `<id>%3Aactivity`. That is no UUID, so the products route refuses it with 400 before any query. The verb also needs a value before it: `/products/:activity` reaches `GET /products/:id` as well, with the same 400, and so does a misspelt verb such as `<id>:activty`.
 - **An unseen id answers 200, not 404.** The projection has no database access, and it starts empty after every restart because a stored offset wins over `OffsetFirst`. So no events never means no product. The slice carries zero counts, `{}` and `[]`. `GET /products/:id` decides whether a product exists.
 - **`recent` can be shorter than `delivered`.** Every product shares the 50-event ring, so a product's older events leave the ring while its counts keep them.
 - **Proof:** `TestInlineVerbRouteBootsBesideProductByID` ([cmd/api/inline_verb_route_test.go](cmd/api/inline_verb_route_test.go)) registers both modules' real routes on a real go-bricks server and asserts it records no route conflict. It then starts the server and checks which handler each path above reaches. `make test-products-api` calls the route on a running app.
@@ -1413,7 +1413,7 @@ Explore the code in this order:
    - `job/report_job.go` — the scheduled report under a PostgreSQL advisory lock on a pinned `db.Session` (see [Scheduled Job Under an Advisory Lock](#scheduled-job-under-an-advisory-lock-database-session)); `make advisory-lock-demo` ([scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh)) races two replicas for it
 
 3. **[internal/modules/products/http/](internal/modules/products/http/)** - HTTP handlers
-   - Request validation
+   - Request validation (`validate:` tags; a product id must be a UUID, so a malformed one answers 400 at the boundary)
    - Service method calls
    - Error handling and status codes
    - Structured logging
