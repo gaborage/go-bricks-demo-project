@@ -10,7 +10,7 @@ Production-ready demonstration of the [go-bricks framework](https://github.com/g
 - **REST API** - Full CRUD operations with Echo web framework
 - **Transactional Outbox** - Reliable event publishing via dual-write pattern
 - **KeyStore** - Named RSA key pair management for signing/verification
-- **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls
+- **JOSE Middleware** - Nested JWE-of-JWS protection on HTTP bodies (VTS-style integrations) + outbound `JOSETransport` for partner calls; a detached-signature gateway serves a kid-less peer (minimal JWS-of-JWE, RS512)
 - **RabbitMQ Streams** - Partitioned super stream on the native stream protocol, projected by a typed consumer
 - **External Exchanges** - Opt-in consumer of an exchange another service owns: verified passively, never created, with a bounded startup wait
 - **Dual Observability** - Prometheus/Grafana/Tempo/Loki (local) + New Relic (cloud)
@@ -28,7 +28,7 @@ make docker-up
 # Run database migrations
 make migrate
 
-# Generate RSA keys for KeyStore demo (first time only)
+# Generate RSA keys for KeyStore demo (re-run after pulling: existing pairs are kept)
 make generate-keys
 
 # Build and run application
@@ -104,6 +104,17 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
   verifies before it decrypts. Its counterparty has no `/__sim/` route: it is
   plugged in as the relay client's base transport (`WithTransport`), the slot a
   production integration fills with its mTLS transport.
+- `POST /api/v1/tokens/detached` — a **detached-signature gateway** for a peer
+  that writes no `kid` (go-bricks v0.73.0, ADR-150). The JWE travels as
+  `{"data":"<compact>"}` and its RS512 signature arrives detached in
+  `X-Peer-Signature: JWS <header>..<signature>`. The gateway rebuilds the
+  attached JWS with `jose.AttachDetachedJWS`, opens it under
+  `jose.SealModeJWSofJWEMinimal` with `AcceptMissingKid`, and answers
+  `{"data":"<JWE>"}` sealed to the peer with `OmitKid`, or `{"code":"<CODE>"}`.
+  It is the real endpoint, untagged and registered `WithRawResponse`.
+- `POST /api/v1/__sim/peer/detached` — plays that kid-less peer: it mints the
+  request, calls the gateway over loopback HTTP, opens the reply, and returns
+  the token plus the ciphertext that crossed the wire. Demo-only.
 
 > **Bare-JWE authenticates nothing about the sender.** A successful open proves
 > only that the payload was encrypted to your public key — which any holder of
@@ -118,6 +129,17 @@ both inbound and outbound HTTP bodies, plus the framework's outbound
 > reuses `tokens.our`/`tokens.peer` across all three modes; production gives each
 > mode its own kids, because the inner JWE lifted out of a signed body would
 > decrypt on a bare-JWE route that shares its decrypt kid. See go-bricks ADR-111.
+
+> **The detached gateway has its own keys, and needs them to boot.** It uses two
+> dedicated entries, `tokens.detached.our` and `tokens.detached.peer`, so its
+> inner JWE can be decrypted on no other route and its keys open no other mode's
+> body. The tokens module refuses to start unless both halves of both entries
+> resolve. In development, `make generate-keys` adds the two pairs and keeps every
+> existing one; a deployed environment sets the four
+> `KEYSTORE_KEYS_TOKENS_DETACHED_{OUR,PEER}_{PUBLIC,PRIVATE}_VALUE` variables
+> before it rolls the image ([wiki/DEPLOYING.md](wiki/DEPLOYING.md)). The gateway
+> keeps no replay ledger: a replay re-tokenizes the same PAN and is sealed to the
+> peer's own key. See go-bricks ADR-150.
 
 #### Walkthrough
 
@@ -164,6 +186,17 @@ curl -s -X POST http://localhost:8080/api/v1/tokens/vts-issuer-relay \
      -H 'Content-Type: application/json' \
      -d '{"pan":"4111111111111111"}'
 # {"data":{"token":{"token":"tok_...","masked_pan":"************1111", ...}}}
+
+# 8. Serve a kid-less peer through the detached-signature gateway. The simulator
+#    plays the peer; its reply carries the token and the wire: the signature
+#    header, the {"data":...} request body and the gateway's sealed reply.
+curl -s -X POST http://localhost:8080/api/v1/__sim/peer/detached \
+     -H 'Content-Type: application/json' \
+     -d '{"pan":"4111111111111111"}'
+# {"data":{"token":{...,"last4":"1111"},"wire":{"signatureHeader":"JWS eyJhbGciOiJSUzUxMiJ9..",...}}}
+
+# 9. Decode the kid-less headers, replay the request and see every refusal code.
+make detached-envelope-demo
 ```
 
 The demo's own `cmd/seal-payload` is gone. Both targets run
@@ -458,7 +491,7 @@ attempt, plus `externalwait`, plus one final attempt.
 # script starts its own instance (twice) and refuses to run if the port is taken.
 make docker-up
 make migrate
-make generate-keys   # first time only
+make generate-keys   # adds missing pairs, keeps existing ones
 make external-exchange-demo
 ```
 

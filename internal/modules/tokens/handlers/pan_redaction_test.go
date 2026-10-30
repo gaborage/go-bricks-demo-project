@@ -58,6 +58,7 @@ func TestPANBearingRequestsLogOnlyLast4(t *testing.T) {
 		{"PeerSimRequest", PeerSimRequest{PAN: redactFixturePAN}, &PeerSimRequest{PAN: redactFixturePAN}},
 		{"RelayRequest", RelayRequest{PAN: redactFixturePAN}, &RelayRequest{PAN: redactFixturePAN}},
 		{"MLERelayRequest", MLERelayRequest{PAN: redactFixturePAN}, &MLERelayRequest{PAN: redactFixturePAN}},
+		{"DetachedSimRequest", DetachedSimRequest{PAN: redactFixturePAN}, &DetachedSimRequest{PAN: redactFixturePAN}},
 	}
 	doors := []struct {
 		name  string

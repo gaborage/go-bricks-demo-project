@@ -61,15 +61,16 @@ const sealedModule = "payments"
 // stores those getters, and nothing here calls one.
 //
 // One RSA pair backs the tokens module's JOSE kids, which its routes resolve when
-// they register. The payments sealing generations are not provisioned: nothing
-// outside an App resolves them (see the file comment), and payments' Init only
-// checks that a keystore is present.
+// they register, and the detached gateway's entries, whose halves its Init
+// checks. The payments sealing generations are not provisioned: nothing outside
+// an App resolves them (see the file comment), and payments' Init only checks
+// that a keystore is present.
 func newModuleTestDeps(t *testing.T) *app.ModuleDeps {
 	t.Helper()
 
 	priv, pub := jositest.GenerateTestKeyPair(t)
 	ks := kstest.NewMockKeyStore()
-	for _, kid := range []string{tokens.OurKid, tokens.PeerKid} {
+	for _, kid := range []string{tokens.OurKid, tokens.PeerKid, tokens.DetachedOurKid, tokens.DetachedPeerKid} {
 		ks.WithPrivateKey(kid, priv).WithPublicKey(kid, pub)
 	}
 

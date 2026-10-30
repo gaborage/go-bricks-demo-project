@@ -650,6 +650,8 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 - `POST /api/v1/tokens/mle-relay` - Plaintext entry that drives the outbound bare-JWE + Visa MLE envelope transport against the MLE peer simulator
 - `POST /api/v1/__sim/peer/mle` - In-process MLE peer simulator (bare-JWE, manual `jose.Open`; demo-only)
 - `POST /api/v1/tokens/vts-issuer-relay` - Plaintext entry that drives the outbound JWS-of-JWE (VTS Issuer) transport; its peer simulator is the relay client's in-process base transport, so it has no `/__sim/` route
+- `POST /api/v1/tokens/detached` - Detached-signature gateway for a kid-less peer: RS512 detached JWS in `X-Peer-Signature`, JWE in `{"data"}`; answers `{"data":"<kid-less JWE>"}` or `{"code"}` (raw response, minimal JWS-of-JWE, ADR-150). The real endpoint, not a simulator
+- `POST /api/v1/__sim/peer/detached` - In-process kid-less peer that calls the gateway over loopback and returns the token plus the wire artefacts (demo-only)
 
 **Payments module** (sealed AMQP messages demo):
 - `POST /api/v1/payments/authorize` - Authorize a payment; publishes a sealed `payment.authorized` event (202 Accepted; the response carries `cardLast4`, never the PAN)
@@ -828,10 +830,10 @@ err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash, sig)
 
 The name is also on the wire: every signed payload carries it as `keyName`, so a verifier outside this service sees `webhooks.signing`. The service reads the key on each request, not at startup, so a boot with the entry missing passes and the first sign or verify call fails; exercise one after any keystore change.
 
-**Entry names are dotted paths (go-bricks ADR-144).** YAML writes a name as nested maps, and the path below `keystore.keys` joined with `.` is the name: `keys: {tokens: {our: {public: …, private: …}}}` is the entry `tokens.our`, and `tokens` is a namespace, because only a node holding `public`, `private`, `secret` or `pkcs12` is an entry. The environment reaches the same path (`KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE`), so every demo name can be set from any shell. An ordinary entry's name is used verbatim: as the `app.KeyStore` argument (`webhooks.signing`), the `jose:` tag value and the wire `kid` (`tokens.our`, `tokens.peer`). A sealing entry is a **generation** of a family, not the family: the family is the name without its final `v<N>` segment. The `seal:` tag and the inbox key prefix name the family (`seal:"sign=payments.sign,encrypt=payments.encrypt"`, inbox key `payments.sign:<jti>`), while the provisioned entry and the wire `kid` are the generation (`payments.sign.v1`, `payments.encrypt.v1`). The demo's entries are `webhooks.signing`, `tokens.our`, `tokens.peer`, `payments.sign.v1` and `payments.encrypt.v1`; [wiki/KEYSTORE_DOTTED_NAMES.md](wiki/KEYSTORE_DOTTED_NAMES.md) records the rename from the flat names and the operator cutover, including the drain the sealing families need.
+**Entry names are dotted paths (go-bricks ADR-144).** YAML writes a name as nested maps, and the path below `keystore.keys` joined with `.` is the name: `keys: {tokens: {our: {public: …, private: …}}}` is the entry `tokens.our`, and `tokens` is a namespace, because only a node holding `public`, `private`, `secret` or `pkcs12` is an entry. The environment reaches the same path (`KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE`), so every demo name can be set from any shell. An ordinary entry's name is used verbatim: as the `app.KeyStore` argument (`webhooks.signing`), the `jose:` tag value and the wire `kid` (`tokens.our`, `tokens.peer`). A sealing entry is a **generation** of a family, not the family: the family is the name without its final `v<N>` segment. The `seal:` tag and the inbox key prefix name the family (`seal:"sign=payments.sign,encrypt=payments.encrypt"`, inbox key `payments.sign:<jti>`), while the provisioned entry and the wire `kid` are the generation (`payments.sign.v1`, `payments.encrypt.v1`). The demo's entries are `webhooks.signing`, `tokens.our`, `tokens.peer`, `tokens.detached.our`, `tokens.detached.peer`, `payments.sign.v1` and `payments.encrypt.v1` (the two `tokens.detached.*` names never reach the wire: that peer sends no `kid`, so they name resolver keys only); [wiki/KEYSTORE_DOTTED_NAMES.md](wiki/KEYSTORE_DOTTED_NAMES.md) records the rename from the flat names and the operator cutover, including the drain the sealing families need.
 
 **Config:** See `keystore:` section in [config.development.yaml](config.development.yaml).
-**Key generation:** `make generate-keys` creates DER files in `certs/` (gitignored). The DER file names are not the entry names: `certs/payments_sign_v1_public.der` backs `payments.sign.v1`.
+**Key generation:** `make generate-keys` creates DER files in `certs/` (gitignored). The DER file names are not the entry names: `certs/payments_sign_v1_public.der` backs `payments.sign.v1`. It generates only the pairs that are missing and keeps every pair whose private DER exists, so re-running it after a pull adds a new entry's keys without rotating yours (a rotated payments pair would strand sealed messages parked on a retained broker volume). A public half found without its private half is refused, never overwritten, and the run exits non-zero naming the pair; so is a DER file openssl cannot read. To regenerate a pair on purpose, delete it first: `rm certs/<stem>_{public,private}.der && make generate-keys`.
 
 ### JOSE Middleware (Nested JWE-of-JWS)
 
@@ -881,9 +883,70 @@ if err != nil {
 **JWS-of-JWE / VTS Issuer (v0.65.0, ADR-111 + #1610/#1623):** `POST /api/v1/tokens/vts-issuer-relay` exercises the third seal mode — `jose.Policy{Mode: jose.SealModeJWSofJWE}` encrypts first and signs the compact JWE: an outer JWS (`PS256`, `typ: JOSE`, `cty: JWE`, `iat` in seconds, fixed by the mode) over the inner JWE bare mode builds (`A256GCM`, `Policy.Typ`, millisecond `iat` under `IATMillis`, no `cty` even though `WithJOSE` fills `Policy.Cty`). No `Envelope`: the compact is the body, `application/jose`, both ways. Three rules shape the code:
 - **`SigAlg: josev4.PS256` is explicit on both policies.** Visa requires PS256; `httpclient.Builder.Build` fills an unset `SigAlg` with `jose.DefaultSigAlg` (RS256), so omitting it builds and seals and is rejected only by the partner. Inbound, `SigAlg` is a pin, not an allowlist: `Open` refuses any other outer `alg` (`JOSE_ALGORITHM_DISALLOWED`) before touching a key.
 - **Verify before decrypt.** `Open` refuses a non-3-segment body (`JOSE_OUTER_NOT_JWS` — the nested and bare shapes are poison here, never a fallback), a bad signature, or an outer header without `cty: JWE` before the private key is used.
-- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokens.our`/`tokens.peer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids.
+- **Key separation.** An inner JWE lifted out of a signed body decrypts on a bare-JWE route that shares its decrypt kid, where nothing authenticates the sender. The demo reuses `tokens.our`/`tokens.peer` across all three modes and is saved only by the MLE policies' `A128GCM` pin (this mode's inner JWE is `A256GCM`); `TestVTSIssuerInnerJWERefusedOnBareRoute` pins that. Production gives each mode its own kids, as the detached gateway below does.
 
 **Why the VTS Issuer simulator is a transport, not a `/__sim/` route:** a typed go-bricks route (the only kind that takes `server.WithTags("simulator")`) always JSON-encodes its result, and the raw door `RouteRegistrar.Add` could answer `application/jose` but takes no route options, so its descriptor carries no tags; no `jose:` tag selects this mode either. Rather than wrap the compact in a JSON envelope Visa does not send, `service.VTSIssuerPeerSimulator` implements `http.RoundTripper` and is passed to `WithTransport` — the base slot below `JOSETransport` that production fills with its mTLS transport. Seal, retry loop, peer-labelled metrics, verify-then-decrypt and the plaintext-2xx refusal all run unchanged; only the dial is replaced. The relay addresses `http://vts-issuer-peer-sim.invalid/tokens` (RFC 6761: never resolves), so a client that lost that transport fails at DNS rather than reaching a real host. See [internal/modules/tokens/service/vts_issuer_relay_service.go](internal/modules/tokens/service/vts_issuer_relay_service.go).
+
+**Detached-signature envelope (minimal JWS-of-JWE, kid-less peer; go-bricks v0.73.0, ADR-150):** `POST /api/v1/tokens/detached` serves a peer that names keys out of band. That peer writes **no `kid`** on either token and signs with **RS512**. The signature arrives **detached** (RFC 7515 Appendix F) in `X-Peer-Signature: JWS <header>..<signature>`. The JWE (`RSA-OAEP-256` + `A256GCM`) travels in the body as `{"data":"<compact>"}`. The reply is `{"data":"<kid-less bare JWE>"}` sealed to the peer, or `{"code":"<CODE>"}`. The roles invert relative to the three relays: the demo is the **server**, and `POST /api/v1/__sim/peer/detached` plays the kid-less **caller**. The simulator reaches the gateway over loopback HTTP at a URL built from `deps.Config.Server`, so binding, `server.bodylimit` and the raw response all run for real. There is no relay: the framework has no outbound minimal mode, and `JOSETransport` has no detached envelope.
+
+```go
+inbound := &jose.Policy{ // service.NewDetachedInboundPolicy
+    Direction:        jose.DirectionInbound,
+    Mode:             jose.SealModeJWSofJWEMinimal, // open-only: verify, then decrypt
+    DecryptKid:       "tokens.detached.our",        // resolver key names, not wire headers
+    VerifyKid:        "tokens.detached.peer",
+    SigAlg:           josev4.RS512,                 // required: the mode's only signature
+    KeyAlg:           jose.DefaultKeyAlg,
+    Enc:              jose.DefaultEnc,              // A256GCM
+    AcceptMissingKid: true,                         // only an ABSENT kid; "" and null are JOSE_KID_UNKNOWN
+}
+reply := &jose.Policy{ // service.NewDetachedReplyPolicy
+    Direction: jose.DirectionOutbound, Mode: jose.SealModeBareJWE,
+    EncryptKid: "tokens.detached.peer", KeyAlg: jose.DefaultKeyAlg, Enc: jose.DefaultEnc,
+    OmitKid: true, // no kid member and no recipient key id; Cty and Typ stay empty
+}
+attached, err := jose.AttachDetachedJWS(detached, req.Data) // framing only: header.b64url(jwe).sig
+```
+
+- **Four doors, composed by hand.** The gateway uses four framework doors:
+  - `SealModeJWSofJWEMinimal`: open-only, with its own signature table `{RS512}`. RS512 stays refused in every other mode.
+  - `AcceptMissingKid`: inbound only, and it covers both tokens.
+  - `OmitKid`: bare-JWE outbound only.
+  - `jose.AttachDetachedJWS`: framing only, no crypto.
+
+  `SigAlg: josev4.RS512` must be explicit: `Validate` refuses an unset or any other alg. `service.DetachedGateway.Process` calls `AttachDetachedJWS`, then the `manualPeer` core it shares with the MLE and VTS Issuer simulators (`jose.Open`, tokenize, `jose.Seal`). That core gained `service.ErrInvalidPayload` for a plaintext that is not JSON. The error text is unchanged, and the two simulators still answer that case 500. `TestManualPeerInvalidPayloadIsBehaviourNeutral` pins both facts.
+- **Imperative, untagged, `WithRawResponse`.** ADR-150 keeps this server side in application code. Three things rule out a tag: the `jose:` grammar has no mode key, the tagged inbound gate requires `application/jose`, and a `jose:` tag combined with `WithRawResponse` panics at registration. The gateway is a typed handler that returns `server.Result[DetachedReply]` with an explicit status. It is the real endpoint, so it is neither under `/__sim/` nor tagged `simulator`; the simulator is both (see [Simulator Route Policy](#simulator-route-policy-startup-veto)). With no tag, only `server.bodylimit` bounds the body.
+- **Header framing is the handler's job.** The handler reads `Header.Values`, because `Header.Get` cannot see a duplicate. A missing or duplicated header answers 401, a value over 8 KiB answers 400, and a value without the `JWS ` scheme answers 401, all with `SIGNATURE_HEADER_INVALID`. An empty `data` answers 400 `DATA_MISSING`. That code also covers a non-JSON `Content-Type`, whose body the binder skips; since go-bricks `424a51e9`, any `application/json` spelling and any `*/*+json` type binds.
+- **Refusals log the jose code only.** A `*jose.Error` maps through a fixed table and is logged as WARN `detached envelope refused` with `jose_code`. Its `Cause` and `Error()` never reach a log or the wire. A plaintext that is not `{"pan"}` JSON, or a PAN that fails Luhn, answers 400 `PAYLOAD_INVALID` and is logged without its error, because decoder text can quote the plaintext. A jose error with no status or a 5xx status is the gateway's own fault, not a refusal: a keystore lookup failure, `JOSE_OUTBOUND_FAILED` or `JOSE_KEYSTORE_UNAVAILABLE` answers 500 `INTERNAL` and is logged at ERROR with the code only. A 4xx jose code the table does not list (`JOSE_DECRYPT_FAILED`, say) answers `REQUEST_REJECTED` with jose's status. The simulator follows the same rule: a jose failure it meets is logged by its code, never with `Err`.
+- **Dedicated keys.** The gateway decrypts with `tokens.detached.our`'s private half. It verifies the RS512 signature and seals the reply with `tokens.detached.peer`'s public half. Neither entry backs any other route. Lifted out of the signed envelope, the inner JWE authenticates nobody, so its decrypt key must never back a bare-JWE route. A real gateway holds only those two halves; the demo has all four because its simulator plays the peer in-process. **Owner decision (2026-10-29): one pair per party.** `tokens.detached.peer` both verifies the peer's signature and receives the reply seal, as `tokens.peer` both signs and receives in the nested mode, which keeps the deploy at four values. A real integration splits that into a peer-verify key and a peer-seal key, as the framework recipe does with `peer-verify` and `peer-seal`. **The tokens module's `Init` refuses to start unless both halves of both entries resolve**, and the error names each missing half with its `KEYSTORE_KEYS_TOKENS_DETACHED_*_VALUE` variable (see [wiki/DEPLOYING.md](wiki/DEPLOYING.md)). [service/detached_key_separation_test.go](internal/modules/tokens/service/detached_key_separation_test.go) pins the separation both ways:
+  - No other mode's body gets through the gateway. A 5-segment body answers `JOSE_MALFORMED`, a VTS Issuer body split into an envelope `JOSE_ALGORITHM_DISALLOWED`, RS512 signed by an existing key `JOSE_SIGNATURE_INVALID`, and a JWE encrypted to an existing key `JOSE_DECRYPT_FAILED`.
+  - The gateway's request and reply JWEs open on no existing route. They still fail with `JOSE_DECRYPT_FAILED` after the A128GCM pin and the kid check are removed.
+  - The detached private keys decrypt no nested, MLE or VTS Issuer body.
+- **The simulator signs with raw go-jose.** `service.DetachedPeerSimulator` seals the request JWE with `jose.Seal` (bare mode, `OmitKid`). It signs that JWE with `josev4.NewSigner` (RS512) and `DetachedCompactSerialize`, the demo's one raw go-jose signing call outside a test. No go-bricks door mints this mode: an outbound minimal mode is an ADR-150 non-goal, and `seal-payload` has no flag for it. The framework's own test fixture plays the peer the same way.
+- **Stances.**
+  - **Single tenant.** The framework recipe authorizes the principal, then resolves a per-tenant key resolver from `X-Tenant-ID`. With `multitenant.enabled` false the demo uses one static `jose.NewKeyStoreResolver`; a multi-tenant service adds that lookup and its `Authorize` (recipe note a).
+  - **No bodyless `GET …/status` twin.** It would seal replies to requests that verified nothing (note b).
+  - **No replay ledger.** A replay re-tokenizes the same PAN to the same token, and the reply is sealed to the peer's own key, so a replayer learns nothing it did not hold. A production gateway that must refuse replays records SHA-256 of the JWE string, computed only after `jose.Open` returned nil (go-jose's base64url decode is not strict, #2164). It records the digest through `jose.ReplayRecorder.GetOrSet`, in one ledger per tenant shared by every route of the profile (note c).
+  - **No `jose.*` telemetry.** This imperative path records no `jose.*` span or metric (note d).
+  - **Signed bytes.** The mode assumes the peer signs the exact JWE compact string, which was confirmed against a published profile sample only. A peer that signs the raw body fails every request with `SIGNATURE_INVALID`.
+  - **PAN.** `DetachedSimRequest` implements `logger.Redactor`. The gateway's request carries ciphertext only.
+
+**Proof:** `make detached-envelope-demo` runs [scripts/detached-envelope-demo.sh](scripts/detached-envelope-demo.sh) against `make run` and honours `APP_URL`. It runs one exchange through the simulator and decodes the three protected headers: `{"alg":"RS512"}` on the signature, `{"alg":"RSA-OAEP-256","enc":"A256GCM"}` on both JWEs, no `kid` anywhere. It replays the captured request (200, with a fresh seal), then asserts each refusal. The `cty: JWS` case must sign as the peer, so it runs only when the local `certs/tokens_detached_peer_private.der` (or `PEER_SIGN_KEY`) verifiably signed the exchange; against a deployed `APP_URL` with other keys it is reported as skipped, not failed.
+
+| Request | Status | Code |
+|---|---|---|
+| No signature header, the header sent twice, or a `Bearer` scheme | 401 | `SIGNATURE_HEADER_INVALID` |
+| Header value over 8 KiB | 400 | `SIGNATURE_HEADER_INVALID` |
+| Attached compact (payload filled in) in the header | 400 | `MALFORMED` |
+| Outer `alg` RS256 | 400 | `ALGORITHM_REJECTED` |
+| Outer `kid` present and not the entry name | 401 | `KEY_UNKNOWN` |
+| One ciphertext character changed, or `data` swapped for the reply's JWE | 401 | `SIGNATURE_INVALID` |
+| Outer `cty: JWS`, validly signed | 400 | `CTY_REJECTED` |
+| `Content-Type: text/plain`, or an empty `data` | 400 | `DATA_MISSING` |
+| Luhn-invalid PAN, sent through the simulator | 400 | `PAYLOAD_INVALID` |
+| `Content-Type: application/vnd.peer+json` | 200 | sealed `data` |
+
+**Reference:** framework [ADR-150](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_150_jose_missing_kid_policy_opt_in.md) and [wiki/jose.md](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/jose.md#serving-a-detached-signature-envelope-peer-imperative-recipe): the "Minimal JWS-of-JWE mode" section, and the imperative recipe with its notes a–g.
 
 **Helper CLI:** request bodies for `curl` come from the framework's `seal-payload` CLI (go-bricks v0.65.0, #1615/#1620). It replaced the demo's own `cmd/seal-payload`, which could only do nested mode. Both targets read JSON on stdin and print only the sealed body, so it pipes into `curl --data-binary @-`:
 
@@ -898,7 +961,7 @@ printf '%s' '{"pan":"4111111111111111"}' | make seal-mle | \
        -H 'Content-Type: application/json' --data-binary @-
 ```
 
-**PAN-bearing requests in logs (go-bricks v0.65.0, ADR-110):** `TokenizeRequest`, `PeerSimRequest`, `RelayRequest` and `MLERelayRequest` implement `logger.Redactor` with a value receiver, so a filtered logger handed the whole struct — the decrypted JOSE request or a plaintext relay body — renders `{"last4":"…"}` and never the PAN. Same rules as the payments card (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)): it backs up `log.sensitivefields`, it is consulted only at `Interface`/`WithFields`, and it does not make logging request bodies acceptable. It cannot reach bytes that were already marshaled, so the relays' outbound `httpclient` body preview stays covered by the `pan` needle. [internal/modules/tokens/handlers/pan_redaction_test.go](internal/modules/tokens/handlers/pan_redaction_test.go) pins all four types.
+**PAN-bearing requests in logs (go-bricks v0.65.0, ADR-110):** `TokenizeRequest`, `PeerSimRequest`, `RelayRequest`, `MLERelayRequest` and `DetachedSimRequest` implement `logger.Redactor` with a value receiver, so a filtered logger handed the whole struct — the decrypted JOSE request or a plaintext relay body — renders `{"last4":"…"}` and never the PAN. Same rules as the payments card (see [Sealed Messages](#sealed-messages-jwe-of-jws-on-amqp)): it backs up `log.sensitivefields`, it is consulted only at `Interface`/`WithFields`, and it does not make logging request bodies acceptable. It cannot reach bytes that were already marshaled, so the relays' outbound `httpclient` body preview stays covered by the `pan` needle. [internal/modules/tokens/handlers/pan_redaction_test.go](internal/modules/tokens/handlers/pan_redaction_test.go) pins all five types.
 
 **Reference:** [go-bricks llms.txt at main `4cacc99c`](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/llms.txt) JOSE section for the full API surface, error-code table, and security invariants.
 
@@ -1376,11 +1439,12 @@ Explore the code in this order:
 
 8. **[internal/modules/tokens/](internal/modules/tokens/)** - Tokens module (JOSE middleware demo)
    - `handlers/handlers.go` declares `jose:`-tagged request/response structs that drive the inbound + outbound middleware
-   - Every PAN-bearing request struct implements `logger.Redactor` (value receiver), so a filtered logger handed one whole renders only `{"last4":"…"}`; `handlers/pan_redaction_test.go` pins all four
+   - Every PAN-bearing request struct implements `logger.Redactor` (value receiver), so a filtered logger handed one whole renders only `{"last4":"…"}`; `handlers/pan_redaction_test.go` pins all five
    - `service/relay_service.go` wires `httpclient.WithJOSE(...)` for the outbound `JOSETransport`
    - In-process peer simulator with the inverse policy makes the demo self-contained
    - `service/mle_relay_service.go` and `service/vts_issuer_relay_service.go` are the other two seal modes (bare JWE behind `VisaMLEEnvelope`; JWS-of-JWE with an explicit `PS256`); `service/vts_issuer_peer_simulator.go` is the one simulator wired as an `http.RoundTripper` via `WithTransport` instead of a `/__sim/` route
    - `make seal-payload` / `make seal-mle` ([scripts/seal-payload.sh](scripts/seal-payload.sh)) mint nested JWE-of-JWS and Visa MLE bodies for `curl` with the framework's `seal-payload` CLI, at the go-bricks version in `go.mod`
+   - `service/detached_gateway.go` and `handlers/detached_handlers.go` serve the kid-less detached-signature gateway: `AttachDetachedJWS`, then a minimal-mode `Open`, then an `OmitKid` reply seal, on two dedicated keystore entries that `Init` requires. `service/detached_peer_simulator.go` plays the peer with the demo's one raw go-jose RS512 signer. `service/detached_key_separation_test.go` pins that no other mode's body crosses over, in either direction. `make detached-envelope-demo` ([scripts/detached-envelope-demo.sh](scripts/detached-envelope-demo.sh)) shows the kid-less wire, the replay stance and every refusal code (see [JOSE Middleware](#jose-middleware-nested-jwe-of-jws))
 
 9. **[internal/modules/payments/](internal/modules/payments/)** - Payments module (sealed AMQP messages demo)
    - `domain/payment.go` declares the `seal:`-tagged event: one `seal:"subject"` field encrypted, the rest clear
@@ -1657,6 +1721,34 @@ docker exec go-bricks-rabbitmq rabbitmqctl delete_queue payments.authorized.dlq
 # Decision: AllowPlaintextSuccess stays UNSET on every relay; setting it hands
 # the caller a body nothing authenticated. A real partner must protect every
 # 2xx it answers — fix the partner route, don't set the flag.
+```
+
+### Tokens Module Refuses to Start Without `tokens.detached.*` (go-bricks v0.73.0)
+
+```bash
+# Symptom: startup fails with "Failed to register modules" and
+#   tokens module: the detached-signature gateway requires keystore entries
+#   tokens.detached.our and tokens.detached.peer, both halves each; ...
+#   entry "tokens.detached.our" has no usable private half
+#   (set KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PRIVATE_VALUE): keystore: key "tokens.detached.our" not found
+# The detached-signature gateway (POST /api/v1/tokens/detached) uses two
+# dedicated keystore entries. The tokens module resolves all four halves in Init,
+# so a boot without them fails here instead of answering 500 at the first request.
+# Development: config.development.yaml points both entries at
+# certs/tokens_detached_*.der. A missing DER file stops the keystore module first,
+# naming the file. Add the two pairs; every existing pair is kept:
+make generate-keys
+# Deployed: set the four KEYSTORE_KEYS_TOKENS_DETACHED_{OUR,PEER}_{PUBLIC,PRIVATE}_VALUE
+# variables (base64 DER, a new dedicated pair each, never the tokens.our or
+# tokens.peer material) BEFORE rolling an image that contains the gateway. An
+# older image ignores the extra entries. See wiki/DEPLOYING.md.
+# Development overlay plus _VALUE variables: config.development.yaml already sets
+# each half's `file:`, and the keystore refuses a half that has both, naming it:
+#   keystore.keys.tokens.detached.our.public both 'file' and 'value' set use exactly one of 'file' or 'value'
+# Blank the matching _FILE for every half you deliver by value:
+KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PUBLIC_FILE= \
+KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PUBLIC_VALUE="$(base64 < certs/tokens_detached_our_public.der | tr -d '\n')" \
+  ...   # the same pair of variables for the other three halves
 ```
 
 ### AMQP Topology Re-declared on Reconnect (go-bricks v0.65.0)

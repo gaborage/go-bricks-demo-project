@@ -41,7 +41,7 @@ help:
 	@echo "  migrate-multitenant-samples   Capture sample Flyway JSON outputs (see go-bricks#376)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  generate-keys     Generate RSA keypairs (webhooks.signing, tokens.our, tokens.peer, payments.sign.v1, payments.encrypt.v1) into certs/"
+	@echo "  generate-keys     Generate missing RSA keypairs (webhooks.signing, tokens.our, tokens.peer, tokens.detached.our, tokens.detached.peer, payments.sign.v1, payments.encrypt.v1) into certs/; existing pairs are kept"
 	@echo "  fmt               Format Go code"
 	@echo "  lint              Run linters"
 	@echo "  coverage          Generate test coverage report"
@@ -54,6 +54,7 @@ help:
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
 	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
 	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
+	@echo "  detached-envelope-demo Kid-less detached-signature gateway: exchange, kid-less headers, replay, refusal codes (needs make run)"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -454,6 +455,19 @@ seal-payload:
 seal-mle:
 	@./scripts/seal-payload.sh mle
 
+# --- Detached-signature gateway (go-bricks v0.73.0, ADR-150) -----------------
+# POST /api/v1/tokens/detached serves a kid-less peer: an RS512 detached JWS in
+# the X-Peer-Signature header, the JWE in {"data":...}, no kid on either token,
+# and a reply whose data is a kid-less bare JWE. The in-process simulator
+# (POST /api/v1/__sim/peer/detached) plays that peer. The script runs one
+# exchange, decodes the three kid-less protected headers, replays the captured
+# request (accepted: the gateway keeps no replay ledger), then asserts each
+# refusal code. It never echoes the test PAN. Requires the app running
+# (make run) with keys present (make generate-keys); honors APP_URL.
+.PHONY: detached-envelope-demo
+detached-envelope-demo:
+	@./scripts/detached-envelope-demo.sh
+
 # --- Consumer-aware readiness (go-bricks v0.65.0, #1686/#1684, ADR-114) -------
 # /ready fails closed once the payments.authorized consumer gives up
 # re-subscribing. The script builds and boots its OWN app with
@@ -503,38 +517,69 @@ update:
 #   - webhooks.signing     : webhooks module (file/file)
 #   - tokens.our           : tokens module, our half  (file/file)
 #   - tokens.peer          : tokens module, peer half (file/file)
+#   - tokens.detached.our  : tokens module, detached-signature gateway, our half
+#   - tokens.detached.peer : tokens module, detached-signature gateway, peer half
 #   - payments.sign.v1     : payments module, sealed-event SIGN family generation v1
 #   - payments.encrypt.v1  : payments module, sealed-event ENCRYPT family generation v1
 #
 # The two payments.* entries are sealing GENERATIONS (go-bricks v0.63.0, ADR-097):
 # the final "v<N>" segment of a dotted name (ADR-144) is what gives the entry family
 # semantics, so the seal tag names only the logical kid ("payments.sign") and
-# rotation adds a payments.sign.v2 entry rather than rewriting code. Both halves are generated for each family because this demo is
-# producer AND consumer in one process (producer needs sign-private + encrypt-public,
-# consumer needs sign-public + encrypt-private). A real deployment splits them.
+# rotation adds a payments.sign.v2 entry rather than rewriting code. Both halves
+# are generated for each family because this demo is producer AND consumer in one
+# process (producer needs sign-private + encrypt-public, consumer needs
+# sign-public + encrypt-private). A real deployment splits them.
 #
 # The DER file names are not the entry names: config.development.yaml maps each
 # entry (tokens.our) to its files (certs/tokens_our_*.der). This target writes only
-# certs/ (gitignored) and leaves every tracked file untouched.
+# certs/ (gitignored) and leaves every tracked file untouched. KEY_PAIRS lists
+# each pair as <entry name>:<DER file stem>, written to certs/<stem>_private.der
+# and certs/<stem>_public.der.
+#
+# A pair whose private DER already exists is KEPT, so re-running after a pull
+# only adds the pairs a new entry needs and never rotates a key you already
+# have. Rotating the payments pairs would leave sealed messages parked on a
+# retained broker volume unopenable. A missing public half is re-derived from
+# the private half. A public half WITHOUT its private half is refused (non-zero
+# exit naming the pair) rather than overwritten: it may be the only copy of a
+# key some peer trusts. Each line names its pair before openssl runs, so a
+# corrupt DER is reported against the pair. To regenerate a pair on purpose,
+# delete it first:
+#   rm certs/<stem>_{public,private}.der && make generate-keys
+KEY_PAIRS := \
+	webhooks.signing:webhook_signing \
+	tokens.our:tokens_our \
+	tokens.peer:tokens_peer \
+	tokens.detached.our:tokens_detached_our \
+	tokens.detached.peer:tokens_detached_peer \
+	payments.sign.v1:payments_sign_v1 \
+	payments.encrypt.v1:payments_encrypt_v1
+
 generate-keys:
-	@echo "🔑 Generating RSA key pairs..."
+	@echo "🔑 Generating missing RSA key pairs (existing pairs are kept)..."
 	@mkdir -p certs
-	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/webhook_signing_private.der 2>/dev/null
-	@openssl rsa -in certs/webhook_signing_private.der -inform DER -pubout -outform DER -out certs/webhook_signing_public.der 2>/dev/null
-	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_our_private.der 2>/dev/null
-	@openssl rsa -in certs/tokens_our_private.der -inform DER -pubout -outform DER -out certs/tokens_our_public.der 2>/dev/null
-	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/tokens_peer_private.der 2>/dev/null
-	@openssl rsa -in certs/tokens_peer_private.der -inform DER -pubout -outform DER -out certs/tokens_peer_public.der 2>/dev/null
-	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/payments_sign_v1_private.der 2>/dev/null
-	@openssl rsa -in certs/payments_sign_v1_private.der -inform DER -pubout -outform DER -out certs/payments_sign_v1_public.der 2>/dev/null
-	@openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out certs/payments_encrypt_v1_private.der 2>/dev/null
-	@openssl rsa -in certs/payments_encrypt_v1_private.der -inform DER -pubout -outform DER -out certs/payments_encrypt_v1_public.der 2>/dev/null
-	@echo "✅ Keys generated in certs/"
-	@echo "   webhooks.signing     : certs/webhook_signing_{public,private}.der"
-	@echo "   tokens.our           : certs/tokens_our_{public,private}.der"
-	@echo "   tokens.peer          : certs/tokens_peer_{public,private}.der"
-	@echo "   payments.sign.v1     : certs/payments_sign_v1_{public,private}.der"
-	@echo "   payments.encrypt.v1  : certs/payments_encrypt_v1_{public,private}.der"
+	@set -e; for pair in $(KEY_PAIRS); do \
+		name=$${pair%%:*}; stem=$${pair#*:}; \
+		priv=certs/$${stem}_private.der; pub=certs/$${stem}_public.der; \
+		printf '   %-22s: certs/%s_{public,private}.der ' "$$name" "$$stem"; \
+		if [ -f "$$priv" ] && [ -f "$$pub" ]; then \
+			echo "(kept)"; \
+		elif [ -f "$$priv" ]; then \
+			openssl rsa -in "$$priv" -inform DER -pubout -outform DER -out "$$pub" 2>/dev/null \
+				|| { echo "FAILED"; echo "❌ $$name: cannot derive $$pub from $$priv (corrupt DER?)" >&2; exit 1; }; \
+			echo "(kept, public half re-derived)"; \
+		elif [ -f "$$pub" ]; then \
+			echo "REFUSED"; \
+			echo "❌ $$name: $$pub exists without $$priv. Refusing to overwrite it: restore the private half, or delete $$pub to generate a new pair." >&2; \
+			exit 1; \
+		else \
+			{ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out "$$priv" 2>/dev/null \
+				&& openssl rsa -in "$$priv" -inform DER -pubout -outform DER -out "$$pub" 2>/dev/null; } \
+				|| { echo "FAILED"; echo "❌ $$name: openssl could not generate $$priv" >&2; exit 1; }; \
+			echo "(generated)"; \
+		fi; \
+	done
+	@echo "✅ Keys ready in certs/. To regenerate a pair: rm certs/<stem>_{public,private}.der && make generate-keys"
 
 # Development environment setup
 dev: docker-up migrate-all generate-keys

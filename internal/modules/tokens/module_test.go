@@ -104,7 +104,7 @@ func TestSelfBaseURLRefusesUnaddressableListener(t *testing.T) {
 func TestInitAddressesSimulatorsOnConfiguredListener(t *testing.T) {
 	priv, pub := jositest.GenerateTestKeyPair(t)
 	ks := kstest.NewMockKeyStore()
-	for _, kid := range []string{OurKid, PeerKid} {
+	for _, kid := range []string{OurKid, PeerKid, DetachedOurKid, DetachedPeerKid} {
 		ks.WithPrivateKey(kid, priv).WithPublicKey(kid, pub)
 	}
 
@@ -121,6 +121,8 @@ func TestInitAddressesSimulatorsOnConfiguredListener(t *testing.T) {
 	assert.Equal(t, "http://localhost:18081"+apiBase+handlers.PeerSimulatorPath, m.peerSimulatorURL)
 	assert.Equal(t, "http://localhost:18081"+apiBase+handlers.MLEPeerSimulatorPath, m.mlePeerSimulatorURL)
 	assert.Equal(t, "http://localhost:18081/api/v1/__sim/peer/tokens", m.peerSimulatorURL)
+	assert.Equal(t, "http://localhost:18081/api/v1/tokens/detached", m.detachedGatewayURL,
+		"the detached simulator calls the real gateway route on the same listener")
 }
 
 // routeRecorder is a server.RouteRegistrar that records "METHOD path" for each
@@ -139,18 +141,19 @@ func (r *routeRecorder) Use(_ ...server.MiddlewareFunc) {}
 
 func (r *routeRecorder) FullPath(path string) string { return path }
 
-// newTestKeys returns a keystore holding both kids the module resolves, plus a
+// newTestKeys returns a keystore holding every entry the module resolves, plus a
 // JOSE resolver over the same private keys for registering jose:-tagged routes.
+// The detached entries get their own pairs, as they do in every config.
 func newTestKeys(t *testing.T) (*kstest.MockKeyStore, jose.KeyResolver) {
 	t.Helper()
-	ourPriv, ourPub := jositest.GenerateTestKeyPair(t)
-	peerPriv, peerPub := jositest.GenerateTestKeyPair(t)
-
-	ks := kstest.NewMockKeyStore().
-		WithPrivateKey(OurKid, ourPriv).WithPublicKey(OurKid, ourPub).
-		WithPrivateKey(PeerKid, peerPriv).WithPublicKey(PeerKid, peerPub)
-	resolver := jositest.NewTestResolver(map[string]any{OurKid: ourPriv, PeerKid: peerPriv})
-	return ks, resolver
+	resolverKeys := map[string]any{}
+	ks := kstest.NewMockKeyStore()
+	for _, kid := range []string{OurKid, PeerKid, DetachedOurKid, DetachedPeerKid} {
+		priv, pub := jositest.GenerateTestKeyPair(t)
+		resolverKeys[kid] = priv
+		ks.WithPrivateKey(kid, priv).WithPublicKey(kid, pub)
+	}
+	return ks, jositest.NewTestResolver(resolverKeys)
 }
 
 // newTestModuleDeps returns the deps Init needs: a keystore and a server
@@ -206,6 +209,51 @@ func TestModuleInitWiresHandlers(t *testing.T) {
 	assert.NotNil(t, m.relayHandler)
 	assert.NotNil(t, m.mleHandler)
 	assert.NotNil(t, m.vtsHandler)
+	assert.NotNil(t, m.detachedHandler)
+}
+
+// TestModuleInitRequiresDetachedEntries pins the fail-fast decision: a keystore
+// without the gateway's dedicated entries refuses startup, naming each missing
+// half and the variable a deployed environment sets for it. Only the existing
+// tokens.our/tokens.peer pairs are present here, which is exactly a deploy that
+// has not provisioned the new secrets yet.
+func TestModuleInitRequiresDetachedEntries(t *testing.T) {
+	priv, pub := jositest.GenerateTestKeyPair(t)
+
+	t.Run("both entries missing", func(t *testing.T) {
+		ks := kstest.NewMockKeyStore().
+			WithPrivateKey(OurKid, priv).WithPublicKey(OurKid, pub).
+			WithPrivateKey(PeerKid, priv).WithPublicKey(PeerKid, pub)
+
+		err := NewModule().Init(newTestModuleDeps(ks))
+		require.Error(t, err)
+		for _, want := range []string{
+			`entry "tokens.detached.our" has no usable private half`,
+			`entry "tokens.detached.our" has no usable public half`,
+			`entry "tokens.detached.peer" has no usable private half`,
+			`entry "tokens.detached.peer" has no usable public half`,
+			"KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PRIVATE_VALUE",
+			"KEYSTORE_KEYS_TOKENS_DETACHED_OUR_PUBLIC_VALUE",
+			"KEYSTORE_KEYS_TOKENS_DETACHED_PEER_PRIVATE_VALUE",
+			"KEYSTORE_KEYS_TOKENS_DETACHED_PEER_PUBLIC_VALUE",
+			"make generate-keys",
+		} {
+			assert.Contains(t, err.Error(), want)
+		}
+	})
+
+	t.Run("one half missing", func(t *testing.T) {
+		ks := kstest.NewMockKeyStore()
+		for _, kid := range []string{OurKid, PeerKid, DetachedOurKid} {
+			ks.WithPrivateKey(kid, priv).WithPublicKey(kid, pub)
+		}
+		ks.WithPublicKey(DetachedPeerKid, pub) // a real gateway's shape: the peer's public half only
+
+		err := NewModule().Init(newTestModuleDeps(ks))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `entry "tokens.detached.peer" has no usable private half (set KEYSTORE_KEYS_TOKENS_DETACHED_PEER_PRIVATE_VALUE)`)
+		assert.NotContains(t, err.Error(), "TOKENS_DETACHED_OUR")
+	})
 }
 
 // TestModuleRegisterRoutes registers every route for real. The bootstrap wires a
@@ -231,5 +279,7 @@ func TestModuleRegisterRoutes(t *testing.T) {
 		http.MethodPost + " /tokens/mle-relay",
 		http.MethodPost + " " + handlers.MLEPeerSimulatorPath,
 		http.MethodPost + " /tokens/vts-issuer-relay",
+		http.MethodPost + " " + handlers.DetachedGatewayPath,
+		http.MethodPost + " " + handlers.DetachedPeerSimulatorPath,
 	}, rec.routes)
 }
