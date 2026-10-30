@@ -33,7 +33,9 @@
 #   3. revokes READ on payments.authorized ONLY — configure and write are
 #      untouched, every other queue and stream stays readable — and closes that
 #      one connection, so the consumer must re-subscribe and the broker refuses
-#      its basic.consume with 403 ACCESS_REFUSED;
+#      its basic.consume with 403 ACCESS_REFUSED. It then checks the app log for
+#      the close (with the broker's reason) and the paced redial that follows it
+#      (go-bricks v0.73.0, C73.3);
 #   4. polls /ready and the debug view while consumer_max_fail_streak climbs,
 #      until /ready turns 503 at the threshold and the debug view names the
 #      consumer arm;
@@ -317,6 +319,14 @@ app_log_lines() {
     jq -Rr "${@:2}" "fromjson? | $1" "$APP_LOG" 2>/dev/null || true
 }
 
+# app_log_lines_after LINE JQ_FILTER [JQ_OPTS...] — app_log_lines over the
+# lines written after line LINE of the app log.
+app_log_lines_after() {
+    local mark="$1"
+    shift
+    tail -n "+$((mark + 1))" "$APP_LOG" | jq -Rr "${@:2}" "fromjson? | $1" 2>/dev/null || true
+}
+
 # app_failed MESSAGE — surface the app's own warnings and errors (message and
 # error fields only), then fail.
 app_failed() {
@@ -487,6 +497,9 @@ echo "    re-declaring the topology and every other queue and stream are untouch
 
 # The broker checks permissions when a consumer subscribes, not per delivery,
 # so the live subscription must be dropped for the revocation to bite.
+# LOG_MARK is where the app log stood before the close, so the lines checked
+# below are the ones this close caused.
+LOG_MARK="$(wc -l <"$APP_LOG" | tr -d ' ')"
 close_status="$(mgmt -o /dev/null -w '%{http_code}' -X DELETE \
     -H 'X-Reason: consumer-readiness-demo: forcing a consumer re-subscribe' \
     "$RABBIT_MGMT/api/connections/$CONN_ENC" 2>/dev/null || true)"
@@ -496,14 +509,44 @@ echo
 echo "closed connection '$CONN_NAME' (HTTP 204) — the consumer's delivery channel"
 echo "is gone and its supervisor starts re-subscribing"
 
+# Since go-bricks v0.73.0 (C73.3) the client does not redial at once. It logs
+# the close with the broker's reason, then waits: below reconnect.delay (5s)
+# after a connection that stayed up that long (attempt 0, INFO), or up a
+# jittered ladder after a shorter one (WARN). It is not ready during the wait.
+echo
+echo "App log — the close, and the paced redial (go-bricks v0.73.0):"
+CLOSE_LINE=""
+REDIAL_LINE=""
+for _ in $(seq 1 15); do
+    CLOSE_LINE="$(app_log_lines_after "$LOG_MARK" 'select(.message == "AMQP connection closed, reconnecting...")
+        | "  [\(.level)] \(.message) error=\(.error // "-")"' | head -n 1)"
+    REDIAL_LINE="$(app_log_lines_after "$LOG_MARK" 'select(.message == "AMQP connection closed, waiting before redial")
+        | "  [\(.level)] \(.message) uptime=\(.uptime // 0 | floor)ms attempt=\(.attempt) backoff=\(.backoff // 0 | floor)ms"' | head -n 1)"
+    [[ -n "$CLOSE_LINE" && -n "$REDIAL_LINE" ]] && break
+    sleep 1
+done
+[[ -n "$CLOSE_LINE" ]] \
+    || app_failed "no 'AMQP connection closed, reconnecting...' line in the app log within 15s of the close"
+[[ -n "$REDIAL_LINE" ]] \
+    || app_failed "no 'AMQP connection closed, waiting before redial' line within 15s of the close — is the pin older than go-bricks v0.73.0?"
+# The close line carries the broker's reason in error since go-bricks v0.73.0.
+[[ "$CLOSE_LINE" == *CONNECTION_FORCED* ]] \
+    || app_failed "the close line carries no CONNECTION_FORCED reason in its error field:$CLOSE_LINE"
+echo "$CLOSE_LINE"
+echo "$REDIAL_LINE"
+echo "  ← the error names the broker's reason, the X-Reason above included. With"
+echo "    attempt=0 the backoff is a random wait below reconnect.delay (5s)"
+
 # --- 4. watch the streak climb until /ready fails closed ------------------
 
 section "4/5  Poll /ready and the debug view while the re-subscribe streak climbs to $GIVEUP_STREAK"
 
 echo "Give-up threshold: $GIVEUP_STREAK consecutive failed re-subscribes (framework constant,"
 echo "shared with the WARN escalation). Backoff is full jitter from a 5s floor, capped"
-echo "at 60s, so expect the verdict in roughly 30s to 2.5min. /ready gives the status"
-echo "code; the counters on each line come from $DEBUG_HEALTH_URL."
+echo "at 60s, so expect the verdict in roughly 30s to 2.5min. The redial wait above comes"
+echo "first, and attempts made while the client waits fail and count toward the streak"
+echo "too. /ready gives the status code; the counters on each line come from"
+echo "$DEBUG_HEALTH_URL."
 echo
 
 T0=$SECONDS

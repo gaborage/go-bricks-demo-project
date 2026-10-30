@@ -16,15 +16,16 @@ before deploying. The previous record is
 
 ## At a glance
 
-- **No source change, no schema migration and no config key.** `config.yml`
-  and every `.go` file are unchanged, so the binary's only new inputs are
-  `go.mod` and `go.sum`. The other edits are the `GO_BRICKS_REF` pin in the
-  Makefile, the version literals in the docs, one script comment, and this
-  record.
+- **No source change, no schema migration and no config key in the bump.**
+  The bump leaves `config.yml` and every `.go` file unchanged, so the binary's
+  only new inputs are `go.mod` and `go.sum`. Its other edits are the
+  `GO_BRICKS_REF` pin in the Makefile, the version literals in the docs, one
+  script comment, and this record.
 - **No compile or test break.** No atom matches a demo call site that the
   compiler or a test sees.
-- **No feature adopted.** The skipped ones and why are under
-  [Features not adopted](#features-not-adopted).
+- **No feature adopted in the bump itself.** The skipped ones and why are under
+  [Features not adopted](#features-not-adopted). The commits after the bump
+  adopt some of them; see [Adopted after the bump](#adopted-after-the-bump).
 - **Behaviour the operator sees changes:** AMQP redials after a connection close
   now wait (C73.3), the keep-alive idle default is 75s (C73.5), an over-limit
   body answers 413 `BODY_TOO_LARGE` (C73.6), stream reattach waits are 3–8s
@@ -63,7 +64,7 @@ no effect.
 | C73.7 | `messaging.broker.virtualhost`, `messaging.routing.exchange`, `messaging.routing.key` and `messaging.headers` fail startup. | none in the repo | No hit in YAML, env files or Go. | See [Removed messaging keys](#removed-messaging-keys). |
 | C73.8 | A zero `server.timeout.idle` takes 75s on every config door; a negative fails startup. | none | No idle anywhere. | None. |
 | C73.9 | `WithFields` writes a typed-nil pointer error as `null`. | none | Every demo `WithFields` map holds strings and numbers only. | None. |
-| C73.10 | `\:<verb>` after a route parameter is an inline verb. | none | No `\:` in any route. | None. |
+| C73.10 | `\:<verb>` after a route parameter is an inline verb. | none | At the bump, no `\:` in any route. | None in the bump. Showcased after it: `GET /api/v1/products/<id>:activity`. |
 | C73.11 | Stream client v1.9.0: each reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects. | forced | The activity module imports the lane ([activity/module.go:35](../internal/modules/activity/module.go), [activity/service/service.go:23](../internal/modules/activity/service/service.go)). Development uses plaintext 5552 ([config.development.yaml:51](../config.development.yaml)). | Keep. |
 | C73.12 | Echo's `RouteNotFound` and `RouteAny` methods fail startup at framework doors. | none | No such route. | None. |
 | C73.13 | A delivered-empty key is refused in any letter case. | none | No upper-case config key in the repo. | None. |
@@ -187,7 +188,7 @@ This bump supersedes the open Dependabot pull requests for `echo/v5` 5.4.2
 
 ## Features not adopted
 
-None. Skipped, with the reason:
+None in the bump. Skipped there, with the reason:
 
 - **JOSE options (ADR-150):** the open-only `SealModeJWSofJWEMinimal` (RS512,
   for peers that send no kid), `Policy.AcceptMissingKid`, `Policy.OmitKid` and
@@ -196,8 +197,53 @@ None. Skipped, with the reason:
   flag, and a missing kid is still refused.
 - **`rabbitmq-stream+tls://` stream URIs (C73.11).** Development stays on
   plaintext 5552. For deploys, see the table below.
-- **`+json` media types on typed routes** and **`server.RouteConflict.Reason`.**
-  Nothing in the demo needs them.
+- **`server.RouteConflict.Reason`.** Nothing in the demo builds a
+  `RouteConflict`.
+
+## Adopted after the bump
+
+The commits after the bump change no `go.mod` line, no config key and no
+schema. They add one route and some assertions, and document the rest.
+
+- **Inline verb (C73.10).** The activity module serves
+  `GET /api/v1/products/<id>:activity`, registered as `/products/:id\:activity`
+  beside the products module's `GET /products/:id`. On v0.72.0 startup refused
+  that pair as a duplicate. It answers one product's slice of the stream
+  projection, and an id with no projected events answers 200 with zero counts,
+  because the projection cannot tell whether a product exists.
+  `cmd/api/inline_verb_route_test.go` boots both modules' routes on a real
+  server and checks the dispatch, including that a percent-encoded colon
+  reaches `GET /products/:id`. The route adds a router node beside
+  `GET /products/:id`, which the products load tests call often; its cost was
+  not measured. The route also made an old gap easy to hit: a malformed product
+  id reached PostgreSQL's UUID column and answered 500. The products routes now
+  validate the id as a UUID and answer 400 before any query.
+- **`+json` binding (`424a51e9`).** `scripts/test-products-api.sh` posts a
+  product as `application/vnd.gobricks.product+json` and as `Application/JSON`,
+  and expects 201 for both. No route was added for it.
+- **413 `BODY_TOO_LARGE` (C73.6).** The same script sends a body one byte over
+  `server.bodylimit`, with a `Content-Length` and chunked, and expects 413
+  `BODY_TOO_LARGE` for both. The chunked body is one long JSON string, because
+  a body that stops being valid JSON earlier answers 400 before the limit.
+- **Paced redial (C73.3, `678166d4`).** `scripts/consumer-readiness-demo.sh`
+  asserts, after its forced close, the `AMQP connection closed, reconnecting...`
+  line with the broker's reason in `error` and the `AMQP connection closed,
+  waiting before redial` line. The publisher arm is not demonstrated: its wait
+  can be close to zero, so a 503 may never be seen.
+- **Docs.** CLAUDE.md gains a request-binding note, the inline-verb section,
+  the redial and lifecycle-counter rows under Consumer-Aware Readiness, the
+  `qb.Filter()`-only rule, the scheduler's 404 clause, the order-independent
+  payments validation test, the stream re-timing, and four troubleshooting
+  entries. `wiki/DEPLOYING.md` gains streams over TLS, the idle timeout and
+  the retired messaging keys. `wiki/MULTI_TENANT_MIGRATION_DEMO.md` notes the
+  type-less tenant change.
+- **Verified** on the docker stack with an app built from those commits:
+  `scripts/test-products-api.sh` passed all 13 checks, and
+  `make demo-consumer-readiness` passed twice. The first run logged the redial
+  wait at INFO with `attempt` 0 and a 2.5s backoff, reached the 503 on the
+  consumer arm 53s after the close, and answered 200 again 24s after the
+  restore. In the second, the closed connection had been up 4.9s, under
+  `reconnect.delay`, so the line was a WARN with `attempt` 1, as C73.3 says.
 
 ## Per-environment operator config changes required before deploy
 
@@ -290,5 +336,8 @@ Re-pin to the `v0.73.0` tag once it is published. Expected work: `go get
 github.com/gaborage/go-bricks@v0.73.0` and `go mod tidy` with `GOWORK=off`; set
 `GO_BRICKS_REF` to `v0.73.0`; change the pseudo-version literals in CLAUDE.md
 and the README and the `4cacc99c` mentions in CLAUDE.md and
-`scripts/consumer-readiness-demo.sh` back to the tag; confirm that the tag adds
-nothing past `4cacc99c` but the release commit; and add a hop to this record.
+`scripts/consumer-readiness-demo.sh` back to the tag; re-point the go-bricks
+wiki and ADR links pinned to commit `4cacc99c` in CLAUDE.md,
+`wiki/DEPLOYING.md` and `wiki/MULTI_TENANT_MIGRATION_DEMO.md` to the tag;
+confirm that the tag adds nothing past `4cacc99c` but the release commit; and
+add a hop to this record.

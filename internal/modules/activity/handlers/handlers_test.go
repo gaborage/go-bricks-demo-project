@@ -21,6 +21,8 @@ const testProductID = "product-a"
 type mockProjection struct {
 	snapshot       service.Snapshot
 	snapshotLimit  int
+	slice          service.ProductSlice
+	sliceProductID string
 	publishErr     error
 	publishedKey   string
 	publishedBytes []byte
@@ -30,6 +32,11 @@ type mockProjection struct {
 func (m *mockProjection) Snapshot(limit int) service.Snapshot {
 	m.snapshotLimit = limit
 	return m.snapshot
+}
+
+func (m *mockProjection) ProductSlice(productID string) service.ProductSlice {
+	m.sliceProductID = productID
+	return m.slice
 }
 
 func (m *mockProjection) PublishRaw(_ context.Context, routingKey string, data []byte) error {
@@ -86,6 +93,47 @@ func TestGetActivityReturnsTheProjectionSnapshot(t *testing.T) {
 	}
 	if len(got.Recent) != 1 || got.Recent[0].Offset != 42 {
 		t.Errorf("Recent = %+v, want one event at offset 42", got.Recent)
+	}
+}
+
+func TestGetProductActivityReturnsTheProductSlice(t *testing.T) {
+	stub := &mockProjection{slice: service.ProductSlice{
+		ProductID: testProductID,
+		Delivered: 2,
+		Counts:    map[string]int64{domain.ActionCreated: 1, domain.ActionUpdated: 1},
+		Recent:    []service.RecentEvent{{ProductID: testProductID, Action: domain.ActionUpdated, Offset: 9}},
+	}}
+
+	got, apiErr := newTestHandler(stub).GetProductActivity(ProductActivityRequest{ID: testProductID}, newTestContext())
+	if apiErr != nil {
+		t.Fatalf("GetProductActivity returned error: %v", apiErr)
+	}
+	if stub.sliceProductID != testProductID {
+		t.Errorf("ProductSlice called with %q, want %q", stub.sliceProductID, testProductID)
+	}
+	if got.ProductID != testProductID || got.Delivered != 2 || got.Counts[domain.ActionUpdated] != 1 {
+		t.Errorf("slice = %+v, want the stub's slice for %q", got, testProductID)
+	}
+	if len(got.Recent) != 1 || got.Recent[0].Offset != 9 {
+		t.Errorf("Recent = %+v, want one event at offset 9", got.Recent)
+	}
+}
+
+// An id the projection has not seen is not a 404: the projection cannot know
+// whether the product exists, so it answers what it has seen, which is nothing.
+func TestGetProductActivityForAnUnseenIDIsNotAnError(t *testing.T) {
+	stub := &mockProjection{slice: service.ProductSlice{
+		ProductID: "unseen",
+		Counts:    map[string]int64{},
+		Recent:    []service.RecentEvent{},
+	}}
+
+	got, apiErr := newTestHandler(stub).GetProductActivity(ProductActivityRequest{ID: "unseen"}, newTestContext())
+	if apiErr != nil {
+		t.Fatalf("GetProductActivity returned %v for an unseen id, want an empty slice", apiErr)
+	}
+	if got.Delivered != 0 || len(got.Counts) != 0 || len(got.Recent) != 0 {
+		t.Errorf("slice = %+v, want an empty one", got)
 	}
 }
 

@@ -393,6 +393,19 @@ command exits 1:
            password: umbrella_pass
    ```
 
+   Keep `type: postgresql` on every tenant, spelled exactly (`postgres` and
+   `PostgreSQL` are other values). A tenant without a `type` still runs under
+   the CLI, whose runner names no vendor. Two things changed for it in
+   go-bricks v0.73.0 (C73.1,
+   [ADR-149](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_149_typeless_tenant_runs_with_runner_vendor.md)):
+   - with a migrator identity set, the run refuses that tenant before Flyway
+     starts, with `migration.ErrMigratorIdentityUndeliverable`, and exits 1.
+     That is one more reason never to export `GOBRICKS_MIGRATE_MIGRATOR_*`;
+   - a library caller whose runner sets `database.type` now runs that tenant
+     with the runner's vendor and with the tenant's own host, database and
+     credentials, where the Flyway conf or the parent environment supplied
+     them before.
+
 3. Run `make migrate-multitenant-up` — the new tenant gets V1+V2 applied;
    existing tenants are a no-op.
 

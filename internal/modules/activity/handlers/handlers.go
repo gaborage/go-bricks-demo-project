@@ -28,6 +28,18 @@ const (
 	poisonNote = "published a non-JSON body: the typed consumer rejects it as deterministic poison — " +
 		"not retried in place, never parked in the hold, offset NOT committed, and consumption continues " +
 		"with the next message on that partition"
+
+	// ProductActivityPath is an inline verb (go-bricks v0.73.0, C73.10, echo
+	// v5.4.1): the `\:` right after the parameter name ends the name, so the
+	// route matches only `<id>:activity` and binds id to the part before the
+	// colon. It is its own route beside the products module's GET /products/:id.
+	// On v0.72.0 the `\:activity` was part of the parameter name, the route
+	// matched any segment, and startup refused the pair as a duplicate.
+	//
+	// The colon must reach the server as written. A percent-encoded one
+	// (/products/42%3Aactivity) is not a verb: it reaches GET /products/:id with
+	// id = "42%3Aactivity". A raw string keeps the backslash literal.
+	ProductActivityPath = `/products/:id\:activity`
 )
 
 // ActivityProjection is the narrow service contract this package depends on.
@@ -35,6 +47,7 @@ const (
 // they own and tests can stub it.
 type ActivityProjection interface {
 	Snapshot(limit int) service.Snapshot
+	ProductSlice(productID string) service.ProductSlice
 	PublishRaw(ctx context.Context, routingKey string, data []byte) error
 }
 
@@ -42,6 +55,15 @@ type ActivityProjection interface {
 type SnapshotRequest struct {
 	// Limit caps the recent-event slice. Omitted means the ring's full depth.
 	Limit int `query:"limit" validate:"omitempty,min=1,max=50"`
+}
+
+// ProductActivityRequest is the path of GET /products/:id\:activity.
+type ProductActivityRequest struct {
+	// ID is the part of the segment before ":activity". The bound is the one
+	// PoisonRequest puts on a routing key, which is what a product id is on the
+	// stream. A product id is a UUID, but the projection only ever matches it, so
+	// a stricter format check would add nothing.
+	ID string `param:"id" validate:"required,max=64"`
 }
 
 // PoisonRequest is the body of the poison simulator. ProductID is optional and
@@ -79,6 +101,15 @@ func (h *Handler) GetActivity(req SnapshotRequest, _ server.HandlerContext) (*se
 	return &snapshot, nil
 }
 
+// GetProductActivity handles GET /products/:id\:activity, one product's slice of
+// the projection. An id with no projected events answers 200 with zero counts,
+// not 404: the projection cannot know whether the product exists (see
+// service.ProductSlice), so it reports what it has seen and nothing more.
+func (h *Handler) GetProductActivity(req ProductActivityRequest, _ server.HandlerContext) (*service.ProductSlice, server.IAPIError) {
+	slice := h.svc.ProductSlice(req.ID)
+	return &slice, nil
+}
+
 // PublishPoison handles POST /__sim/streams/poison — DEMO ONLY, and registered
 // only outside production (see the activity module's RegisterRoutes).
 //
@@ -111,13 +142,15 @@ func (h *Handler) PublishPoison(req PoisonRequest, ctx server.HandlerContext) (*
 	}, nil
 }
 
-// RegisterRoutes attaches GET /products/activity.
+// RegisterRoutes attaches GET /products/activity and GET /products/:id\:activity.
 //
-// The static /products/activity segment coexists with the products module's
-// /products/:id: the router gives a static segment priority over a parameter, so
-// registration order between the two modules does not matter.
+// Both coexist with the products module's /products/:id. The router gives the
+// static /products/activity segment priority over a parameter, and the inline
+// verb is a route of its own (see ProductActivityPath). Registration order
+// between the two modules does not matter for either.
 func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.GET(hr, r, "/products/activity", h.GetActivity)
+	server.GET(hr, r, ProductActivityPath, h.GetProductActivity)
 }
 
 // RegisterSimulatorRoute attaches the poison simulator at /__sim/streams/poison,

@@ -6,6 +6,8 @@
 // successful write, it publishes that onto the product-activity super stream
 // keyed by product id, a typed super-stream consumer projects every partition
 // back into memory, and GET /api/v1/products/activity renders the projection.
+// GET /api/v1/products/:id\:activity renders one product's slice of it, on an
+// inline-verb route beside the products module's GET /products/:id.
 // POST /api/v1/__sim/streams/poison puts a body on a partition that the typed
 // consumer cannot decode, to show what the framework does with poison.
 //

@@ -469,7 +469,7 @@ make test                                        # Run all tests (uses race dete
 
 [cmd/api/messaging_declarations_test.go](cmd/api/messaging_declarations_test.go) walks `getModulesToLoad()` and, for every enabled module that declares messaging, runs `Init` and `DeclareMessaging` into **one** `messaging.Declarations`, as `app.Run()` does, then asserts `Validate()` passes. Payments is the one exception, as the first bullet below explains. Some refusals concern the whole set rather than one call site: two modules declaring one name with shapes that cannot merge (go-bricks v0.66.0, #1736), or a local exchange of a type the broker does not know (#1712). `go build` and each module's own tests stay green on those, so without this test they surface only at `make run`.
 
-- **Payments is validated apart, at the sealing seam.** Its seal-tagged publisher and consumer resolve their key generations against a sealing runtime that only `app.Run()` can configure since go-bricks C72.9 (ADR-139). Outside an App, `Validate()` reports that runtime's not-configured error before any topology rule. So the pass and the defect tests run on the set without payments, and a third test asserts that the full set stops at exactly that error, which also proves the `messaging/sealed` codec is linked. A fourth test declares payments alone and asserts that none of its exchange or queue names appears in the other modules' set, so a name conflict with another module still fails CI. Payments' dead-letter routing (C72.13), its publisher destinations and its key resolution are now proven only by a real boot.
+- **Payments is validated apart, at the sealing seam.** Its seal-tagged publisher and consumer resolve their key generations against a sealing runtime that only `app.Run()` can configure since go-bricks C72.9 (ADR-139). Outside an App, `Validate()` reports that runtime's not-configured error before any topology rule. So the pass and the defect tests run on the set without payments, and a third test asserts that the full set stops at exactly that error, which also proves the `messaging/sealed` codec is linked. Since go-bricks v0.73.0 (C73.2) the seal runtime belongs to one App, so a hand-built `messaging.NewDeclarations()` always reports that error. Before, it could silently use the runtime of an App that ran earlier in the same test binary, so the third test no longer depends on test order. A fourth test declares payments alone and asserts that none of its exchange or queue names appears in the other modules' set, so a name conflict with another module still fails CI. Payments' dead-letter routing (C72.13), its publisher destinations and its key resolution are now proven only by a real boot.
 - **Framework modules are skipped, as the framework skips them.** Scheduler, outbox, inbox and keystore declare no messaging at the pinned go-bricks, and their `Init` needs a validated config, a database or DER files.
 - **A companion test adds one defect of each kind to the demo's own set** and asserts `Validate()` refuses it, so the pass cannot come from a validator that accepts anything.
 - **New modules are covered automatically.** A module that declares messaging is exercised as soon as it is in `getModulesToLoad()`. One with a seal-tagged type fails the pass until it joins payments outside the validated set.
@@ -626,9 +626,9 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 
 **Scheduler system endpoints** (framework; loopback-only while `scheduler.security.cidrallowlist` is empty):
 - `GET /api/v1/_sys/job` - List the registered jobs (the products report job is `test-job`)
-- `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once
+- `POST /api/v1/_sys/job/:jobId` - Trigger a job now (202 Accepted); `make advisory-lock-demo` fires `test-job` on two replicas at once. An unknown id answers 404 without echoing the id (go-bricks v0.73.0)
 
-**Products module:**
+**Products module** (every `:id` is validated as a UUID at the boundary, as Security First asks; a malformed one answers 400 before any query, where it used to fail in PostgreSQL's UUID column with 500):
 - `GET /api/v1/products?page=1&pageSize=10` - List products (paginated; `page` and `pageSize` are required, a bare call answers 400)
 - `GET /api/v1/products/:id` - Get product by ID
 - `POST /api/v1/products` - Create product
@@ -637,7 +637,7 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 
 **Legacy module** (raw response, no APIResponse envelope):
 - `GET /api/v1/legacy/products?page=1&pageSize=10` - List products (raw JSON; same required pagination)
-- `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON)
+- `GET /api/v1/legacy/products/:id` - Get product by ID (raw JSON; it reuses the products request type, so a malformed id answers 400 here too)
 
 **Webhooks module** (KeyStore signing demo):
 - `POST /api/v1/webhooks/sign` - Sign a JSON payload with RSA key
@@ -656,6 +656,7 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 
 **Activity module** (RabbitMQ super-stream demo):
 - `GET /api/v1/products/activity` - Projection built by the stream consumer: per-product event counts, per-partition delivery counts, a ring of the last 50 events (each carrying the `product-activity-N` partition it arrived on), and `publisherReady` — the v0.64.0 `streams.Publisher.Ready()` snapshot for the module's publisher handle
+- `GET /api/v1/products/<id>:activity` - One product's slice of that projection: its counts per action and its events still in the ring. An inline-verb route (go-bricks v0.73.0), registered as `/products/:id\:activity` beside the products module's `GET /products/:id`. An id with no projected events answers 200 with zero counts, not 404. See [Inline verb](#inline-verb-one-products-activity)
 - `POST /api/v1/__sim/streams/poison` - Publishes malformed bytes through the same publisher handle so they land on a partition; the typed consumer skips them and keeps going (demo-only, like the tokens peer simulator)
 
 **Analytics module** (named-database demo — stores views in the `analytics` database via `deps.DBByName`):
@@ -703,6 +704,12 @@ Security is mandatory, not optional:
 - **Secrets management:** Only load secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault). See [internal/modules/shared/secrets/](internal/modules/shared/secrets/)
 - **No hardcoded credentials** - Never commit secrets. No secrets in logs or error messages
 - **Audit logging** - Log sensitive operations (access control changes, data modifications) with trace IDs for correlation
+
+### Request Binding (JSON media types)
+
+A typed route binds its JSON body when the `Content-Type` is any spelling of `application/json` or any `*/*+json` type, such as `application/vnd.gobricks.product+json` or `Application/JSON` (go-bricks v0.73.0, #2249). On v0.72.0 echo's binder took only the exact, lower-case `application/json`, and every other admitted type answered 400 "Invalid request data". A non-JSON or empty `Content-Type` still skips the body, so a `validate:"required"` field then fails as missing. A request with `Content-Length: 0` binds no body either.
+
+`make test-products-api` posts a product as `application/vnd.gobricks.product+json` and as `Application/JSON` and expects 201 for both. The same script sends a body one byte over `server.bodylimit` and expects 413 `BODY_TOO_LARGE`; see [Over-limit Body Answers 413](#over-limit-body-answers-413-body_too_large-go-bricks-v0730).
 
 ### Raw Response Mode
 
@@ -1065,7 +1072,24 @@ err := m.publisher.Publish(ctx, &streams.PublishMessage{
 - **Publishing here is the best-effort lane, on purpose.** The products service publishes a `ProductActivity` after each successful create/update/delete through a narrow `ActivityRecorder` interface — declared products-side, so products and legacy compile without the activity module, and injected in [cmd/api/main.go](cmd/api/main.go) only when both modules are enabled. A publish failure is logged at WARN and does **not** fail the HTTP request — the transactional outbox stays the reliable path for anything that must not be lost.
 - **Best-effort still means the request waits.** That publish is synchronous and inline, so a broker in trouble blocks the product write's HTTP response for up to the service's 2s `publishTimeout` before the failure is swallowed; it is kept synchronous because moving it off-thread would let two events for one product id reorder on their shared partition. The outbox lane is the reliable path and never blocks on the broker.
 
-**Config:** see the `messaging.streams` section in [config.development.yaml](config.development.yaml) — `uri` (`rabbitmq-stream://…@localhost:5552/%2f`, never derived from `messaging.broker.url`), `addressresolver`, and `offsetstore.countbeforestorage`.
+#### Inline verb: one product's activity
+
+`GET /api/v1/products/<id>:activity` serves one product's slice of the projection. It is an **inline verb** (go-bricks v0.73.0, C73.10, echo v5.4.1), registered as `` `/products/:id\:activity` `` in a Go raw string. A `\:` right after a parameter name ends the name, so the route matches only `<value>:activity` and binds `id` to the part before the colon. That makes it a route of its own beside the products module's `GET /products/:id`. On v0.72.0 the `\:activity` was part of the parameter name: the route matched any segment, and startup refused the pair as a duplicate (`*server.DuplicateRouteError`).
+
+```bash
+curl -s "http://localhost:8080/api/v1/products/550e8400-e29b-41d4-a716-446655440001:activity" | jq -c .data
+# {"productId":"550e8400-e29b-41d4-a716-446655440001","delivered":0,"counts":{},"recent":[]}
+```
+
+- **Three routes share the segment after `/products/`.** The static `GET /products/activity` wins over both parameter routes. `<id>:activity` reaches the verb route. Anything else reaches `GET /products/:id`, and registration order does not matter.
+- **The colon must arrive as written.** A percent-encoded colon is not a verb: `/products/<id>%3Aactivity` reaches `GET /products/:id` with `id` = `<id>%3Aactivity`. That is no UUID, so the products route refuses it with 400 before any query. The verb also needs a value before it: `/products/:activity` reaches `GET /products/:id` as well, with the same 400, and so does a misspelt verb such as `<id>:activty`.
+- **An unseen id answers 200, not 404.** The projection has no database access, and it starts empty after every restart because a stored offset wins over `OffsetFirst`. So no events never means no product. The slice carries zero counts, `{}` and `[]`. `GET /products/:id` decides whether a product exists.
+- **`recent` can be shorter than `delivered`.** Every product shares the 50-event ring, so a product's older events leave the ring while its counts keep them.
+- **Proof:** `TestInlineVerbRouteBootsBesideProductByID` ([cmd/api/inline_verb_route_test.go](cmd/api/inline_verb_route_test.go)) registers both modules' real routes on a real go-bricks server and asserts it records no route conflict. It then starts the server and checks which handler each path above reaches. `make test-products-api` calls the route on a running app.
+
+**Reference:** framework [wiki/startup_defaults.md](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/startup_defaults.md) (the duplicate-route coverage notes state the inline-verb grammar) and [ADR-124](https://github.com/gaborage/go-bricks/blob/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d/wiki/adr_124_server_level_duplicate_route_refusal.md). No `v0.73.0` tag exists yet, so these links pin go-bricks commit `4cacc99c`.
+
+**Config:** see the `messaging.streams` section in [config.development.yaml](config.development.yaml) — `uri` (`rabbitmq-stream://…@localhost:5552/%2f`, never derived from `messaging.broker.url`), `addressresolver`, and `offsetstore.countbeforestorage`. Since go-bricks v0.73.0 a deploy can use a `rabbitmq-stream+tls://` URI, which verifies the broker against the process trust store; see [Streams over TLS](wiki/DEPLOYING.md#streams-over-tls).
 
 **Requires RabbitMQ 3.13+** — `DeclareSuperStream` is a 3.13-only command — plus the `rabbitmq_stream` plugin enabled and port 5552 published.
 
@@ -1077,6 +1101,7 @@ Before go-bricks v0.65.0, `/ready` judged the messaging kind by its **publisher*
 
 - **Consumer arm:** once a declared AMQP consumer (here only `payments.authorized`) is unsubscribed **and** its supervisor has failed **5** re-subscribes in a row, `/ready` answers 503. Five is the framework constant at which the `Consumer re-subscribe attempt failed` log turns WARN, and it is not configurable. A reconnect that recovers inside the streak never reaches the verdict.
 - **Publisher arm:** the existing "is the leased publisher ready?" check becomes critical too, so a broker outage answers 503 **at once**, with no streak. That is why no config file sets the key, and [config.yml](config.yml) carries only a commented example: turning it on is a per-environment decision (env `MESSAGING_CONSUMERS_CRITICAL=true`).
+- **Redial wait (go-bricks v0.73.0, C73.3):** after any AMQP connection close the client waits before it redials, below `messaging.reconnect.delay` (5s) after a stable connection, and it is not ready meanwhile. Under the key, a close of the leased publisher's connection therefore answers 503 for up to that wait, with no streak. On the consumer's connection, re-subscribe attempts made during the wait fail and count toward the streak. See [AMQP Redial Waits After a Connection Close](#amqp-redial-waits-after-a-connection-close-go-bricks-v0730).
 - **Not covered:** stream consumers (the activity projection). The streams kind is never critical.
 
 Where to watch it:
@@ -1087,13 +1112,14 @@ Where to watch it:
 | `GET /api/v1/ready` → 503 | Exactly `{"status":"not ready"}`. The blocking kind and its full error are only on the app's `Readiness check failed` log line (`component=messaging`). |
 | `GET /_sys/health-debug` | The only view with the counters. It is off by default (`DEBUG_ENABLED=true` turns it on), served at the URL root, not under `/api/v1`, and access-controlled (`debug.allowedips` defaults to loopback). `data.components.messaging` shows `status`, `critical`, the arm that failed (`error` is `consumer re-subscribe exhausted` or `publisher not ready`) and, under `details`, `declared_consumers`, `subscribed_consumers`, `consumer_max_fail_streak` (worst current streak, `0` when healthy), `consumer_resubscribes` (cumulative successes) and `consumer_registries`. Bare numbers only: never which consumer. |
 | OTLP gauges (v0.69.0, #1820) | `app.readiness.status` (`1`/`0` per `readiness.kind` and `readiness.critical`), `messaging.consumer.{registries,declared,subscribed,resubscribes,max_fail_streak}` and `messaging.streams.{consumers,publishers}`. No-ops unless the OTLP export is on, which `config.development.yaml` leaves off. `app.readiness.status` is the last verdict, refreshed only when `/ready` or the debug view is called. |
+| OTLP lifecycle counters | `messaging.connection.close` and `messaging.channel.close` carry `error.type` when the broker gave a reason (go-bricks v0.73.0), so a query grouped by it splits while `sum()` does not. The first `messaging.connection.create` of a process, which used to be dropped, is now counted. |
 
 **Proof:** `make demo-consumer-readiness` runs [scripts/consumer-readiness-demo.sh](scripts/consumer-readiness-demo.sh). The script:
 
 1. Builds and boots its **own** app with `MESSAGING_CONSUMERS_CRITICAL=true`, plus `/_sys/health-debug` on loopback only. The debug view is required: since v0.69.0 it is the only place the counters are, and the script fails rather than fall back to `/ready`. Stop `make run` first: the script refuses a busy port.
 2. Records the app user's vhost permissions with `rabbitmqctl list_user_permissions`.
 3. Revokes **read on `payments.authorized` only**, with the read regex `^(?!payments\.authorized$).*`. Configure and write are unchanged, and every other queue and stream stays readable.
-4. Closes the consumer's own AMQP connection through the management API. The broker checks permissions at subscribe time, not per delivery.
+4. Closes the consumer's own AMQP connection through the management API. The broker checks permissions at subscribe time, not per delivery. It then asserts two app log lines: `AMQP connection closed, reconnecting...`, whose `error` must carry the broker's `CONNECTION_FORCED` reason, and `AMQP connection closed, waiting before redial` (go-bricks v0.73.0), with its `uptime`, `attempt` and `backoff`.
 5. Polls the debug view while `consumer_max_fail_streak` climbs, and `/ready` for its status. Once the streak hits 5, `/ready` answers 503 with exactly `{"status":"not ready"}`, the debug view names the consumer arm, and the `Readiness check failed` log line names the kind (`component=messaging`).
 6. Restores the **exact** recorded permissions and shows the recovery: `subscribed_consumers` back to `declared_consumers`, `consumer_resubscribes` +1, `/ready` 200 with `{"status":"ready"}`.
 
@@ -1185,6 +1211,8 @@ query, args, err := qb.Delete("products").
 ```
 
 **Filter methods:** `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
+
+**Only `qb.Filter()` compares.** go-bricks v0.73.0 deleted `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on the query builder itself (C73.17), which bound their value unjudged. A call to one no longer compiles; use the `f.` door of the same name (`Lte`, `Gte` for the two `OrEq` ones). The `f.` doors judge every operand, list elements included, and `NotIn` over a nil pointer to a list is now the empty set, so it matches every row (C73.16). The demo has no such call.
 
 **Important:** Always use `ToSQL()` (uppercase) not `ToSql()` for consistent API.
 
@@ -1322,7 +1350,7 @@ Explore the code in this order:
    - `job/report_job.go` — the scheduled report under a PostgreSQL advisory lock on a pinned `db.Session` (see [Scheduled Job Under an Advisory Lock](#scheduled-job-under-an-advisory-lock-database-session)); `make advisory-lock-demo` ([scripts/advisory-lock-demo.sh](scripts/advisory-lock-demo.sh)) races two replicas for it
 
 3. **[internal/modules/products/http/](internal/modules/products/http/)** - HTTP handlers
-   - Request validation
+   - Request validation (`validate:` tags; a product id must be a UUID, so a malformed one answers 400 at the boundary)
    - Service method calls
    - Error handling and status codes
    - Structured logging
@@ -1368,6 +1396,7 @@ Explore the code in this order:
     - `domain/` declares `ProductActivity`, the `validate`-tagged struct the typed consumer decodes into
     - `service/` holds the projection (per-product counts, per-partition counts, last-50 ring) — goroutine-safe because partitions deliver concurrently, idempotent because delivery is at-least-once
     - `handlers/` serves `GET /api/v1/products/activity` and the guarded `POST /api/v1/__sim/streams/poison`
+    - `handlers.ProductActivityPath` is the inline-verb route `/products/:id\:activity` (go-bricks v0.73.0), one product's slice beside the products module's `GET /products/:id`; [cmd/api/inline_verb_route_test.go](cmd/api/inline_verb_route_test.go) boots both on a real server and checks the dispatch (see [Inline verb](#inline-verb-one-products-activity))
     - Products publishes into it via the `ActivityRecorder` seam — interface and payload declared in `products/service` (the consumer owns the contract), adapted onto `activity/domain` in `module.go`, wired in [cmd/api/main.go](cmd/api/main.go) — best-effort, WARN on failure
 
 11. **[config.yml](config.yml)** + **[config.development.yaml](config.development.yaml)** - Configuration (base + development overlay)
@@ -1845,6 +1874,112 @@ docker exec go-bricks-rabbitmq rabbitmqctl list_bindings source_name destination
 # shutdown offset flush (one WARN), so the restart replays from the last commit,
 # which the idempotent projection absorbs. Move any alert keyed on the stream
 # client's own "won't be reconnected" line to this ERROR.
+# Timing (go-bricks v0.73.0, stream client v1.9.0, C73.11): each reattach wait
+# is 3-8s. Before the supervisor's next 5s pass, a lost plain stream settles in
+# 3-8s for a consumer and 6-16s for a producer (was 3-11s and 6-22s), so the
+# ERROR comes within about 13s and 21s. Re-time any alert or runbook that waits
+# for the old window. Once one partition of a super-stream consumer is lost, its
+# partitions still queued for retry stay detached until the restart; attached
+# ones keep delivering. An orderly stop no longer WARNs "Failed to close stream
+# consumer" or "... publisher" for a handle already reported lost.
+```
+
+### Over-limit Body Answers 413 `BODY_TOO_LARGE` (go-bricks v0.73.0)
+
+```bash
+# Symptom: an alert, dashboard or client that matched a 413 with code
+# INTERNAL_ERROR, or a 400 for a chunked upload that was too large, goes quiet.
+# As of go-bricks v0.73.0 (C73.6, ADR-152) a body over server.bodylimit
+# (default 10 MB, env SERVER_BODYLIMIT) answers 413 with error.code
+# BODY_TOO_LARGE, whether or not its length is known:
+# - with a Content-Length, the body-limit middleware refuses it before any read
+#   (was 413 INTERNAL_ERROR);
+# - chunked, the limit trips while a typed route decodes it (was 400
+#   BAD_REQUEST on an application/json or +json route).
+# A chunked body that stops being valid JSON before the limit still answers
+# 400: the decoder fails first.
+# JOSE routes split by length (ADR-152). Only a chunked application/jose
+# overflow on POST /api/v1/tokens keeps 413 JOSE_BODY_TOO_LARGE, in the minimal
+# pre-trust envelope. A known-length overflow there now answers 413
+# BODY_TOO_LARGE in the standard envelope, so an alert keyed on
+# JOSE_BODY_TOO_LARGE for known-length bodies goes quiet. The VTS Issuer peer
+# simulator's own 413 JOSE_BODY_TOO_LARGE is the demo's code and does not
+# change.
+# Fix: re-point the match to BODY_TOO_LARGE, keeping JOSE_BODY_TOO_LARGE for
+# chunked JOSE bodies only. make test-products-api sends both shapes to
+# POST /api/v1/products and asserts the code.
+```
+
+### AMQP Redial Waits After a Connection Close (go-bricks v0.73.0)
+
+```bash
+# What changed (go-bricks v0.73.0, C73.3): after an AMQP connection close the
+# client no longer redials at once. It logs the close with the broker's reason
+# in error (for example CONNECTION_FORCED plus the management API's X-Reason),
+# then waits:
+#   INFO  AMQP connection closed, waiting before redial  uptime=… attempt=0 backoff=…
+# After a connection that stayed up at least messaging.reconnect.delay (5s),
+# the wait is a random value below that delay. After a shorter one the line is
+# a WARN, attempt climbs, and the wait follows a jittered ladder toward
+# messaging.reconnect.maxdelay (60s). A broker that keeps dropping new
+# connections therefore logs a WARN per close, further and further apart.
+# During the wait the client is not ready:
+# - a publish waits up to messaging.reconnect.readytimeout (5s), then fails;
+# - under messaging.consumers.critical, /ready can answer 503 for the wait after
+#   the publisher's connection closes (see Consumer-Aware Readiness).
+# A channel close, such as an exchange deleted under a live app (see Topology
+# Self-Repair), is not a connection close and does not wait.
+# Fix: none needed. To let publishes ride through a wait, raise
+# MESSAGING_RECONNECT_READYTIMEOUT. Startup then requires
+# messaging.publishtimeout (when set) to be at least readytimeout +
+# connectiontimeout, and outbox.publishtimeout at least readytimeout and at
+# least connectiontimeout (plus resenddelay unless maxpublishattempts is 1).
+# make demo-consumer-readiness asserts both lines after its forced close.
+```
+
+### Startup Refused for a Retired Messaging Key or a Key Spelling (go-bricks v0.73.0)
+
+```bash
+# Symptom: startup fails with config_invalid, naming a key.
+# - messaging.broker.virtualhost, messaging.routing.exchange,
+#   messaging.routing.key, or anything under messaging.headers (C73.7,
+#   ADR-153). No framework code ever read them, so they used to be ignored.
+#   Any delivery now fails startup, an empty value or a YAML null included. The
+#   vhost has always been the broker URL's path: put a vhost other than / there,
+#   percent-encoded (amqps://host:5671/orders; /orders is %2Forders). Exchange,
+#   routing key and headers belong on each publisher's
+#   messaging.PublisherOptions.
+# - a root section spelled other than in lowercase, such as App: or Server:
+#   (C73.14, ADR-157), or two keys of one map that differ only by case, such as
+#   Port: beside port: (C73.19). Decode used to keep one of them silently.
+# - a delivered-empty server.probes.host, debug.allowedips or database identity
+#   key spelled with an upper-case letter (C73.13, ADR-156), refused as its
+#   lowercase spelling already was.
+# - a negative server.timeout.idle (C73.8, ADR-154). Zero now means the 75s
+#   default, as an unset key does (C73.5).
+# The demo's config files carry none of these, and
+# cmd/api/config_layout_test.go loads the base and the development overlay on
+# the pinned go-bricks. They bite a rendered config file or a deploy's
+# environment.
+# Fix: delete the retired keys, spell every key in lowercase once, and give the
+# idle timeout a positive value. See wiki/DEPLOYING.md.
+```
+
+### Credential URLs Render `xxxxx` in Logs and Errors (go-bricks v0.73.0)
+
+```bash
+# Symptom: a log query, alert or test that matched the old masked URL text
+# (guest:****@ in the streams uri field, or a dial error's URL) stops matching.
+# As of go-bricks v0.73.0 (C73.18, ADR-159) every credential URL the framework
+# logs or puts in an error renders one way: the password and a non-empty query
+# become xxxxx, and the username stays only beside a password, and only when it
+# holds no @, /, ? or #. In development the startup line reads
+#   INFO  Connected to RabbitMQ stream endpoint  uri=rabbitmq-stream://guest:xxxxx@localhost:5552/%2f
+# where it read guest:****@. broker_url still renders *** through the app's
+# filtered logger, because it is one of the framework's default filter needles.
+# Which URL is dialed does not change.
+# Fix: re-point the match to xxxxx. Percent-encode @, /, ? and # in a password
+# anyway, or the URL does not parse the way you meant.
 ```
 
 ### Port Conflicts

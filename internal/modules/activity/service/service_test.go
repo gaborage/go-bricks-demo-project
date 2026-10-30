@@ -196,6 +196,119 @@ func TestSnapshotLimit(t *testing.T) {
 	}
 }
 
+// ProductSlice keeps one product's counts and its events from the shared ring,
+// newest first, and nothing of any other product.
+func TestProductSliceKeepsOneProduct(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+
+	deliveries := []struct {
+		partition string
+		offset    int64
+		productID string
+		action    string
+	}{
+		{partition0, 0, productA, domain.ActionCreated},
+		{partition1, 0, productB, domain.ActionCreated},
+		{partition0, 1, productA, domain.ActionUpdated},
+		{partition1, 1, productB, domain.ActionDeleted},
+		{partition0, 2, productA, domain.ActionUpdated},
+	}
+	for _, d := range deliveries {
+		if err := svc.Project(ctx, event(d.productID, d.action), msg(d.partition, d.offset)); err != nil {
+			t.Fatalf("Project(%s@%d): %v", d.partition, d.offset, err)
+		}
+	}
+
+	slice := svc.ProductSlice(productA)
+
+	if slice.ProductID != productA {
+		t.Errorf("ProductID = %q, want %q", slice.ProductID, productA)
+	}
+	if slice.Delivered != 3 {
+		t.Errorf("Delivered = %d, want 3", slice.Delivered)
+	}
+	if slice.Counts[domain.ActionCreated] != 1 || slice.Counts[domain.ActionUpdated] != 2 || len(slice.Counts) != 2 {
+		t.Errorf("Counts = %v, want created 1 and updated 2", slice.Counts)
+	}
+	if len(slice.Recent) != 3 {
+		t.Fatalf("len(Recent) = %d, want 3", len(slice.Recent))
+	}
+	for i, evt := range slice.Recent {
+		if evt.ProductID != productA {
+			t.Errorf("Recent[%d] is %q's event, want only %q's", i, evt.ProductID, productA)
+		}
+		if want := int64(2 - i); evt.Offset != want {
+			t.Errorf("Recent[%d].Offset = %d, want %d (newest first)", i, evt.Offset, want)
+		}
+	}
+}
+
+// An id the projection has not seen gets zero counts and empty, non-nil
+// collections, so the JSON carries {} and [] rather than null.
+func TestProductSliceForAnUnseenID(t *testing.T) {
+	svc := newTestService()
+	if err := svc.Project(context.Background(), event(productA, domain.ActionCreated), msg(partition0, 0)); err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	slice := svc.ProductSlice(productB)
+
+	if slice.ProductID != productB || slice.Delivered != 0 {
+		t.Errorf("slice = %+v, want %q with nothing delivered", slice, productB)
+	}
+	if slice.Counts == nil || len(slice.Counts) != 0 {
+		t.Errorf("Counts = %#v, want an empty non-nil map", slice.Counts)
+	}
+	if slice.Recent == nil || len(slice.Recent) != 0 {
+		t.Errorf("Recent = %#v, want an empty non-nil slice", slice.Recent)
+	}
+}
+
+// The ring is shared, so a product's older events can leave it while its counts
+// keep them. Recent is then shorter than Delivered.
+func TestProductSliceRecentIsBoundedByTheSharedRing(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+
+	if err := svc.Project(ctx, event(productA, domain.ActionCreated), msg(partition0, 0)); err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	for i := range recentCapacity {
+		if err := svc.Project(ctx, event(productB, domain.ActionUpdated), msg(partition1, int64(i))); err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+	}
+
+	slice := svc.ProductSlice(productA)
+	if slice.Delivered != 1 {
+		t.Errorf("Delivered = %d, want 1", slice.Delivered)
+	}
+	if len(slice.Recent) != 0 {
+		t.Errorf("len(Recent) = %d, want 0: %q's event left the ring", len(slice.Recent), productA)
+	}
+}
+
+// The slice is a defensive copy, as the snapshot is.
+func TestProductSliceIsADefensiveCopy(t *testing.T) {
+	svc := newTestService()
+	if err := svc.Project(context.Background(), event(productA, domain.ActionCreated), msg(partition0, 0)); err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	first := svc.ProductSlice(productA)
+	first.Counts[domain.ActionCreated] = 999
+	first.Recent[0].ProductID = "mutated"
+
+	second := svc.ProductSlice(productA)
+	if got := second.Counts[domain.ActionCreated]; got != 1 {
+		t.Errorf("created count = %d, want 1 — the slice aliased live state", got)
+	}
+	if second.Recent[0].ProductID != productA {
+		t.Errorf("Recent[0].ProductID = %q, want %q", second.Recent[0].ProductID, productA)
+	}
+}
+
 // A service with no publisher bound reports not-ready rather than panicking on
 // the nil handle. This is the state between Init and DeclareStreams, and the
 // permanent state of a build where the stream lane never started.
