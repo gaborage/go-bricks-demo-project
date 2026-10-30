@@ -20,6 +20,13 @@ import (
 // checks fire. With `validate:` the framework rejects the request before the
 // handler runs and answers with its structured VALIDATION_ERROR envelope
 // (details.validationErrors, ADR-084).
+//
+// A product id is validated as a UUID at this boundary. The service mints ids
+// with uuid.New and the products table keys on a UUID column, so any other
+// value can never name a product. Without the check, a malformed id reached
+// PostgreSQL, which refused the cast, and the request answered 500. Now it
+// answers 400 before any query runs. The legacy module reuses
+// GetProductRequest, so its raw route gets the same check.
 
 type CreateProductRequest struct {
 	Name        string  `json:"name" validate:"required"`
@@ -29,7 +36,7 @@ type CreateProductRequest struct {
 }
 
 type UpdateProductRequest struct {
-	ID          string   `param:"id" validate:"required"`
+	ID          string   `param:"id" validate:"required,uuid"`
 	Name        *string  `json:"name"`
 	Description *string  `json:"description"`
 	Price       *float64 `json:"price"`
@@ -37,7 +44,7 @@ type UpdateProductRequest struct {
 }
 
 type GetProductRequest struct {
-	ID string `param:"id"  validate:"required"`
+	ID string `param:"id" validate:"required,uuid"`
 }
 
 type ListProductsRequest struct {
@@ -46,7 +53,7 @@ type ListProductsRequest struct {
 }
 
 type DeleteProductRequest struct {
-	ID string `param:"id" validate:"required"`
+	ID string `param:"id" validate:"required,uuid"`
 }
 
 type ProductResponse struct {

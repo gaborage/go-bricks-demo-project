@@ -13,6 +13,8 @@
 #     which is gated on app.debug + a development environment (go-bricks
 #     v0.61.0, ADR-084) — if this check fails first look at app.debug in
 #     config.development.yaml
+#   * a product id that is not a UUID answers 400 at the boundary, before any
+#     query reaches the database
 #
 # Three checks need go-bricks v0.73.0:
 #
@@ -180,7 +182,7 @@ expect_status 200 "GET /legacy/products/$PRODUCT_ID"
 [[ -z "$(jq_get '.data')" ]] || fail "legacy route is wrapped in an APIResponse envelope — WithRawResponse() contract broken"
 ok "same product, raw JSON — WithRawResponse() bypasses the envelope"
 
-section "7/10  Validation failure — POST /products with a bad body (400 + details)"
+section "7/10  Validation failures — a bad body, and a malformed id (400)"
 
 request POST /products '{"price":-1}'
 expect_status 400 "POST /products (invalid)"
@@ -188,6 +190,14 @@ expect_status 400 "POST /products (invalid)"
 [[ -n "$(jq_get '.error.details.validationErrors')" ]] \
     || fail "error.details.validationErrors missing — check app.debug: true in config.development.yaml (ADR-084 gates details on debug + dev env)"
 ok "400 carries error.details.validationErrors (app.debug + dev env gates pass)"
+
+# A product id is validated as a UUID at the boundary, so a malformed one is
+# refused before any query. It used to reach PostgreSQL's UUID column and
+# answer 500.
+request GET /products/not-a-uuid
+expect_status 400 "GET /products/not-a-uuid"
+[[ "$(jq_get '.error.code')" == "BAD_REQUEST" ]] || fail "malformed id: expected error.code=BAD_REQUEST, got '$(jq_get '.error.code')'"
+ok "a malformed product id answers 400 at the boundary, not 500 from the database"
 
 section "8/10  JSON media types — POST /products as +json and as Application/JSON (go-bricks v0.73.0)"
 
