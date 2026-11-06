@@ -5,7 +5,7 @@
 // path-provenance existence check (ADR-170).
 //
 // cmd/api stays single-tenant. This binary loads its own standalone config,
-// config.tenantfamily.yaml, and boots with the same simulator route veto as cmd/api
+// cmd/tenant-family-demo/config.yaml, and boots with the same simulator route veto as cmd/api
 // (internal/routepolicy). It needs no infrastructure: no handler dials a database.
 package main
 
@@ -23,17 +23,21 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// defaultConfigFile is read from the working directory, the repository root under
-// make tenant-family-demo.
-const defaultConfigFile = "config.tenantfamily.yaml"
+// defaultConfigFile is resolved against the working directory, the repository root
+// under make tenant-family-demo. It sits beside the binary rather than at the root,
+// so it can never match the config.<APP_ENV>.yaml overlay pattern cmd/api loads.
+const defaultConfigFile = "cmd/tenant-family-demo/config.yaml"
 
 // envOverrides are the only environment variables the loader reads, each mapped to
 // the key it sets. Everything else comes from the file, so an unrelated variable in
 // the shell (DATABASE_HOST from a cmd/api session, say) cannot reshape this binary.
+// APP_ENV is allowed so a deploy can leave development, which drops the
+// tenant-owned family and its token simulator (internal/modules/partnerportal).
 var envOverrides = map[string]string{
 	"SERVER_PORT":       "server.port",
 	"LOG_LEVEL":         "log.level",
 	"LOG_OUTPUT_FORMAT": "log.output.format",
+	"APP_ENV":           "app.env",
 }
 
 func main() {

@@ -34,8 +34,10 @@
 # migrations nor keys are needed.
 #
 # Overrides (env): APP_BIN, APP_PORT (default 18091), STARTUP_TIMEOUT, LOG_DIR.
-# The binary reads config.tenantfamily.yaml from the repository root, and of the
-# environment only SERVER_PORT, LOG_LEVEL and LOG_OUTPUT_FORMAT.
+# The binary reads cmd/tenant-family-demo/config.yaml (relative to the repository
+# root), and of the environment only SERVER_PORT, LOG_LEVEL, LOG_OUTPUT_FORMAT
+# and APP_ENV. The script pins APP_ENV=development: the family and the token
+# simulator exist only there.
 
 set -euo pipefail
 
@@ -128,8 +130,10 @@ message_attr() {
 }
 
 # send METHOD PATH [curl args...] — sets STATUS, BODY, RID (X-Request-ID) and
-# HEADERS (the response header file). Waits for the request's access line, which
-# is written after the response.
+# HEADERS (the response header file). Waits for the request's access line
+# (log.type=action), which is written after the response; a [server.tenant] WARN
+# for the same request id comes before it, so the first line carrying the id is
+# not enough.
 send() {
     local method="$1" path="$2"
     shift 2
@@ -138,11 +142,11 @@ send() {
     STATUS="$(head -n1 "$HEADERS" | awk '{print $2}')"
     RID="$(grep -i '^x-request-id:' "$HEADERS" | head -n1 | cut -d: -f2- | tr -d ' \r')"
     if [[ -n "$RID" ]]; then
-        for _ in $(seq 1 20); do
-            grep -qF "\"request_id\":\"$RID\"" "$APP_LOG" && break
+        for _ in $(seq 1 40); do
+            [[ "$(jq_log 'any(.[]; .["log.type"] == "action" and .request_id == $rid)' \
+                --arg rid "$RID")" == "true" ]] && break
             sleep 0.25
         done
-        sleep 0.25
     fi
 }
 
@@ -170,6 +174,7 @@ curl -s -o /dev/null --max-time 2 "$BASE_URL/" || rc=$?
 (( rc == 7 )) || fail "port $APP_PORT is already in use — set APP_PORT to a free port"
 
 env -u DEBUG \
+    APP_ENV=development \
     SERVER_PORT="$APP_PORT" \
     LOG_OUTPUT_FORMAT=json \
     LOG_LEVEL=info \
@@ -269,11 +274,18 @@ check "tenant is acme" "acme" "$(data_field tenant)"
 send GET "$API/tenants/whoami" -H 'X-Tenant-ID: ghost'
 check "X-Tenant-ID ghost (well-formed, unheld) answers 200" "200" "$STATUS"
 check "tenant ghost is written as is" "ghost" "$(data_field tenant)"
+GHOST_RID="$RID"
 
 # --- 5. no unknown tenant id reached a rejection line ---------------------
+# Only the [server.tenant] rejection lines are covered. A header tenant the
+# seat admitted (form-checked, never existence-checked) is the request's
+# tenant, so its access line carries it as `tenant` — framework behavior.
 
 section "5/5  Rejection lines never echo the tenant"
 
+check "access line of the header-admitted ghost carries tenant=ghost" "ghost" \
+    "$(jq_log '[.[] | select(.["log.type"] == "action" and .request_id == $rid)] | .[0].tenant // "<none>"' \
+        -r --arg rid "$GHOST_RID")"
 check "no [server.tenant] line names ghost" "0" \
     "$(jq_log '[.[] | select((.message // "") | startswith("[server.tenant]")) | select(.message | contains("ghost"))] | length')"
 

@@ -4,7 +4,7 @@
 with `multitenant.enabled`. The demo's main app (`cmd/api`) is single-tenant, so
 they run in a second binary, `cmd/tenant-family-demo`, which serves one module,
 [internal/modules/partnerportal/](../internal/modules/partnerportal/), from its
-own config, [config.tenantfamily.yaml](../config.tenantfamily.yaml).
+own config, [cmd/tenant-family-demo/config.yaml](../cmd/tenant-family-demo/config.yaml).
 
 | Feature | Behavior |
 |---------|----------|
@@ -46,7 +46,7 @@ curl -s -H 'X-Tenant-ID: globex' $B/tenants/whoami               # tenant from t
 
 | Route | Tenant from | Notes |
 |-------|-------------|-------|
-| `GET /api/v1/partner/v2/whoami` | JWT `tenant` claim | Family route. `X-Tenant-ID` is never read. |
+| `GET /api/v1/partner/v2/whoami` | JWT `tenant` claim | Family route, development only. `X-Tenant-ID` is never read. |
 | `GET /api/v1/t/:tenant/whoami` | path segment 4 | Behind the seat. Written only when held (ADR-170). |
 | `GET /api/v1/tenants/whoami` | `X-Tenant-ID` | Behind the seat. Grammar checked, existence not. |
 | `POST /api/v1/__sim/partner-token` | `X-Tenant-ID` (seat) | Token simulator, development only. The body's `tenant` is only the claim to mint. |
@@ -72,8 +72,13 @@ the header decides.
 | `GET /t/acme/whoami` | 200, `tenant=acme` |
 | `GET /t/acme/whoami`, `X-Tenant-ID: globex` | 200, `tenant=acme`: the path wins |
 | `GET /tenants/whoami`, `X-Tenant-ID: acme` | 200, `tenant=acme` |
-| `GET /tenants/whoami`, `X-Tenant-ID: ghost` | **200, `tenant=ghost`** (see below) |
-| (whole log) | no `[server.tenant]` line names `ghost` |
+| `GET /tenants/whoami`, `X-Tenant-ID: ghost` | **200, `tenant=ghost`** (see below); its access line carries `tenant=ghost` |
+| (whole log) | no `[server.tenant]` rejection line names `ghost` |
+
+The last check covers only the `[server.tenant]` rejection lines. A header
+tenant the seat admitted (form-checked, never existence-checked) is the
+request's tenant, so the framework writes it as `tenant` on that request's
+access line, unheld or not.
 
 ## Two things to know
 
@@ -106,15 +111,23 @@ them. The body is `{"tenant":"<value>"}`, copied into the claim unchecked, or
 registered only in development, and it carries the `"simulator"` tag the shared
 route veto ([internal/routepolicy](../internal/routepolicy/policy.go)) requires.
 
+The family is development-only too: its verifier trusts nothing but that
+in-process test issuer. With any other `APP_ENV` the module builds neither the
+issuer nor the verifier, registers only the seat's header and path routes, and
+logs one INFO that the family needs a real JWKS resolver. A real deployment
+would build the verifier from its identity provider's JWKS instead.
+
 ## Config loading
 
 The binary does not use `config.Load`, which would read `config.yml` and an
-overlay. Its `ConfigLoader` reads `config.tenantfamily.yaml` (or `-config
-<file>`), applies exactly three environment variables (`SERVER_PORT`,
-`LOG_LEVEL`, `LOG_OUTPUT_FORMAT`), then calls `config.LoadFromMap`, which adds
-the framework defaults, and `config.Validate`. Do not run `cmd/api` with
-`APP_ENV=tenantfamily`: the framework would layer this file over `config.yml` as
-an overlay.
+overlay. Its `ConfigLoader` reads `cmd/tenant-family-demo/config.yaml`, relative
+to the working directory (or `-config <file>`), applies exactly four environment
+variables (`SERVER_PORT`, `LOG_LEVEL`, `LOG_OUTPUT_FORMAT`, `APP_ENV`), then
+calls `config.LoadFromMap`, which adds the framework defaults, and
+`config.Validate`. The file sits beside the binary, not at the repository root,
+so its name never matches the `config.<APP_ENV>.yaml` overlay pattern `cmd/api`
+loads. The file sets `app.env: development`; the script pins
+`APP_ENV=development` as well.
 
 With static tenants the framework refuses a root `database` or `messaging`
 block, so the file has none.
@@ -124,9 +137,12 @@ block, so the file has none.
 - `internal/modules/partnerportal/module_test.go` runs the family policy through
   `TenantPolicy.ResolveForTest` with real tokens: acme publishes, no token is 401
   with a challenge, and a missing claim, a bad-grammar claim and `ghost` are
-  bodyless 403s. It also checks that a single-tenant `Init` registers nothing.
+  bodyless 403s. It also checks that a single-tenant or nil-config `Init`
+  registers nothing, and that outside development only the seat's two routes
+  register, with no issuer, verifier, family or simulator.
 - `cmd/tenant-family-demo/main_test.go` loads the real config file and boots the
   binary's App in-process with a route-table hook that stops `Run` before any
   listener opens. The table passes the simulator veto; a trespass route fails
   with `server.ErrDuplicateRoute`; a module with global middleware fails with
-  `server.ErrTenantFamilyWithGlobalMiddleware`.
+  `server.ErrTenantFamilyWithGlobalMiddleware`. Booted with `APP_ENV=production`,
+  the table holds neither `/__sim/partner-token` nor the family.

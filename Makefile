@@ -495,7 +495,7 @@ log-correlation-demo: build
 
 # --- Tenant-owned route family demo (go-bricks main 0eb5f27f, ADR-164/170) ---
 # Builds and boots cmd/tenant-family-demo, the demo's multi-tenant binary, on
-# APP_PORT (default 18091) from its standalone config.tenantfamily.yaml, then
+# APP_PORT (default 18091) from its standalone cmd/tenant-family-demo/config.yaml, then
 # checks responses and its JSON log: the tenant-owned family /partner/v2 takes
 # its tenant from a JWT claim (401/403 bodyless faults), a path tenant must be
 # held (ADR-170), and a missing tenant is 400 with a correlated [server.tenant]

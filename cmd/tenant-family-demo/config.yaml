@@ -2,17 +2,21 @@
 #
 # This is a WHOLE config, not an overlay. cmd/tenant-family-demo reads this one
 # file through its own ConfigLoader and never reads config.yml or
-# config.development.yaml. Do not run cmd/api with APP_ENV=tenantfamily: the
-# framework would layer this file over config.yml as config.<APP_ENV>.yaml, and
-# the result is neither binary's config.
+# config.development.yaml. It lives beside the binary, not at the repository
+# root, so its name can never match the framework's config.<APP_ENV>.yaml overlay
+# pattern for cmd/api.
 #
 # Environment variables do NOT override this file wholesale. The loader honors
-# exactly three, so the demo script can pick a port and force JSON logs:
-#   SERVER_PORT, LOG_LEVEL, LOG_OUTPUT_FORMAT
+# exactly four, so the demo script can pick a port and force JSON logs, and a
+# deploy can leave development:
+#   SERVER_PORT, LOG_LEVEL, LOG_OUTPUT_FORMAT, APP_ENV
 # See cmd/tenant-family-demo/main.go.
 
 app:
   name: go-bricks-tenant-family-demo
+  # development registers the tenant-owned family and its token simulator, which
+  # trust an in-process test issuer. Any other APP_ENV serves only the seat's
+  # header and path routes.
   env: development
 
 server:

@@ -41,7 +41,7 @@ func TestLoadConfig(t *testing.T) {
 	assert.Empty(t, cfg.Database.Host)
 }
 
-// Only the three allowlisted variables reach the config; anything else in the
+// Only the four allowlisted variables reach the config; anything else in the
 // environment is ignored.
 func TestLoadConfigEnvAllowlist(t *testing.T) {
 	env := map[string]string{
@@ -50,12 +50,14 @@ func TestLoadConfigEnvAllowlist(t *testing.T) {
 		"LOG_OUTPUT_FORMAT": "json",
 		"DATABASE_HOST":     "db.example.invalid",
 		"APP_NAME":          "renamed",
+		"APP_ENV":           "production",
 	}
 	cfg, err := loadConfig(configPath(t), func(k string) (string, bool) { v, ok := env[k]; return v, ok })
 	require.NoError(t, err)
 
 	assert.Equal(t, 18123, cfg.Server.Port)
 	assert.Equal(t, "debug", cfg.Log.Level)
+	assert.Equal(t, "production", cfg.App.Env)
 	assert.Empty(t, cfg.Database.Host)
 	assert.Equal(t, "go-bricks-tenant-family-demo", cfg.App.Name)
 }
@@ -116,6 +118,29 @@ func TestRouteTablePassesSimulatorPolicy(t *testing.T) {
 		"GET /api/v1/t/:tenant/whoami",
 		"POST /api/v1/__sim/partner-token",
 		"GET /api/v1/partner/v2/whoami",
+	}, registered)
+}
+
+// With APP_ENV=production the binary registers neither the token simulator nor the
+// family that trusts its tokens: only the seat's header and path routes remain.
+func TestRouteTableOutsideDevelopmentHasNoSimulatorOrFamily(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+
+	routes, policyErr, runErr := bootUntilRoutes(t, partnerportal.NewModule())
+
+	require.ErrorIs(t, runErr, errRouteTableSeen)
+	require.NoError(t, policyErr)
+
+	var registered []string
+	for i := range routes {
+		assert.False(t, routepolicy.IsSimulatorPath(routes[i].Path), "simulator registered: %s", routes[i].Path)
+		if routes[i].ModuleName == "partnerportal" {
+			registered = append(registered, routes[i].Method+" "+routes[i].Path)
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"GET /api/v1/tenants/whoami",
+		"GET /api/v1/t/:tenant/whoami",
 	}, registered)
 }
 

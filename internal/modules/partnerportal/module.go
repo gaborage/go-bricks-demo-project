@@ -7,6 +7,12 @@
 // cmd/tenant-family-demo does, from its own multi-tenant config. With multitenant
 // disabled the module initializes nothing and registers no route, because
 // TenantOwnedGroup panics on a server that installed no tenant seat.
+//
+// The family and its token simulator exist only in development. The family's
+// verifier trusts an in-process test issuer (go-bricks auth/testing), and the
+// simulator mints tokens for it to anyone who asks, so neither is built outside
+// development: there the module serves only the seat's header and path routes and
+// logs that the family needs a real JWKS resolver.
 package partnerportal
 
 import (
@@ -50,12 +56,14 @@ type Module struct {
 	logger logger.Logger
 	// enabled is deps.Config.Multitenant.Enabled. Off, every other field stays nil.
 	enabled bool
-	// development gates the token simulator: it mints credentials the family trusts.
+	// development gates the family and the token simulator: the simulator mints
+	// credentials the family trusts, and the family trusts only that test issuer.
 	development bool
 	// issuer signs the simulator's tokens with an RSA key generated at Init. The key
 	// lives only in this process, so a restart invalidates every minted token.
+	// Built in development only; nil elsewhere.
 	issuer *authtesting.Issuer
-	// verifier trusts exactly the issuer's public key.
+	// verifier trusts exactly the issuer's public key. Built in development only.
 	verifier *auth.Verifier
 	// tenants answers whether the deployment holds a tenant id.
 	tenants multitenant.TenantChecker
@@ -75,7 +83,7 @@ func (m *Module) Name() string {
 // so a single-tenant app can register the module and serve nothing from it.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
-	if !deps.Config.Multitenant.Enabled {
+	if deps.Config == nil || !deps.Config.Multitenant.Enabled {
 		m.logger.Info().Msg("partnerportal: multitenant disabled, registering no routes")
 		return nil
 	}
@@ -86,6 +94,13 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// from deps.Config, so HasTenant here answers as the tenant seat's ADR-170 check
 	// does. ModuleDeps carries no tenant store, and this demo's tenants are static.
 	m.tenants = config.NewTenantStore(deps.Config)
+
+	if !m.development {
+		m.logger.Info().
+			Str("family", FamilyPrefix).
+			Msg("partnerportal: tenant-owned family and token simulator not registered outside development — the family needs a real JWKS resolver in place of the in-process test issuer")
+		return nil
+	}
 
 	m.issuer = authtesting.NewIssuer()
 	verifier, err := auth.NewVerifierWithResolver(auth.Config(deps.Config.Auth.JWT), deps.Logger,
@@ -98,7 +113,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 
 // RegisterRoutes implements app.RouteRegisterer. It registers nothing with
-// multitenant disabled.
+// multitenant disabled, and only the seat's header and path routes outside
+// development.
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	if !m.enabled {
 		return
@@ -109,12 +125,14 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, HeaderWhoamiPath, whoami(SourceHeader))
 	server.GET(hr, r, PathWhoamiPath, whoami(SourcePath))
 
+	if !m.development {
+		return
+	}
+
 	// The simulator sits outside the family, so the seat resolves its tenant from
 	// X-Tenant-ID like any header route. The tenant in the request body is only the
 	// claim to mint.
-	if m.development {
-		server.POST(hr, r, TokenSimulatorPath, m.mintToken, server.WithTags("simulator"))
-	}
+	server.POST(hr, r, TokenSimulatorPath, m.mintToken, server.WithTags("simulator"))
 
 	// The family skips the seat. Its policy runs on each of its routes instead.
 	family := server.TenantOwnedGroup(r, FamilyPrefix, m.familyPolicy())

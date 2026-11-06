@@ -19,10 +19,10 @@ import (
 // testConfig is a multi-tenant config holding acme, globex and initech, with the
 // JWT settings the in-process issuer's defaults satisfy. LoadFromMap does not
 // validate, so the tenants need no database block here.
-func testConfig(t *testing.T, multitenantEnabled bool) *config.Config {
+func testConfig(t *testing.T, multitenantEnabled bool, env string) *config.Config {
 	t.Helper()
 	cfg, err := config.LoadFromMap(map[string]any{
-		"app": map[string]any{"name": "partnerportal-test", "env": "development"},
+		"app": map[string]any{"name": "partnerportal-test", "env": env},
 		"multitenant": map[string]any{
 			"enabled": multitenantEnabled,
 			"tenants": map[string]any{
@@ -43,17 +43,29 @@ func testConfig(t *testing.T, multitenantEnabled bool) *config.Config {
 
 func initModule(t *testing.T, multitenantEnabled bool) (*Module, *config.Config) {
 	t.Helper()
-	cfg := testConfig(t, multitenantEnabled)
+	return initModuleIn(t, multitenantEnabled, config.EnvDevelopment)
+}
+
+func initModuleIn(t *testing.T, multitenantEnabled bool, env string) (*Module, *config.Config) {
+	t.Helper()
+	cfg := testConfig(t, multitenantEnabled, env)
 	m := NewModule()
 	require.NoError(t, m.Init(&app.ModuleDeps{Logger: logger.New("disabled", false), Config: cfg}))
 	t.Cleanup(func() { assert.NoError(t, m.Shutdown()) })
 	return m, cfg
 }
 
-// countingRegistrar counts every route and group registered on it.
-type countingRegistrar struct{ calls int }
+// countingRegistrar counts every route and group registered on it, and records
+// each added route as "METHOD path".
+type countingRegistrar struct {
+	calls int
+	added []string
+}
 
-func (r *countingRegistrar) Add(string, string, server.Handler, ...server.MiddlewareFunc) { r.calls++ }
+func (r *countingRegistrar) Add(method, path string, _ server.Handler, _ ...server.MiddlewareFunc) {
+	r.calls++
+	r.added = append(r.added, method+" "+path)
+}
 
 func (r *countingRegistrar) Group(string, ...server.MiddlewareFunc) server.RouteRegistrar {
 	r.calls++
@@ -78,6 +90,40 @@ func TestSingleTenantRegistersNothing(t *testing.T) {
 	reg := &countingRegistrar{}
 	require.NotPanics(t, func() { m.RegisterRoutes(server.NewHandlerRegistry(cfg), reg) })
 	assert.Zero(t, reg.calls)
+}
+
+// A missing config is treated as single-tenant, not dereferenced.
+func TestNilConfigRegistersNothing(t *testing.T) {
+	m := NewModule()
+	require.NotPanics(t, func() {
+		require.NoError(t, m.Init(&app.ModuleDeps{Logger: logger.New("disabled", false)}))
+	})
+	assert.False(t, m.enabled)
+	assert.NoError(t, m.Shutdown())
+}
+
+// Outside development the token simulator mints nothing and the family, whose
+// verifier trusts only the in-process test issuer, is neither built nor
+// registered: only the seat's header and path routes remain.
+func TestOutsideDevelopmentRegistersOnlySeatRoutes(t *testing.T) {
+	for _, env := range []string{"production", "staging"} {
+		t.Run(env, func(t *testing.T) {
+			m, cfg := initModuleIn(t, true, env)
+
+			assert.True(t, m.enabled)
+			assert.False(t, m.development)
+			assert.Nil(t, m.issuer)
+			assert.Nil(t, m.verifier)
+
+			reg := &countingRegistrar{}
+			require.NotPanics(t, func() { m.RegisterRoutes(server.NewHandlerRegistry(cfg), reg) })
+			assert.ElementsMatch(t, []string{
+				http.MethodGet + " " + HeaderWhoamiPath,
+				http.MethodGet + " " + PathWhoamiPath,
+			}, reg.added)
+			assert.NotContains(t, reg.added, http.MethodPost+" "+TokenSimulatorPath)
+		})
+	}
 }
 
 // resolution is one run of the family policy: the tenant it published, whether Deny
