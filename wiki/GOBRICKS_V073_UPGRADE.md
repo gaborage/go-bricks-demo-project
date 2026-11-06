@@ -1,17 +1,19 @@
-# go-bricks v0.72.0 → main `4cacc99c`: operator decision record
+# go-bricks v0.72.0 → main `0eb5f27f`: operator decision record
 
 This record covers the move from the go-bricks v0.72.0 tag to go-bricks main
-commit `4cacc99c` (pseudo-version `v0.72.1-0.20261029151308-4cacc99c4fad`). That
-commit is the v0.73.0 release candidate: the draft release (go-bricks #2137) adds
-only the release commit on top of it. The pin is that exact commit, not whatever
-main is later. A re-pin to the `v0.73.0` tag follows once the tag is published
-(see [Open follow-up](#open-follow-up)).
+commit `0eb5f27f` (pseudo-version `v0.72.1-0.20261106050221-0eb5f27fb6f4`,
+committed 2026-11-05), in two hops: first to main `4cacc99c`
+(`v0.72.1-0.20261029151308-4cacc99c4fad`), then on to `0eb5f27f`. Both are
+v0.73.0 release candidates; the `v0.73.0` tag is not published yet. The pin is
+that exact commit, not whatever main is later. A re-pin to the tag follows once
+it is published (see [Open follow-up](#open-follow-up)).
 
-The range is 78 commits. The changes are the atoms in the framework's migration
-guide (`wiki/migrations.md`, section E73): C73.1 to C73.19. There is no C73.15;
-that is a gap in the guide's numbering, not a skipped atom. This record lists the
-ones that reach the demo, the decision for each, and what an operator must do
-before deploying. The previous record is
+The range is 127 commits: 78 to `4cacc99c`, then 49 more. The changes are the
+atoms in the framework's migration guide (`wiki/migrations.md`, section E73):
+C73.1 to C73.19 in the first hop, C73.20 to C73.36 in the second. There is no
+C73.15; that is a gap in the guide's numbering, not a skipped atom. This record
+lists the ones that reach the demo, the decision for each, and what an operator
+must do before deploying. The previous record is
 [GOBRICKS_V072_UPGRADE.md](GOBRICKS_V072_UPGRADE.md).
 
 ## At a glance
@@ -20,7 +22,7 @@ before deploying. The previous record is
   and every `.go` file are unchanged, so the binary's only new inputs are
   `go.mod` and `go.sum`. The other edits are the `GO_BRICKS_REF` pin in the
   Makefile, the version literals in the docs, one script comment, and this
-  record.
+  record. Both hops hold to this.
 - **No compile or test break.** No atom matches a demo call site that the
   compiler or a test sees.
 - **No feature adopted.** The skipped ones and why are under
@@ -29,22 +31,39 @@ before deploying. The previous record is
   now wait (C73.3), the keep-alive idle default is 75s (C73.5), an over-limit
   body answers 413 `BODY_TOO_LARGE` (C73.6), stream reattach waits are 3–8s
   (C73.11), credential URLs in errors and log fields render `xxxxx` (C73.18),
-  and two AMQP metrics are fixed.
+  and two AMQP metrics are fixed. From the second hop: inbound paths in the
+  access line, the span and framework WARN/ERROR lines print the masked route
+  template (C73.29), framework WARN/ERROR lines gain `http.route` and request
+  correlation (C73.30–C73.32), and a request that logs a WARN or ERROR keeps
+  its access line (C73.33).
+- **JOSE and sealing run on `go-jose/v4` 4.1.9** (was 4.1.6), and the framework
+  JOSE doors now parse with go-jose's compact-only parsers. See
+  [go-jose 4.1.9 on the PAN path](#go-jose-419-on-the-pan-path).
+- **Multi-tenant atoms (C73.20–C73.24, C73.34–C73.36) do not reach the app**,
+  which runs single-tenant. The migrate fleet's tenant IDs already fit the
+  fixed grammar.
 - **Operator must-dos (non-development deploys):** remove
   `MESSAGING_BROKER_VIRTUALHOST`, `MESSAGING_ROUTING_EXCHANGE`,
   `MESSAGING_ROUTING_KEY` and every `MESSAGING_HEADERS*` variable (C73.7);
   check the idle timeout of every proxy in front of the service (C73.5);
-  re-point log queries and alerts on the changed texts and codes.
+  re-point log queries and alerts on the changed texts and codes, and anything
+  keyed on a concrete `url.path` to `http.route` (C73.29); open one connection
+  through each PostgreSQL pooler or proxy, since pgx 5.12.0 refuses a startup
+  without AuthenticationOk (C73.25).
 
 ## Version path
 
 | Hop | Commit date | What moves in `go.mod` |
 |-----|-------------|------------------------|
 | v0.72.0 → `4cacc99c` | 2026-10-29 | go-bricks, `echo/v5` 5.4.0 → 5.4.2 and `koanf/v2` 2.3.8 → 2.4.1 (both direct), plus 5 indirect modules. See [Moved modules](#moved-modules). |
+| `4cacc99c` → `0eb5f27f` | 2026-11-05 | go-bricks, `go-jose/v4` 4.1.6 → 4.1.9, `pgx/v5` 5.11.0 → 5.12.0 and `echo/v5` 5.4.2 → 5.4.4 (all direct), plus `validator/v10` 10.30.5 → 10.30.6 and `mimetype` 1.4.15 → 1.4.16 (indirect). |
 
 The `go` directive (`go 1.27.0`) and the `toolchain` line (`go1.27.3`) are
-unchanged. `go-jose/v4` stays at 4.1.6 and `golang.org/x/crypto` does not move,
-so the JOSE and sealing paths run on the same crypto modules as before.
+unchanged. `golang.org/x/crypto` does not move in either hop. `go-jose/v4` stays
+at 4.1.6 in the first hop and moves to 4.1.9 in the second, so the JOSE and
+sealing paths run on a new go-jose (see
+[go-jose 4.1.9 on the PAN path](#go-jose-419-on-the-pan-path)). The demo's own
+`aws-sdk-go-v2` pins do not move.
 
 ## Changes that reach this demo
 
@@ -72,6 +91,23 @@ no effect.
 | C73.17 | The six comparator methods on `*database.QueryBuilder` are deleted. | none | Every compare goes through `qb.Filter()` ([products/repository/repository.go:92](../internal/modules/products/repository/repository.go), :246, :327). | None. |
 | C73.18 | A credential URL in AMQP, streams, Oracle, httpclient and migration-source errors and log fields renders one posture. | forced (log text) | The streams `uri` log field for [config.development.yaml:51](../config.development.yaml). No test pins the old text. | None. |
 | C73.19 | Two keys of one map that differ only by case fail startup. | none | No mixed-case key. | None. |
+| C73.20 | The global rate limiter keys every request on the client IP, a resolved tenant included. | none | `multitenant.enabled` is unset, so every request was already untenanted and keyed on the client IP. `app.rate.limit` 2000 ([config.development.yaml:104](../config.development.yaml)). No `server.RateLimit(` call. | None. A load test from one host already shares one bucket. |
+| C73.21 | A well-formed tenant the store does not hold answers 400 `BAD_REQUEST` "Invalid tenant", not 500. | none | Single-tenant app. | None. |
+| C73.22 | A tenant ID off `^[a-z0-9-]{1,64}$` fails at static config load and at the publish stamp; a stored one parks in the outbox. | none | The app loads no `multitenant` section. Its outbox rows carry no tenant stamp, so the relay's new poison rule never fires. [config.multitenant.yaml:25](../config.multitenant.yaml) holds `acme`, `globex` and `initech`, all in the grammar, and is read only by the migrate CLI and `cmd/check-tenant-roles`. | None. |
+| C73.23 | A migration tenant ID outside the grammar is refused by the secrets provider and the HTTP tenant source; `migration.ErrInvalidTenantID` is removed. | none | The migrate targets use the static source and `--credentials-from config-file`. The verdict demo's injected tenant `unreachable` ([scripts/migrate-verdict-demo.sh:64](../scripts/migrate-verdict-demo.sh)) fits the grammar. No Go reference to the removed sentinel. | None. |
+| C73.24 | The subdomain resolver folds the host's ASCII case. | none | No resolver. | None. |
+| C73.25 | pgx v5.12.0: two advisories fixed, a startup without AuthenticationOk refused, `sslcertmode` read, `pgx.BatchResults` gains `Tx()`. | forced (no effect seen) | `cmd/check-tenant-roles` imports pgx directly ([main.go:50](../cmd/check-tenant-roles/main.go)) but sends no batch and implements no `BatchResults`. No `sslcertmode` or `PGSSLCERTMODE`. The docker Postgres sends AuthenticationOk. | Keep. |
+| C73.26 | validator v10.30.6 moves `ulid`, postcode and strict BCP 47 verdicts and reads `excluded_without` as several fields. | none | No demo `validate` tag uses one of them. | None. |
+| C73.27 | `server.TestContextOption` is removed for the sealed `server.TestContextSeeder`. | none | Every `server.NewHandlerContextForTest` call in the handler tests passes three arguments and no option. | None. |
+| C73.28 | `server.SetupMiddlewares` is unexported. | none | No call. | None. |
+| C73.29 | The access line's `url.path` and message, the span's `url.path` and every framework WARN and ERROR `path` print the masked route template. | forced (log and span text) | Every route with a parameter: `/products/:id`, `/legacy/products/:id`, `/analytics/views/:productId` and the scheduler's `/_sys/job/:jobId`. The Grafana dashboards and `cmd/perf-report` key on `http.route`, and no test or script reads `url.path` or `completed in`. | Accept. See [Forced behaviour changes](#forced-behaviour-changes). |
+| C73.30 | The tenant-rejection WARN carries `http.route`, `request_id`, `correlation_id` and the OTel ids. | none | Single-tenant app: the line never fires. | None. |
+| C73.31 | Both `Panic recovered` lines and `unhandled error` carry the same fields. | forced (log fields) | No demo test or tool reads either line. | None. |
+| C73.32 | The forwarded-client-cert WARNs print `client=` (the real client) and `peer=`; they and the IP pre-guard WARN gain correlation. | forced (log fields) | The IP pre-guard is on by default. No forwarded-client-cert config. | None. |
+| C73.33 | A request's access line is no longer dropped when a WARN+ line or `EscalateSeverity` escalates it. | forced | No demo module logs through the request context (no `WithContext(` call) or calls `EscalateSeverity`. The framework's own query-tracking WARN and ERROR lines escalate it, and a JOSE route's 415 now keeps its status-derived access line. | Accept. See [Forced behaviour changes](#forced-behaviour-changes). |
+| C73.34 | Under a path-reading resolver, routes under `/_sys` and the debug prefix are reserved; `RouteDescriptor.Package` is the handler's package. | none | No resolver. The demo's simulators live under `/__sim/`, not `/_sys/`. [cmd/api/route_policy.go](../cmd/api/route_policy.go) reads the path, the module and the tags, never `Package`. | None. |
+| C73.35 | Under a path-reading resolver, the framework's `/_sys` and debug routes skip tenant resolution. | none | No resolver. | None. |
+| C73.36 | Under a path-reading resolver, an unknown path tenant is never written and answers 400 from the handler adapter. | none | No resolver, no custom `ResourceSource`, no hand-built server. | None. |
 
 **Commits without an atom that reach the demo:**
 
@@ -82,6 +118,11 @@ no effect.
 | `424a51e9` | Typed routes decode every admitted JSON media type themselves, instead of through echo's `Bind`. | `application/json` is unchanged. `+json` media types now bind. Every demo route and load test sends `application/json`. |
 | `01d20718` | The scheduler's unknown-job 404 no longer echoes `job_id`. | Only `POST /api/v1/_sys/job/:jobId` with an unknown id. `make advisory-lock-demo` triggers the known `test-job`. |
 | `3ecef7eb`, `181f7c7c`, `5dc22aab`, `9d99ef6e`, `f47c6b6f`, `98f0c16b`, `4cacc99c` | Module bumps. | See [Moved modules](#moved-modules). |
+| `67726584` (#2312) | The framework JOSE doors parse with go-jose's `ParseSignedCompact` and `ParseEncryptedCompact` instead of the deprecated `ParseSigned`/`ParseEncrypted`, which also accepted the JSON serialization. | Every demo JOSE body is a compact: the tokens relays and simulators, `seal-payload` and the sealed AMQP envelope. See [go-jose 4.1.9 on the PAN path](#go-jose-419-on-the-pan-path). |
+| `3dd8a947` (#2321) | A lint rule inside go-bricks forbids its own code from reading the inbound URL or path values outside the masking helpers. | None: it governs framework code only. |
+| `6ae2ef93` (#2325) | The client address is extracted once per request. | Performance only. |
+| `448055de` … `a1496a1d`, `df083d1f` (#2297–#2307, #2326) | Tenant-owned route families (`server.TenantOwnedGroup`), the tenant policy, a tenant read from a verified auth claim, and `server.Options.TenantChecker`. | Not adopted; see [Features not adopted](#features-not-adopted). |
+| `5b3e7a5b`, `a5c5293e`, `8d2aa96c`, `86038175`, `d9079490` | Module bumps: go-jose 4.1.9, pgx 5.12.0, echo 5.4.4, validator 10.30.6. | See [Moved modules](#moved-modules). |
 
 **No schema change.** `outbox/` and `inbox/` have no non-test change in the
 range, and no golden SQL file under `outbox/testdata` or `inbox/testdata` moved.
@@ -136,6 +177,55 @@ These need no code change, but an operator sees them.
   one of the framework's default filter needles. A username that holds `@`, `/`,
   `?` or `#` is now masked whole. Which URL is dialed does not change.
 - **AMQP metrics.** See `678166d4` and `5f6f5204` above.
+- **Masked inbound paths (C73.29).** The access line's `url.path` and message,
+  the span's `url.path` and the `path` of every framework WARN and ERROR now
+  print the matched route template with each parameter replaced by `REDACTED`:
+  `GET /api/v1/products/<uuid>` logs `url.path=/api/v1/products/REDACTED`, and a
+  request that matched no route (a 404) logs the bare `REDACTED`. `http.route`,
+  the span name and the metrics are unchanged. Each listener logs one INFO line
+  at startup: `[server.paths] inbound paths render from the matched route
+  template rule=masked_route_template listener=application ...`. To find the
+  concrete path for an incident, read the edge (load balancer) logs.
+- **Correlated framework lines (C73.30–C73.32).** `Panic recovered`, `unhandled
+  error`, the IP pre-guard 429 WARN and the forwarded-client-cert WARNs now carry
+  `http.route`, `request_id`, `correlation_id` and, with tracing on, `trace_id`
+  and `span_id`. A parser that refuses unknown fields needs the new ones.
+- **Access line kept on escalation (C73.33).** A request that logged a WARN or
+  ERROR through its context used to lose its access line. It now keeps it, at the
+  higher of the status-derived level and the escalated one. In this demo that is
+  the framework's own lines: a slow-query WARN or a query ERROR on a request, and
+  a plaintext POST to a JOSE route, whose 415 now writes an access line at WARN.
+  Action lines are exported at 100% (see the Alloy and collector configs), so
+  log volume rises by one line for each such request.
+
+## go-jose 4.1.9 on the PAN path
+
+`go-jose/v4` is a direct module here: the tokens relays import it for
+`josev4.PS256`, `josev4.A128GCM` and `josev4.A256GCM`. It runs under the
+go-bricks `jose` doors that carry the PAN (the three tokens relays and their
+simulators) and under the sealed AMQP codec that carries the payments card. The
+second hop moves it 4.1.6 → 4.1.9. Read from the module source diff:
+
+- `ParseSigned` and `ParseEncrypted` are deprecated. go-bricks now calls the
+  compact-only parsers (`67726584`, #2312), so a JSON-serialized JWS or JWE is
+  refused at the parser instead of reaching the framework's own checks. Every
+  demo body is a compact, so nothing changes on the wire.
+- The JSON serialization is capped at 32 recipients (`MaxRecipients`) and 32
+  signatures (`MaxSignatures`). A compact holds one of each.
+- A protected header that decodes to JSON `null` is refused, and a header member
+  present with an empty string now counts as present in the duplicate-header
+  check.
+- An `x5c` certificate with an RSA modulus over 4096 bits is refused. The demo's
+  keys are 2048-bit DER resolved by kid, with no `x5c`, `jwk` or `epk` header.
+- ML-DSA signature algorithms (`ML-DSA-44`, `-65`, `-87`) are added under Go
+  1.27. No demo policy admits them: every policy names its algorithm.
+- `ErrUnsupportedEllipticCurve` is folded into `ErrUnsupportedKeyType`. The demo
+  references neither.
+
+Decision: keep. Valid traffic on the demo's kid-resolved DER keys is unaffected,
+and the tokens and payments tests pass on 4.1.9 (see
+[Verification](#verification)). Check before deploy: a real partner integration
+on these doors still opens its replies, and it sends compacts.
 
 ## Removed messaging keys
 
@@ -182,8 +272,17 @@ still decodes a file that carries them.
 | `github.com/go-co-op/gocron/v2` | v2.22.0 | v2.23.0 | indirect | The scheduler. |
 | `github.com/fxamacker/cbor/v2` | v2.9.6 | v2.10.0 | indirect | go-bricks `cache` only; the demo enables no cache. |
 
-This bump supersedes the open Dependabot pull requests for `echo/v5` 5.4.2
-(#139) and `koanf/v2` 2.4.1 (#138). The `aws-sdk-go-v2` modules do not move.
+| `github.com/gaborage/go-bricks` | `4cacc99c` pseudo-version | `v0.72.1-0.20261106050221-0eb5f27fb6f4` | direct | Second hop. |
+| `github.com/go-jose/go-jose/v4` | v4.1.6 | v4.1.9 | direct | See [go-jose 4.1.9 on the PAN path](#go-jose-419-on-the-pan-path). |
+| `github.com/jackc/pgx/v5` | v5.11.0 | v5.12.0 | direct | C73.25. Fixes GHSA-j38q-h3ph-jjpq and GHSA-95fj-3fxw-g62g; refuses a startup without AuthenticationOk. |
+| `github.com/labstack/echo/v5` | v5.4.2 | v5.4.4 | direct | Hardens echo's Proxy middleware so a client cannot strip the derived `X-Real-IP`. go-bricks does not use that middleware. |
+| `github.com/go-playground/validator/v10` | v10.30.5 | v10.30.6 | indirect | C73.26. |
+| `github.com/gabriel-vasile/mimetype` | v1.4.15 | v1.4.16 | indirect | Retracts v1.4.15 (GHSA-jjmc-jx7j-hp68). validator reaches it only through `image` and `mimetype` tags, which the demo does not use. |
+
+The first-hop rows above are v0.72.0 → `4cacc99c`; the last six are
+`4cacc99c` → `0eb5f27f`. The first hop supersedes the open Dependabot pull
+requests for `echo/v5` 5.4.2 (#139) and `koanf/v2` 2.4.1 (#138). The
+`aws-sdk-go-v2` modules do not move in either hop.
 
 ## Features not adopted
 
@@ -198,6 +297,11 @@ None. Skipped, with the reason:
   plaintext 5552. For deploys, see the table below.
 - **`+json` media types on typed routes** and **`server.RouteConflict.Reason`.**
   Nothing in the demo needs them.
+- **Tenant-owned route families** (`server.TenantOwnedGroup`, the tenant policy,
+  a tenant read from a verified auth claim), **`server.TenantRateLimit`**,
+  **`server.NewUnknownTenantError`** and **`server.Options.TenantChecker`**. The
+  app runs single-tenant; they belong to a multi-tenant showcase.
+- **ML-DSA signatures** (go-jose 4.1.9). The demo's partners are RSA.
 
 ## Per-environment operator config changes required before deploy
 
@@ -217,15 +321,17 @@ docker stack (see [Verification](#verification)).
 | `MESSAGING_CONSUMERS_CRITICAL` (C73.3) | Off by default. | Where it is on, `/ready` can answer 503 for up to `reconnect.delay` after the publisher's connection closes. Size readiness probe thresholds for that, and keep liveness on `/health`. |
 | `MESSAGING_STREAMS_URI` with `rabbitmq-stream+tls://` (C73.11) | DEPLOYING.md's example uses this scheme. Before this pin such a URI timed out at startup. | It now connects only if the broker certificate chains to the system trust store and names the dialed host, `MESSAGING_STREAMS_ADDRESSRESOLVER_HOST` included. go-bricks has no CA seam. Otherwise startup fails with an x509 error. |
 | Mixed-case config keys (C73.13, C73.14, C73.19) | The repo is clean. | A rendered config file with keys such as `Server:` or `Port:`, or two keys that differ only by case, now fails startup. |
-| Log queries and alerts | — | Re-point anything that matches the old URL text (C73.18), a 413 with `INTERNAL_ERROR` (C73.6), the 3–11s stream-loss window (C73.11), or `messaging.connection.create` counts across a version boundary (`5f6f5204`). |
+| Log queries and alerts | — | Re-point anything that matches the old URL text (C73.18), a 413 with `INTERNAL_ERROR` (C73.6), the 3–11s stream-loss window (C73.11), or `messaging.connection.create` counts across a version boundary (`5f6f5204`). From the second hop: move anything keyed on a concrete `url.path` or on the path inside the access message to `http.route` (C73.29); let parsers accept the new correlation fields (C73.30–C73.32); and expect more action lines, plus a 2xx at WARN or ERROR where a request's framework line escalated (C73.33). |
+| PostgreSQL poolers and proxies (C73.25) | The demo dials Postgres directly. | Open one connection through each pooler or proxy in the path: pgx 5.12.0 refuses a startup that sends ReadyForQuery before AuthenticationOk. Do not set `PGSSLCERTMODE`, empty or `disable`, where a client certificate must be sent. |
 | Performance comparisons across versions | See [PERF_VERSION_COMPARISON.md](PERF_VERSION_COMPARISON.md). | The idle default moves from 60s to 75s, which changes how a 60s proxy behaves after load. To compare with v0.72.0 series, either accept that or hold 60s with `SERVER_TIMEOUT_IDLE=60s`; an env var is the only door, because the method forbids a `config.yml` change mid-series. echo's body-limit reader is now one heap allocation per request (source read, not measured). |
 
 ### Multi-tenant migrate CLI (`config.multitenant.yaml`, `go-bricks-migrate`)
 
 | Item | Decision | Before deploy |
 |------|----------|---------------|
-| `GO_BRICKS_REF` | Now `4cacc99c4fad` (was `v0.72.0`). The recipe checks the ref out with git, which cannot resolve a pseudo-version, so a main pin is written as its commit hash. `tools/migration` has no tag at this commit (the latest is `tools/migration/v0.72.0`). That does not matter: the recipe builds the CLI through the checkout's `go.work`, so it links the in-tree go-bricks at the commit. The CLI built here therefore carries C73.1, C73.14 and C73.19 now. | Rebuild with `make migrate-multitenant-install`. With `GO_BRICKS_PATH` set, check out `4cacc99c` there first. Still never export `GOBRICKS_MIGRATE_MIGRATOR_USER` or `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD`. |
+| `GO_BRICKS_REF` | Now `0eb5f27fb6f4` (was `4cacc99c4fad`, and `v0.72.0` before that). The recipe checks the ref out with git, which cannot resolve a pseudo-version, so a main pin is written as its commit hash. `tools/migration` has no tag at this commit (the latest is `tools/migration/v0.72.0`). That does not matter: the recipe builds the CLI through the checkout's `go.work`, so it links the in-tree go-bricks at the commit. The CLI built here therefore carries C73.1, C73.14, C73.19, C73.21's `multitenant: unknown tenant:` error prefix and C73.23 now. | Rebuild with `make migrate-multitenant-install`. With `GO_BRICKS_PATH` set, check out `0eb5f27f` there first. Still never export `GOBRICKS_MIGRATE_MIGRATOR_USER` or `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD`. |
 | Tenant vendor (C73.1) | `acme`, `globex` and `initech` each set `type: postgresql`. | None. |
+| Tenant-ID grammar (C73.22, C73.23) | `acme`, `globex`, `initech` and the verdict demo's `unreachable` all match `^[a-z0-9-]{1,64}$`. | Keep any new tenant, in this file, `etc/docker/postgres/multitenant-init.sql` and `scripts/multitenant-reset.sh`, lowercase letters, digits and `-`, at most 64 bytes. |
 
 ### `.env`, `Dockerfile`, compose, CI, load-test jobs
 
@@ -235,6 +341,28 @@ pseudo-version through the module proxy. The `seal-event`, `open-event` and
 read the Go version from it. No load-test script changed.
 
 ## Verification
+
+### Second hop (`4cacc99c` → `0eb5f27f`)
+
+- The gates ran with `GOWORK=off`, so they compiled against the `go.mod` pin:
+  `go build ./...`, `go vet ./...` and `make check` (fmt, lint, and the
+  race-enabled tests) passed. `go test -race` over `cmd/api`, the tokens module
+  and the payments module, the JOSE and sealing paths on go-jose 4.1.9, passed.
+  No test changed.
+- `cmd/api/route_policy_test.go` builds the real route table on the new pin, so
+  C73.34's route admission and descriptor changes leave the simulator rule
+  intact.
+- The impact of each atom C73.20 to C73.36 was judged by grepping the repo with
+  the detect commands in the framework's migration guide.
+- Not checked here: a live boot on the docker stack (the `[server.paths]` startup
+  line and a masked `url.path` on a live access line, C73.29); C73.33's escalated
+  access lines; `make migrate-multitenant-install` at `0eb5f27f`; the go-jose
+  4.1.7–4.1.9 changelogs (the source diff was read instead); the echo v5.4.3
+  release notes (v5.4.4's were read); any load test; and any deployed environment's variables.
+
+### First hop (v0.72.0 → `4cacc99c`)
+
+Everything below ran at `4cacc99c` and was not re-run at `0eb5f27f`.
 
 - The gates ran with `GOWORK=off`, so they compiled against the `go.mod` pin:
   `make check` passed (fmt, lint, and the race-enabled tests). No test changed.
@@ -289,6 +417,7 @@ read the Go version from it. No load-test script changed.
 Re-pin to the `v0.73.0` tag once it is published. Expected work: `go get
 github.com/gaborage/go-bricks@v0.73.0` and `go mod tidy` with `GOWORK=off`; set
 `GO_BRICKS_REF` to `v0.73.0`; change the pseudo-version literals in CLAUDE.md
-and the README and the `4cacc99c` mentions in CLAUDE.md and
-`scripts/consumer-readiness-demo.sh` back to the tag; confirm that the tag adds
-nothing past `4cacc99c` but the release commit; and add a hop to this record.
+and the README and the `0eb5f27f` mentions in CLAUDE.md and
+`scripts/consumer-readiness-demo.sh` back to the tag; list what the tag adds past
+`0eb5f27f` (`git log 0eb5f27f..v0.73.0` in the framework) and judge each new E73
+atom; and add a hop to this record.

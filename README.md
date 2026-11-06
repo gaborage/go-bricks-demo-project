@@ -226,7 +226,7 @@ exchange.
 # The CLI holds the PRODUCER half of both families — sign PRIVATE, encrypt PUBLIC.
 # DEMO DATA ONLY — 4111111111111111 is the published Visa test PAN.
 echo '{"orderId":"ext-1","amount":4599,"currency":"USD","card":{"pan":"4111111111111111","expMonth":12,"expYear":2030,"holder":"ADA LOVELACE"}}' \
-  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.72.1-0.20261029151308-4cacc99c4fad \
+  | go run github.com/gaborage/go-bricks/cmd/seal-event@v0.72.1-0.20261106050221-0eb5f27fb6f4 \
       -sign-key-file certs/payments_sign_v1_private.der \
       -encrypt-key-file certs/payments_encrypt_v1_public.der \
       -sign-kid payments.sign.v1 -encrypt-kid payments.encrypt.v1 \
@@ -273,7 +273,7 @@ sign PUBLIC to verify, encrypt PRIVATE to decrypt. Both demo scripts use it:
   `SEAL_EVENT_TYPE_MISMATCH` without the app log.
 
 ```bash
-go install github.com/gaborage/go-bricks/cmd/open-event@v0.72.1-0.20261029151308-4cacc99c4fad
+go install github.com/gaborage/go-bricks/cmd/open-event@v0.72.1-0.20261106050221-0eb5f27fb6f4
 
 # The CLI holds the CONSUMER half of both families — sign PUBLIC, encrypt PRIVATE.
 open-event \

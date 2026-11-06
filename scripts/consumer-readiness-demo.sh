@@ -100,7 +100,7 @@ QUEUE="payments.authorized"
 # `re` is PCRE, so the negative lookahead is honored.
 REVOKED_READ='^(?!payments\.authorized$).*'
 # Framework constants (messaging/registry.go, app/readiness.go at v0.72.0,
-# unchanged at main 4cacc99c).
+# unchanged at main 0eb5f27f).
 GIVEUP_STREAK=5
 CONSUMER_ARM_ERROR="consumer re-subscribe exhausted"
 
