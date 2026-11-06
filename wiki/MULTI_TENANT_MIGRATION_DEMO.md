@@ -365,6 +365,8 @@ command exits 1:
 
 ## Adding a tenant
 
+A tenant ID must match the framework's tenant-ID grammar `^[a-z0-9-]{1,64}$`; the runtime refuses any other id in a header, a path or a JWT claim (see [TENANT_FAMILY_DEMO.md](TENANT_FAMILY_DEMO.md)).
+
 1. **Add a Postgres role and schema** by appending the tenant ID to the
    `tenant_roles` array in
    [`etc/docker/postgres/multitenant-init.sql`](../etc/docker/postgres/multitenant-init.sql):

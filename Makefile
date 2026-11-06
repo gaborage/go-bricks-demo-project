@@ -55,6 +55,7 @@ help:
 	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
 	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
 	@echo "  log-correlation-demo Masked inbound paths, correlated Panic recovered, escalated access lines (own instance)"
+	@echo "  tenant-family-demo Multi-tenant binary: tenant-owned family (JWT claim), path tenant check, invalid-tenant WARN (no infra)"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -500,6 +501,20 @@ demo-consumer-readiness:
 log-correlation-demo: build
 	@echo "🔎 Checking masked paths and correlated framework log lines..."
 	@./scripts/log-correlation-demo.sh
+
+# --- Tenant-owned route family demo (go-bricks main 0eb5f27f, ADR-164/170) ---
+# Builds and boots cmd/tenant-family-demo, the demo's multi-tenant binary, on
+# APP_PORT (default 18091) from its standalone config.tenantfamily.yaml, then
+# checks responses and its JSON log: the tenant-owned family /partner/v2 takes
+# its tenant from a JWT claim (401/403 bodyless faults), a path tenant must be
+# held (ADR-170), and a missing tenant is 400 with a correlated [server.tenant]
+# WARN. Needs no infrastructure; the app on :8080 does not need to be running.
+.PHONY: tenant-family-demo
+tenant-family-demo: deps
+	@echo "🔨 Building bin/tenant-family-demo..."
+	go build -o bin/tenant-family-demo ./cmd/tenant-family-demo/
+	@echo "🏢 Checking tenant-owned route families and tenant resolution..."
+	@./scripts/tenant-family-demo.sh
 
 .PHONY: external-exchange-demo
 external-exchange-demo: build

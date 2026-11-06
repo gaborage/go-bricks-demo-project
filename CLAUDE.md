@@ -671,10 +671,17 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 - `GET /api/v1/__sim/observability/escalate/:token` - Calls `HandlerContext.EscalateSeverity(zerolog.WarnLevel)`, logs nothing, answers 200; same escalated access line
 - `GET /api/v1/__sim/observability/panic/:token` - Panics with a constant value; the framework answers 500 and logs `Panic recovered` with `http.route`, `request_id` and `correlation_id`
 
+**Partner portal module** (multi-tenant only — served by `cmd/tenant-family-demo` on :18091, never by `cmd/api`; see [Tenant-Owned Route Families](#tenant-owned-route-families-separate-multi-tenant-binary)):
+- `GET /api/v1/partner/v2/whoami` - Tenant-owned family route: bearer JWT required, tenant from its `tenant` claim; 401/403 bodyless faults
+- `GET /api/v1/tenants/whoami` - Behind the tenant seat; tenant from `X-Tenant-ID` (grammar checked, existence not)
+- `GET /api/v1/t/:tenant/whoami` - Behind the tenant seat; tenant from the path, written only when the store holds it, else 400
+- `POST /api/v1/__sim/partner-token` - Mints a JWT for the family with the in-process issuer (demo-only, development only, needs `X-Tenant-ID`)
+
 ## Configuration Files
 
 - [config.yml](config.yml) - Base configuration, loaded in every environment: environment-neutral settings only (extensively documented). There is deliberately no `config.yaml`, which go-bricks would load instead
 - [config.development.yaml](config.development.yaml) - Development overlay: docker-compose hosts and credentials, `certs/` keys, dev/benchmark knobs
+- [config.tenantfamily.yaml](config.tenantfamily.yaml) - Standalone config of the multi-tenant binary `cmd/tenant-family-demo`; not an overlay, never read by `cmd/api`
 - [wiki/DEPLOYING.md](wiki/DEPLOYING.md) - Env vars a non-development deploy must set
 - `.env` - Secrets (gitignored, use `.env.example` as template)
 - [etc/docker/docker-compose.yml](etc/docker/docker-compose.yml) - Infrastructure services
@@ -738,7 +745,7 @@ The demo's hook, [internal/routepolicy/policy.go](internal/routepolicy/policy.go
 app.Options.PostRegisterRoutes rejected the route table: route under /__sim/ lacks the "simulator" tag: POST /api/v1/__sim/peer/tokens (module tokens)
 ```
 
-- **To add a simulator,** register it under `/__sim/...` **and** pass `server.WithTags("simulator")`. [cmd/api/route_policy_test.go](cmd/api/route_policy_test.go) builds the real route table from `getModulesToLoad()`, so CI fails when either marker is missing, before `make run` does.
+- **To add a simulator,** register it under `/__sim/...` **and** pass `server.WithTags("simulator")`. [cmd/api/route_policy_test.go](cmd/api/route_policy_test.go) builds the real route table from `getModulesToLoad()`, so CI fails when either marker is missing, before `make run` does. `cmd/tenant-family-demo` installs the same rule, and its `main_test.go` checks its own table.
 - **Not every simulator is a route.** The VTS Issuer peer must answer a bare compact as `application/jose`, which no taggable route can do, so it is the relay client's in-process transport (see [JOSE Middleware](#jose-middleware-nested-jwe-of-jws)) and never appears in the route table.
 - **The hook can veto but not gate.** A hook cannot add or drop a route, so it cannot make simulators development-only. The tokens relays call their simulators in-process in every environment, so a "no `/__sim/` outside development" rule would refuse every non-development boot. The activity poison simulator keeps its own development-only guard inside the module, the only place that can decline to register a route.
 
@@ -1174,6 +1181,36 @@ Three always-on logging behaviors landed between go-bricks main `4cacc99c` and `
 
 **Reference:** framework `wiki/migrations.md` entries C73.20 and C73.29–C73.33, and ADR-167.
 
+### Tenant-Owned Route Families (separate multi-tenant binary)
+
+The demo's main app is single-tenant, so the HTTP tenant features go-bricks offers only with `multitenant.enabled` live in a second binary, [cmd/tenant-family-demo](cmd/tenant-family-demo/main.go). It loads one module, [internal/modules/partnerportal/](internal/modules/partnerportal/), from its own standalone config, [config.tenantfamily.yaml](config.tenantfamily.yaml): three static tenants (`acme`, `globex`, `initech`), a composite resolver ordered `[path, header]`, and `auth.jwt` set to the in-process issuer's defaults. `cmd/api` neither loads the module nor reads that file.
+
+```go
+// A tenant-owned route family skips the app-wide tenant seat and resolves its own
+// tenant per request: Authenticate, then Tenant, then the grammar check, then the handler.
+family := server.TenantOwnedGroup(r, "/partner/v2", server.TenantPolicy{
+    Authenticate: []server.MiddlewareFunc{auth.Middleware(verifier)},
+    Tenant:       heldTenantClaim("tenant", config.NewTenantStore(deps.Config)),
+    // Deny unset: DenyBodyless answers every client fault with no body.
+})
+server.GET(hr, family, "/whoami", whoami(SourceClaim))
+```
+
+- **The family owns its prefix (ADR-164).** Every route at or below `/api/v1/partner/v2` must be registered through the family. A route there on the plain registrar is trespass and fails startup with an error matching `server.ErrDuplicateRoute` (`inside a tenant-owned route family`). A module that returns `GlobalMiddleware()` beside a family fails startup with `server.ErrTenantFamilyWithGlobalMiddleware`, because global middleware runs before the family has a tenant. A family under `/_sys` is refused as a framework route root.
+- **Faults are bodyless.** No token answers 401 with `WWW-Authenticate: Bearer realm="https://issuer.test/"`; a token whose `tenant` claim is missing, outside the grammar or unheld answers 403 with an empty body. `X-Tenant-ID` is never read on a family route.
+- **`auth.TenantClaim` checks form only, so the module adds existence.** A signed token naming `ghost` would otherwise publish `ghost`, and every per-tenant accessor would fail later. `heldTenantClaim` passes TenantClaim's own errors through unchanged and returns an error wrapping `multitenant.ErrTenantResolutionFailed`, without the id, when `config.NewTenantStore(deps.Config).HasTenant` says no. `ModuleDeps` carries no tenant store, so the module builds the same config-backed store the framework builds.
+- **Path tenants must be held (ADR-170); header tenants need only the grammar.** `GET /api/v1/t/:tenant/whoami` reads segment 4 of the raw path (base included, `path.prefix: /api/v1/t`). Startup logs `[server.tenant] a tenant read from the request path is written only when the tenant store holds it (ADR-170) store=*config.TenantStore tenants=3`, and `/t/ghost/whoami` answers 400 `Invalid tenant`. Path first means `/t/acme/whoami` with `X-Tenant-ID: globex` serves `acme`. On `GET /api/v1/tenants/whoami` the header decides, and an unknown well-formed `X-Tenant-ID: ghost` answers **200 with tenant `ghost`**: the framework checks a header tenant against the grammar `^[a-z0-9-]{1,64}$` only. The demo shows this as it is.
+- **A refused seat tenant is 400 with one correlated WARN (ADR-161).** `[server.tenant] request rejected: invalid tenant method="GET" path="/api/v1/t/REDACTED/whoami" client="127.0.0.1" status=400 reason="unknown tenant"`, carrying `http.route`, `request_id` and `correlation_id` (equal to `X-Request-ID`). A missing or malformed header gives `reason="resolver error"`. The path is masked and the id never appears.
+- **Tokens come from a simulator.** `POST /api/v1/__sim/partner-token` (`{"tenant":"acme"}` or `{"omitTenant":true}`) mints a JWT with go-bricks `auth/testing`'s issuer, whose RSA key is generated per process; the verifier trusts only that key. It sits outside the family, behind the seat (send `X-Tenant-ID`), carries the `"simulator"` tag, and is registered only in development, since it hands out credentials the family trusts.
+- **Same simulator veto as `cmd/api`.** Both binaries install `routepolicy.RequireTaggedSimulators` from [internal/routepolicy](internal/routepolicy/policy.go).
+- **Config loading.** The binary's `ConfigLoader` reads the one YAML file, applies exactly three environment variables (`SERVER_PORT`, `LOG_LEVEL`, `LOG_OUTPUT_FORMAT`), then runs `config.LoadFromMap` and `config.Validate`. With static tenants the framework refuses a root `database` or `messaging` block; each tenant's `database` block is mandatory but never dialed, since no handler touches a database.
+
+**Proof:**
+- `go test ./internal/modules/partnerportal/ ./cmd/tenant-family-demo/` runs the family policy through `TenantPolicy.ResolveForTest` with real tokens (acme, ghost, missing claim, bad grammar, no token), checks that a single-tenant `Init` registers nothing, and boots the binary's App in-process up to the route-table hook: the table passes the simulator policy, trespass fails with `server.ErrDuplicateRoute`, and global middleware fails with `server.ErrTenantFamilyWithGlobalMiddleware`. No listener opens.
+- `make tenant-family-demo` builds `bin/tenant-family-demo` and runs [scripts/tenant-family-demo.sh](scripts/tenant-family-demo.sh) against its own instance on `APP_PORT` (default 18091), asserting every behavior above from responses and the JSON log. It needs **no infrastructure** (no docker, migrations or keys), refuses a busy port, and stops the instance on exit. See [wiki/TENANT_FAMILY_DEMO.md](wiki/TENANT_FAMILY_DEMO.md).
+
+**Reference:** framework ADR-161 (invalid tenant 400), ADR-164 (tenant-owned route families), ADR-170 (path-provenance existence check), and the tenant-ID grammar in `multitenant.ValidateTenantID`.
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -1425,6 +1462,13 @@ Explore the code in this order:
     - `handlers/handlers.go` holds the three `/__sim/observability/...` routes, each tagged `"simulator"`; the WARN handler copies `X-Request-ID` onto its own line, since the framework stamps `request_id` only on its own lines
     - `server_logs_test.go` boots a real `server.New` on a loopback port, captures its JSON log and asserts the masked `url.path`, the escalated access lines and the `Panic recovered` correlation, with no infrastructure
     - `make log-correlation-demo` ([scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh)) proves the same against the full app (see [Masked Paths and Correlated Framework Lines](#masked-paths-and-correlated-framework-lines-go-bricks-main-0eb5f27f))
+
+16. **[cmd/tenant-family-demo/](cmd/tenant-family-demo/main.go)** + **[internal/modules/partnerportal/](internal/modules/partnerportal/)** - Multi-tenant binary (tenant-owned route families, no infrastructure)
+    - `main.go` boots `app.NewWithOptions` with its own `ConfigLoader` over [config.tenantfamily.yaml](config.tenantfamily.yaml) and the shared simulator veto from [internal/routepolicy](internal/routepolicy/policy.go)
+    - `partnerportal/module.go` branches on `deps.Config.Multitenant.Enabled`: off, it registers nothing; on, it mounts the `/partner/v2` family with `server.TenantOwnedGroup`, two seat routes and the token simulator
+    - `partnerportal/tenant.go` wraps `auth.TenantClaim` with a `HasTenant` existence check, since the claim helper checks form only
+    - `cmd/tenant-family-demo/main_test.go` boots the App in-process up to the route-table hook to prove trespass and global-middleware refusals
+    - `make tenant-family-demo` ([scripts/tenant-family-demo.sh](scripts/tenant-family-demo.sh)) runs every behavior against a real instance (see [Tenant-Owned Route Families](#tenant-owned-route-families-separate-multi-tenant-binary))
 
 ### Runtime Tour (15-20 minutes)
 
