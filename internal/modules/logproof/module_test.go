@@ -27,11 +27,25 @@ func (r *recordingRegistrar) Group(string, ...server.MiddlewareFunc) server.Rout
 func (r *recordingRegistrar) Use(...server.MiddlewareFunc)                                 {}
 func (r *recordingRegistrar) FullPath(path string) string                                  { return path }
 
-func depsFor(env string) *app.ModuleDeps {
-	return &app.ModuleDeps{
-		Logger: logger.New("disabled", false),
-		Config: &config.Config{App: config.AppConfig{Name: "test", Version: "1.0.0", Env: env}},
+// Values for depsFor's optIn: the switch as the environment spells it, or absent.
+const (
+	switchOn     = "true"
+	switchOff    = "false"
+	switchAbsent = ""
+)
+
+// depsFor builds the deps of a boot in env, with the opt-in switch set to optIn
+// (switchAbsent leaves it out). The switch is a custom.* key, so the config is
+// loaded from a map the way the framework loads YAML and the environment.
+func depsFor(t *testing.T, env, optIn string) *app.ModuleDeps {
+	t.Helper()
+	data := map[string]any{"app.name": "test", "app.version": "1.0.0", "app.env": env}
+	if optIn != switchAbsent {
+		data[ConfigKeyEnabled] = optIn
 	}
+	cfg, err := config.LoadFromMap(data)
+	require.NoError(t, err)
+	return &app.ModuleDeps{Logger: logger.New("disabled", false), Config: cfg}
 }
 
 func registeredRoutes(t *testing.T, deps *app.ModuleDeps) []addedRoute {
@@ -51,8 +65,8 @@ func TestModuleShutdown(t *testing.T) {
 	assert.NoError(t, NewModule().Shutdown())
 }
 
-func TestSimulatorsRegisterInDevelopment(t *testing.T) {
-	routes := registeredRoutes(t, depsFor(config.EnvDevelopment))
+func TestSimulatorsRegisterInDevelopmentWhenOptedIn(t *testing.T) {
+	routes := registeredRoutes(t, depsFor(t, config.EnvDevelopment, switchOn))
 
 	assert.ElementsMatch(t, []addedRoute{
 		{method: http.MethodGet, path: handlers.WarnPath},
@@ -61,12 +75,23 @@ func TestSimulatorsRegisterInDevelopment(t *testing.T) {
 	}, routes)
 }
 
-// The panic route must not exist where the binary is deployed, so every other
-// environment, and a missing config, registers nothing.
+// Development is the framework default and the Dockerfile's APP_ENV, so the
+// environment alone must not expose the panic route: without the opt-in, a
+// development boot registers nothing.
+func TestSimulatorsAbsentInDevelopmentWithoutOptIn(t *testing.T) {
+	for name, optIn := range map[string]string{"switch absent": switchAbsent, "switch false": switchOff} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, registeredRoutes(t, depsFor(t, config.EnvDevelopment, optIn)))
+		})
+	}
+}
+
+// The opt-in is not enough either: every other environment, and a missing
+// config, registers nothing.
 func TestSimulatorsAbsentOutsideDevelopment(t *testing.T) {
 	for _, env := range []string{"production", "staging", "test"} {
 		t.Run(env, func(t *testing.T) {
-			assert.Empty(t, registeredRoutes(t, depsFor(env)))
+			assert.Empty(t, registeredRoutes(t, depsFor(t, env, switchOn)))
 		})
 	}
 

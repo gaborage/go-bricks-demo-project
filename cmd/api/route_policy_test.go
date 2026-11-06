@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/activity"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/logproof"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
 	"github.com/gaborage/go-bricks-demo-project/internal/routepolicy"
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/stretchr/testify/assert"
@@ -67,7 +69,8 @@ const demoModulePath = "github.com/gaborage/go-bricks-demo-project/"
 
 // registerDemoRoutes builds the route table the demo's own modules register, the way
 // the framework's module registry does: Init every enabled module this repository
-// owns (in development, so the activity module registers its poison simulator), then
+// owns (in development with the logproof opt-in, so the activity poison simulator
+// and the three logproof simulators register), then
 // RegisterRoutes each one through a handler registry that resolves jose: kids against
 // the keystore, under the /api/v1 base path config.yml sets. ModuleName
 // is attributed by registration span, as the framework does.
@@ -84,6 +87,20 @@ func registerDemoRoutes(t *testing.T) []server.RouteDescriptor {
 	t.Helper()
 
 	deps := newModuleTestDeps(t)
+	// The same development boot, plus the logproof opt-in, so its three simulator
+	// routes are in the table the policy judges. The switch is a custom.* key, which
+	// only a loaded config carries, so this config comes from a map.
+	cfg, err := config.LoadFromMap(map[string]any{
+		"app.name":                deps.Config.App.Name,
+		"app.version":             deps.Config.App.Version,
+		"app.env":                 deps.Config.App.Env,
+		"server.host":             deps.Config.Server.Host,
+		"server.port":             deps.Config.Server.Port,
+		"server.path.base":        deps.Config.Server.Path.Base,
+		logproof.ConfigKeyEnabled: true,
+	})
+	require.NoError(t, err)
+	deps.Config = cfg
 	hr := server.NewHandlerRegistry(deps.Config, server.WithJOSEResolver(jose.NewKeyStoreResolver(deps.KeyStore)))
 	registrar := &basePathRegistrar{base: "/api/v1"}
 

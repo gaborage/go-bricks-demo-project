@@ -666,7 +666,7 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 **Partner feed module** (external exchange demo, off by default):
 - No HTTP routes. Its only surface is a typed consumer on `partnerfeed.stock.updated`, bound to `partner-events` — an exchange another service owns. See [External Exchanges](#external-exchanges-consuming-from-an-exchange-another-service-owns).
 
-**Logproof module** (masked paths and correlated framework lines, development only — no route exists in any other environment):
+**Logproof module** (masked paths and correlated framework lines, off by default — registered only with `CUSTOM_LOGPROOF_ENABLED=true` in a development environment):
 - `GET /api/v1/__sim/observability/warn/:token` - Logs one WARN through the request context, answers 200; the access line is written at `level=warn result_code=WARN`
 - `GET /api/v1/__sim/observability/escalate/:token` - Calls `HandlerContext.EscalateSeverity(zerolog.WarnLevel)`, logs nothing, answers 200; same escalated access line
 - `GET /api/v1/__sim/observability/panic/:token` - Panics with a constant value; the framework answers 500 and logs `Panic recovered` with `http.route`, `request_id` and `correlation_id`
@@ -747,7 +747,7 @@ app.Options.PostRegisterRoutes rejected the route table: route under /__sim/ lac
 
 - **To add a simulator,** register it under `/__sim/...` **and** pass `server.WithTags("simulator")`. [cmd/api/route_policy_test.go](cmd/api/route_policy_test.go) builds the real route table from `getModulesToLoad()`, so CI fails when either marker is missing, before `make run` does. `cmd/tenant-family-demo` installs the same rule, and its `main_test.go` checks its own table.
 - **Not every simulator is a route.** The VTS Issuer peer must answer a bare compact as `application/jose`, which no taggable route can do, so it is the relay client's in-process transport (see [JOSE Middleware](#jose-middleware-nested-jwe-of-jws)) and never appears in the route table.
-- **The hook can veto but not gate.** A hook cannot add or drop a route, so it cannot make simulators development-only. The tokens relays call their simulators in-process in every environment, so a "no `/__sim/` outside development" rule would refuse every non-development boot. The activity poison simulator keeps its own development-only guard inside the module, the only place that can decline to register a route.
+- **The hook can veto but not gate.** A hook cannot add or drop a route, so it cannot make simulators development-only. The tokens relays call their simulators in-process in every environment, so a "no `/__sim/` outside development" rule would refuse every non-development boot. So each module that owns a development-only simulator guards it inside the module, the only place that can decline to register a route: the activity poison simulator, the logproof routes (which also need the `custom.logproof.enabled` opt-in) and the partner portal's token mint.
 
 ### Transactional Outbox Pattern
 
@@ -1177,7 +1177,7 @@ Three always-on logging behaviors landed between go-bricks main `4cacc99c` and `
 
 **Proof:**
 - `go test ./internal/modules/logproof/...` boots a real server on a loopback port with the logproof routes, captures its JSON log and asserts the `[server.paths]` line, the masked `url.path`, both escalated access lines, the `Panic recovered` correlation and the bare `REDACTED` for an unmatched path. It needs no infrastructure, so CI runs it.
-- `make log-correlation-demo` runs [scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh). It boots its **own** app instance on `APP_PORT` (default 18090) with `LOG_OUTPUT_FORMAT=json` and `LOG_LEVEL=info`, logs to a file, and asserts each behavior with `jq`: the legacy product route and an unmatched path print masked paths, the logproof WARN and escalate routes write `level=warn result_code=WARN` access lines, the panic route's `Panic recovered` carries the template and `correlation_id` equal to the response's `X-Request-ID`, the JOSE plaintext POST writes a 415 access line at `level=warn`, and no path value reaches the log. Each check prints PASS or FAIL. It needs `make docker-up`, `make migrate` and `make generate-keys`, refuses a busy port, and stops the instance on exit. See [wiki/LOG_CORRELATION_DEMO.md](wiki/LOG_CORRELATION_DEMO.md).
+- `make log-correlation-demo` runs [scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh). It boots its **own** app instance on `APP_PORT` (default 18090) with `LOG_OUTPUT_FORMAT=json`, `LOG_LEVEL=info` and `CUSTOM_LOGPROOF_ENABLED=true` (the logproof routes' opt-in), logs to a file, and asserts each behavior with `jq`: the legacy product route and an unmatched path print masked paths, the logproof WARN and escalate routes write `level=warn result_code=WARN` access lines, the panic route's `Panic recovered` carries the template and `correlation_id` equal to the response's `X-Request-ID`, the JOSE plaintext POST writes a 415 access line at `level=warn`, and no path value reaches the log. Each check prints PASS or FAIL. It needs `make docker-up`, `make migrate` and `make generate-keys`, refuses a busy port, and stops the instance on exit. See [wiki/LOG_CORRELATION_DEMO.md](wiki/LOG_CORRELATION_DEMO.md).
 
 **Reference:** framework `wiki/migrations.md` entries C73.20 and C73.29–C73.33, and ADR-167.
 
@@ -1457,8 +1457,8 @@ Explore the code in this order:
     - `handlers/` serves `POST /api/v1/analytics/views`, `GET /api/v1/analytics/views/:productId` and `GET /api/v1/analytics/views`
     - `make migrate-analytics` applies its schema (Flyway, `--profile migrations`)
 
-15. **[internal/modules/logproof/](internal/modules/logproof/)** - Logproof module (masked paths and correlated framework lines, development only)
-    - `module.go` registers its routes only when `deps.Config.App.IsDevelopment()`, the activity poison simulator's guard, because one of them panics on purpose
+15. **[internal/modules/logproof/](internal/modules/logproof/)** - Logproof module (masked paths and correlated framework lines, off by default)
+    - `module.go` registers its routes only when the opt-in `custom.logproof.enabled` (env `CUSTOM_LOGPROOF_ENABLED`) is true **and** `deps.Config.App.IsDevelopment()`, because one of them panics on purpose and development is the framework default and the Dockerfile's `APP_ENV`, so the environment alone is no guard
     - `handlers/handlers.go` holds the three `/__sim/observability/...` routes, each tagged `"simulator"`; the WARN handler copies `X-Request-ID` onto its own line, since the framework stamps `request_id` only on its own lines
     - `server_logs_test.go` boots a real `server.New` on a loopback port, captures its JSON log and asserts the masked `url.path`, the escalated access lines and the `Panic recovered` correlation, with no infrastructure
     - `make log-correlation-demo` ([scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh)) proves the same against the full app (see [Masked Paths and Correlated Framework Lines](#masked-paths-and-correlated-framework-lines-go-bricks-main-0eb5f27f))

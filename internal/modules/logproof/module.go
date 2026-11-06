@@ -17,6 +17,12 @@
 // has: a handler that logs a WARN, one that escalates, one that panics. Masking
 // on an ordinary route is shown on the legacy module's GET /legacy/products/:id.
 // See scripts/log-correlation-demo.sh (make log-correlation-demo).
+//
+// The routes are OFF by default. Two guards must both pass: the explicit opt-in
+// custom.logproof.enabled (env CUSTOM_LOGPROOF_ENABLED=true) and a development
+// environment. The environment alone is not enough: development is the framework
+// default and the Dockerfile's APP_ENV, so a deploy that kept it would otherwise
+// expose an unauthenticated route that panics on every call.
 package logproof
 
 import (
@@ -29,14 +35,19 @@ import (
 // moduleName identifies this module for registration and logging.
 const moduleName = "logproof"
 
+// ConfigKeyEnabled opts in to the simulator routes. A custom.* key so the
+// framework's config loader carries it: YAML under `custom:` or, with the env
+// mapping (lower-case, "_" -> "."), CUSTOM_LOGPROOF_ENABLED=true.
+const ConfigKeyEnabled = "custom.logproof.enabled"
+
 // Module implements app.Module and app.RouteRegisterer.
 type Module struct {
 	logger  logger.Logger
 	handler *handlers.Handler
 
-	// simEnabled gates every route to development, the guard the activity
-	// module's poison simulator uses. One route here panics on purpose, so the
-	// module fails closed in any other environment: no route is registered.
+	// simEnabled is true only when ConfigKeyEnabled is set AND the environment is
+	// development. One route here panics on purpose, so the module fails closed:
+	// with either guard off, no route is registered.
 	simEnabled bool
 }
 
@@ -50,11 +61,13 @@ func NewModule() *Module {
 // Name implements app.Module.
 func (m *Module) Name() string { return moduleName }
 
-// Init wires the handler and reads the environment guard.
+// Init wires the handler and reads both guards.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger.WithFields(map[string]any{"module": moduleName})
 	m.handler = handlers.NewHandler(m.logger)
-	m.simEnabled = deps.Config != nil && deps.Config.App.IsDevelopment()
+	m.simEnabled = deps.Config != nil &&
+		deps.Config.Bool(ConfigKeyEnabled, false) &&
+		deps.Config.App.IsDevelopment()
 
 	m.logger.Info().
 		Bool("simulators", m.simEnabled).
@@ -65,7 +78,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // RegisterRoutes attaches the simulator routes only where simEnabled allows it.
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	if !m.simEnabled {
-		m.logger.Info().Msg("Logproof simulators not registered — development environments only")
+		m.logger.Info().
+			Str("switch", ConfigKeyEnabled).
+			Msg("Logproof simulators not registered — needs CUSTOM_LOGPROOF_ENABLED=true in a development environment")
 		return
 	}
 	m.handler.RegisterSimulatorRoutes(hr, r)

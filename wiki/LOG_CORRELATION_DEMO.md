@@ -37,8 +37,12 @@ fixed place. The log is kept after the run, and its path is printed in the verdi
 
 The `/__sim/observability` routes belong to the logproof module
 ([internal/modules/logproof/](../internal/modules/logproof/)) and are
-registered only when `APP_ENV=development`, because one of them panics on
-purpose. The cmd/api route policy requires their `"simulator"` tag.
+registered only when two guards pass: the opt-in
+`custom.logproof.enabled` (env `CUSTOM_LOGPROOF_ENABLED=true`, off by default)
+and `APP_ENV=development`. One of them panics on purpose, and development is the
+framework default and the Dockerfile's `APP_ENV`, so the environment alone is not
+enough. The script sets both for its own instance; `make run` registers none of
+them. The cmd/api route policy requires their `"simulator"` tag.
 
 Each request is matched to its lines by the response's `X-Request-ID`, which
 the access line carries as `request_id`. The framework stamps `request_id`

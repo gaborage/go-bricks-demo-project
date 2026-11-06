@@ -28,7 +28,8 @@
 #   GET  /api/v1/__sim/observability/panic/<token>        Panic recovered correlation (500)
 #   POST /api/v1/tokens  (plaintext JSON)                 JOSE 415 access line
 # The /__sim/observability routes belong to the logproof module and exist only
-# when APP_ENV=development.
+# with CUSTOM_LOGPROOF_ENABLED=true AND APP_ENV=development; the script sets both
+# for its own instance.
 #
 # Prerequisites:
 #   make docker-up && make migrate   # postgres + broker the instance boots against
@@ -144,8 +145,9 @@ line_field() {
 }
 
 # send METHOD PATH [curl args...] — sets STATUS and RID (the response's
-# X-Request-ID). The access line is written after the response, so wait until a
-# line for this request id appears.
+# X-Request-ID). The access line (log.type=action) is written after the
+# response, and a handler WARN for the same request id comes before it, so wait
+# for the access line itself, not the first line carrying the id.
 send() {
     local method="$1" path="$2"
     shift 2
@@ -154,11 +156,11 @@ send() {
         -X "$method" "$@" "$BASE_URL$path")" || STATUS="000"
     RID="$(grep -i '^x-request-id:' "$hdr" | head -n1 | cut -d: -f2- | tr -d ' \r')"
     if [[ -n "$RID" ]]; then
-        for _ in $(seq 1 20); do
-            grep -qF "\"request_id\":\"$RID\"" "$APP_LOG" && break
+        for _ in $(seq 1 40); do
+            [[ "$(jq_log 'any(.[]; .["log.type"] == "action" and .request_id == $rid)' \
+                --arg rid "$RID")" == "true" ]] && break
             sleep 0.25
         done
-        sleep 0.25
     fi
 }
 
@@ -184,6 +186,7 @@ curl -s -o /dev/null --max-time 2 "$BASE_URL/" || rc=$?
 env -u DEBUG \
     APP_ENV="${APP_ENV:-development}" \
     CORS_DEV_WILDCARD=true \
+    CUSTOM_LOGPROOF_ENABLED=true \
     SERVER_PORT="$APP_PORT" \
     LOG_OUTPUT_FORMAT=json \
     LOG_LEVEL=info \

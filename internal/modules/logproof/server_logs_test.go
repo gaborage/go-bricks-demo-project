@@ -114,15 +114,22 @@ func runRequests(t *testing.T) []map[string]any {
 	log := logger.New("info", false)
 	os.Stdout = stdout
 
-	cfg := &config.Config{
-		App: config.AppConfig{Name: "logproof-test", Version: "1.0.0", Env: config.EnvDevelopment},
-		Server: config.ServerConfig{
-			Host:    "127.0.0.1",
-			Port:    0,
-			Timeout: config.TimeoutConfig{Read: 5 * time.Second, Write: 5 * time.Second},
-			Path:    config.PathConfig{Base: basePath, Health: "/health", Ready: "/ready"},
-		},
-	}
+	// Loaded from a map, as the framework loads YAML and the environment, so the
+	// module's custom.* opt-in is readable; the module registers nothing without it.
+	cfg, err := config.LoadFromMap(map[string]any{
+		"app.name":             "logproof-test",
+		"app.version":          "1.0.0",
+		"app.env":              config.EnvDevelopment,
+		"server.host":          "127.0.0.1",
+		"server.port":          0,
+		"server.timeout.read":  "5s",
+		"server.timeout.write": "5s",
+		"server.path.base":     basePath,
+		"server.path.health":   "/health",
+		"server.path.ready":    "/ready",
+		ConfigKeyEnabled:       true,
+	})
+	require.NoError(t, err)
 
 	m := NewModule()
 	require.NoError(t, m.Init(&app.ModuleDeps{Config: cfg, Logger: log}))

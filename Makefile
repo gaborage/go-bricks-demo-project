@@ -478,23 +478,14 @@ demo-consumer-readiness:
 	@echo "🩺 Demonstrating readiness that fails closed on a stalled consumer..."
 	@./scripts/consumer-readiness-demo.sh
 
-# --- External exchange demo (go-bricks v0.67.0, #1773/#1774, ADR-119) --------
-# The partnerfeed module consumes partner-events, an exchange ANOTHER service
-# owns: DeclareExternalExchange verifies it with a passive declare and never
-# creates it. The script starts its OWN app instance, twice, with the module
-# on (CUSTOM_PARTNERFEED_ENABLED=true) and plays the owning partner through the
-# RabbitMQ management API: the exchange absent with externalwait 0 aborts startup
-# on the broker's 404; with MESSAGING_DECLARE_EXTERNALWAIT=60s the app waits, the
-# script creates the exchange, and startup completes; a published event is then
-# consumed. Cleanup deletes what the run created. Requires infra up
-# (make docker-up), migrations and keys — and NOT `make run`: it refuses when the
-# app port is already taken. Honors APP_URL and RABBIT_MGMT overrides.
 # --- Log correlation demo (go-bricks main 0eb5f27f, C73.29-C73.33) -----------
 # Boots its OWN app instance on APP_PORT (default 18090) with JSON logs to a
 # file and checks them with jq: inbound paths print the matched template with
 # REDACTED parameters (http.route keeps the template), Panic recovered carries
 # http.route/request_id/correlation_id equal to X-Request-ID, and a handler
 # WARN, EscalateSeverity or a JOSE 415 keeps the access line at level=warn.
+# The instance runs with CUSTOM_LOGPROOF_ENABLED=true, the opt-in the logproof
+# simulator routes need besides a development environment.
 # Requires infra up (make docker-up), migrations (make migrate) and keys
 # (make generate-keys); the app on :8080 does not need to be running.
 .PHONY: log-correlation-demo
@@ -516,6 +507,17 @@ tenant-family-demo: deps
 	@echo "🏢 Checking tenant-owned route families and tenant resolution..."
 	@./scripts/tenant-family-demo.sh
 
+# --- External exchange demo (go-bricks v0.67.0, #1773/#1774, ADR-119) --------
+# The partnerfeed module consumes partner-events, an exchange ANOTHER service
+# owns: DeclareExternalExchange verifies it with a passive declare and never
+# creates it. The script starts its OWN app instance, twice, with the module
+# on (CUSTOM_PARTNERFEED_ENABLED=true) and plays the owning partner through the
+# RabbitMQ management API: the exchange absent with externalwait 0 aborts startup
+# on the broker's 404; with MESSAGING_DECLARE_EXTERNALWAIT=60s the app waits, the
+# script creates the exchange, and startup completes; a published event is then
+# consumed. Cleanup deletes what the run created. Requires infra up
+# (make docker-up), migrations and keys — and NOT `make run`: it refuses when the
+# app port is already taken. Honors APP_URL and RABBIT_MGMT overrides.
 .PHONY: external-exchange-demo
 external-exchange-demo: build
 	@echo "🔌 Consuming from an exchange another service owns..."
