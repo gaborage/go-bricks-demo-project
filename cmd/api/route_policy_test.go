@@ -152,6 +152,9 @@ func TestDemoRouteTablePassesSimulatorPolicy(t *testing.T) {
 		"POST /api/v1/__sim/peer/tokens",
 		"POST /api/v1/__sim/peer/mle",
 		"POST /api/v1/__sim/streams/poison",
+		"GET /api/v1/__sim/observability/warn/:token",
+		"GET /api/v1/__sim/observability/escalate/:token",
+		"GET /api/v1/__sim/observability/panic/:token",
 	})
 }
 

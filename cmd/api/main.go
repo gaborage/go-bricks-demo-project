@@ -5,6 +5,7 @@ import (
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/activity"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/analytics"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/legacy"
+	"github.com/gaborage/go-bricks-demo-project/internal/modules/logproof"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/partnerfeed"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/payments"
 	"github.com/gaborage/go-bricks-demo-project/internal/modules/products"
@@ -166,6 +167,15 @@ func getModulesToLoad(productsModule *products.Module, activityModule *activity.
 			Name:    "payments",
 			Enabled: true,
 			Module:  payments.NewModule(),
+		},
+		{
+			// Logproof module demonstrates masked inbound paths and correlated
+			// framework log lines (go-bricks C73.29-C73.33): simulator routes that
+			// log a WARN, escalate, or panic. Development only — it registers no
+			// route in any other environment, since one of them panics on purpose.
+			Name:    "logproof",
+			Enabled: true,
+			Module:  logproof.NewModule(),
 		},
 		{
 			// Partner feed module demonstrates consuming from an exchange another

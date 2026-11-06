@@ -666,6 +666,11 @@ Base path: `/api/v1` (configured in `config.yml: server.path.base`)
 **Partner feed module** (external exchange demo, off by default):
 - No HTTP routes. Its only surface is a typed consumer on `partnerfeed.stock.updated`, bound to `partner-events` — an exchange another service owns. See [External Exchanges](#external-exchanges-consuming-from-an-exchange-another-service-owns).
 
+**Logproof module** (masked paths and correlated framework lines, development only — no route exists in any other environment):
+- `GET /api/v1/__sim/observability/warn/:token` - Logs one WARN through the request context, answers 200; the access line is written at `level=warn result_code=WARN`
+- `GET /api/v1/__sim/observability/escalate/:token` - Calls `HandlerContext.EscalateSeverity(zerolog.WarnLevel)`, logs nothing, answers 200; same escalated access line
+- `GET /api/v1/__sim/observability/panic/:token` - Panics with a constant value; the framework answers 500 and logs `Panic recovered` with `http.route`, `request_id` and `correlation_id`
+
 ## Configuration Files
 
 - [config.yml](config.yml) - Base configuration, loaded in every environment: environment-neutral settings only (extensively documented). There is deliberately no `config.yaml`, which go-bricks would load instead
@@ -1147,6 +1152,28 @@ Cleanup deletes the exchange, plus the queue, DLQ and DLX when the run created t
 
 **Reference:** framework [wiki/messaging.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/messaging.md#external-exchanges) ("External exchanges" and "Startup wait"), [ADR-119](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/adr_119_external_exchange_passive_verification.md), and [wiki/startup_defaults.md](https://github.com/gaborage/go-bricks/blob/v0.67.0/wiki/startup_defaults.md) for the probe sizing.
 
+### Masked Paths and Correlated Framework Lines (go-bricks main 0eb5f27f)
+
+Three always-on logging behaviors landed between go-bricks main `4cacc99c` and `0eb5f27f`. None has a config key; every service that serves HTTP through the framework gets them.
+
+- **Inbound paths render from the matched route template (C73.29, ADR-167).** The access line's `url.path` and message, the span's `url.path` and the `path` of every framework WARN and ERROR print the template with each parameter as `REDACTED`: `GET /api/v1/legacy/products/<id>` logs `url.path=/api/v1/legacy/products/REDACTED`. `http.route` keeps the raw template (`/api/v1/legacy/products/:id`). A request that matched no route prints the bare `REDACTED`. Each listener logs one INFO line at startup: `[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=application token=REDACTED unmatched=REDACTED`.
+- **Framework WARN and ERROR lines carry the request's correlation (C73.30–C73.32).** `Panic recovered`, `unhandled error`, `[server.tenant]`, `[server.ip_preguard]` and the forwarded-client-cert WARNs carry `http.route`, `request_id`, `correlation_id` (the same value, which the response returns as `X-Request-ID`) and, under a valid span context, `trace_id`/`span_id`. The forwarded-client-cert WARNs now print the forwarded client as `client=` and the TCP peer as `peer=`.
+- **An escalated request keeps its access line (C73.33).** A WARN or ERROR logged through the request context (`logger.WithContext(ctx.RequestContext())`), or `HandlerContext.EscalateSeverity`, used to drop the request's access line. Now it raises it: a 200 whose handler logged a WARN writes `level=warn result_code=WARN`. The JOSE failure line is no longer bound to the request context, so a plaintext POST to `/api/v1/tokens` writes its `jose: operation failed` ERROR and an access line with `http.response.status_code=415 level=warn`. Budget for one access line per non-probe request.
+
+**What to repoint:** a Grafana panel, LogQL query or alert keyed on a concrete `url.path` (`/api/v1/products/<uuid>`) now matches nothing. Key it on `http.route`, which is low-cardinality and the same on the access line and the span. Nothing in this repository's dashboards or k6 scripts reads `url.path`. When an incident needs the concrete path, read it at the edge (load balancer or WAF logs). A consumer line is not touched: a handler that logs `Request().URL.Path` itself still prints it, and gets no `request_id` from the framework, so the logproof WARN handler copies `X-Request-ID` onto its own line to join its access line.
+
+**Rate limiting is keyed per client IP (C73.20).** The global limiter and `server.RateLimit` key every request on the client IP, a resolved tenant included. This demo runs single-tenant, so nothing changes here: every request was already keyed on the IP, and `app.rate.limit` (2000 in [config.development.yaml](config.development.yaml)) is per address. In multi-tenant mode, every tenant behind one NAT or gateway now shares one budget.
+
+**Trace ids need the export on.** `config.development.yaml` leaves the OTLP export off, so no request has a valid span context and `trace_id`/`span_id` are absent from these lines by design. Boot with the `OBSERVABILITY_*` variables in the [Runtime Tour](#runtime-tour-15-20-minutes) to see them.
+
+**Observed at this pin:** a recovered handler panic answers 500, but its access line is written before the error handler responds, so it reads `http.response.status_code=200 level=info result_code=INFO` and carries the recovered error, stack included, in `error`. Join on `request_id` to the `Panic recovered` ERROR rather than alerting on the access line's status.
+
+**Proof:**
+- `go test ./internal/modules/logproof/...` boots a real server on a loopback port with the logproof routes, captures its JSON log and asserts the `[server.paths]` line, the masked `url.path`, both escalated access lines, the `Panic recovered` correlation and the bare `REDACTED` for an unmatched path. It needs no infrastructure, so CI runs it.
+- `make log-correlation-demo` runs [scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh). It boots its **own** app instance on `APP_PORT` (default 18090) with `LOG_OUTPUT_FORMAT=json` and `LOG_LEVEL=info`, logs to a file, and asserts each behavior with `jq`: the legacy product route and an unmatched path print masked paths, the logproof WARN and escalate routes write `level=warn result_code=WARN` access lines, the panic route's `Panic recovered` carries the template and `correlation_id` equal to the response's `X-Request-ID`, the JOSE plaintext POST writes a 415 access line at `level=warn`, and no path value reaches the log. Each check prints PASS or FAIL. It needs `make docker-up`, `make migrate` and `make generate-keys`, refuses a busy port, and stops the instance on exit. See [wiki/LOG_CORRELATION_DEMO.md](wiki/LOG_CORRELATION_DEMO.md).
+
+**Reference:** framework `wiki/migrations.md` entries C73.20 and C73.29–C73.33, and ADR-167.
+
 ### Error Handling
 Use go-bricks structured errors where possible. Handlers should return appropriate HTTP status codes.
 
@@ -1392,6 +1419,12 @@ Explore the code in this order:
     - `module.go` resolves the `analytics` database with `deps.DBByName(ctx, "analytics")` instead of `deps.DB(ctx)`; it is the second PostgreSQL instance (port 5433 in the base compose file) that the `databases.analytics` sections describe: its shape and its own session timezone (`Asia/Tokyo`) in [config.yml](config.yml), its local connection in [config.development.yaml](config.development.yaml)
     - `handlers/` serves `POST /api/v1/analytics/views`, `GET /api/v1/analytics/views/:productId` and `GET /api/v1/analytics/views`
     - `make migrate-analytics` applies its schema (Flyway, `--profile migrations`)
+
+15. **[internal/modules/logproof/](internal/modules/logproof/)** - Logproof module (masked paths and correlated framework lines, development only)
+    - `module.go` registers its routes only when `deps.Config.App.IsDevelopment()`, the activity poison simulator's guard, because one of them panics on purpose
+    - `handlers/handlers.go` holds the three `/__sim/observability/...` routes, each tagged `"simulator"`; the WARN handler copies `X-Request-ID` onto its own line, since the framework stamps `request_id` only on its own lines
+    - `server_logs_test.go` boots a real `server.New` on a loopback port, captures its JSON log and asserts the masked `url.path`, the escalated access lines and the `Panic recovered` correlation, with no infrastructure
+    - `make log-correlation-demo` ([scripts/log-correlation-demo.sh](scripts/log-correlation-demo.sh)) proves the same against the full app (see [Masked Paths and Correlated Framework Lines](#masked-paths-and-correlated-framework-lines-go-bricks-main-0eb5f27f))
 
 ### Runtime Tour (15-20 minutes)
 

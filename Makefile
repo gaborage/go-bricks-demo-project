@@ -54,6 +54,7 @@ help:
 	@echo "  seal-event-demo   Mint sealed events outside the app (seal-event CLI): open, dedup, DLQ reject + open-event verdict"
 	@echo "  demo-consumer-readiness /ready fails closed on a stalled consumer (boots its own app; stop make run first)"
 	@echo "  external-exchange-demo Consume from an exchange another service owns: 404 abort, externalwait, consume"
+	@echo "  log-correlation-demo Masked inbound paths, correlated Panic recovered, escalated access lines (own instance)"
 	@echo ""
 	@echo "JOSE request bodies (framework seal-payload CLI; JSON on stdin, sealed body on stdout):"
 	@echo "  seal-payload      Seal as the peer for POST /api/v1/tokens (nested JWE-of-JWS)"
@@ -487,6 +488,19 @@ demo-consumer-readiness:
 # consumed. Cleanup deletes what the run created. Requires infra up
 # (make docker-up), migrations and keys — and NOT `make run`: it refuses when the
 # app port is already taken. Honors APP_URL and RABBIT_MGMT overrides.
+# --- Log correlation demo (go-bricks main 0eb5f27f, C73.29-C73.33) -----------
+# Boots its OWN app instance on APP_PORT (default 18090) with JSON logs to a
+# file and checks them with jq: inbound paths print the matched template with
+# REDACTED parameters (http.route keeps the template), Panic recovered carries
+# http.route/request_id/correlation_id equal to X-Request-ID, and a handler
+# WARN, EscalateSeverity or a JOSE 415 keeps the access line at level=warn.
+# Requires infra up (make docker-up), migrations (make migrate) and keys
+# (make generate-keys); the app on :8080 does not need to be running.
+.PHONY: log-correlation-demo
+log-correlation-demo: build
+	@echo "🔎 Checking masked paths and correlated framework log lines..."
+	@./scripts/log-correlation-demo.sh
+
 .PHONY: external-exchange-demo
 external-exchange-demo: build
 	@echo "🔌 Consuming from an exchange another service owns..."
