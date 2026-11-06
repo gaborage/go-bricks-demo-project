@@ -62,16 +62,6 @@ func main() {
 	}
 }
 
-// newAppOptions returns the framework overrides main boots with. Config loading and
-// every dependency still come from configuration (a nil ConfigLoader means
-// config.Load); the only addition is the route-table veto, which refuses startup
-// when a simulator route and its tag disagree (see route_policy.go).
-func newAppOptions() *app.Options {
-	return &app.Options{
-		PostRegisterRoutes: requireTaggedSimulators,
-	}
-}
-
 type ModuleConfig struct {
 	Name    string
 	Enabled bool

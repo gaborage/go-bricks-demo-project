@@ -21,7 +21,7 @@ const (
 	// on every response before the handler runs.
 	RequestIDHeader = "X-Request-ID"
 
-	// SimulatorTag is the tag cmd/api/route_policy.go requires on every /__sim/ route.
+	// SimulatorTag is the tag internal/routepolicy requires on every /__sim/ route.
 	SimulatorTag = "simulator"
 
 	// WarnMessage is the WARN the warn route logs through the request context.

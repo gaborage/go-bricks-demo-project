@@ -732,7 +732,7 @@ The handler signature is identical — only the route option changes the wire fo
 
 [cmd/api/main.go](cmd/api/main.go) boots with `app.NewWithOptions(newAppOptions())`, and its only override is `PostRegisterRoutes` (go-bricks v0.65.0, #1672). `app.New()` is `app.NewWithOptions(nil)`, so config loading and every dependency stay as they were. The framework calls the hook once per `Run` with every registered route: module routes, the `/_sys/` debug endpoints and the health/ready probes. The call comes after the framework's duplicate-route check and before the listener opens, and a non-nil error aborts startup.
 
-The demo's hook, [cmd/api/route_policy.go](cmd/api/route_policy.go), enforces one marking rule in both directions: a route with a `__sim` path segment carries the `"simulator"` tag, and a route with that tag sits under `/__sim/`. The path is what callers and access logs see. The tag is what the route table carries as data (`server.RouteDescriptor.Tags`). One startup error lists every violation:
+The demo's hook, [internal/routepolicy/policy.go](internal/routepolicy/policy.go), installed by [cmd/api/route_policy.go](cmd/api/route_policy.go), enforces one marking rule in both directions: a route with a `__sim` path segment carries the `"simulator"` tag, and a route with that tag sits under `/__sim/`. The path is what callers and access logs see. The tag is what the route table carries as data (`server.RouteDescriptor.Tags`). One startup error lists every violation:
 
 ```
 app.Options.PostRegisterRoutes rejected the route table: route under /__sim/ lacks the "simulator" tag: POST /api/v1/__sim/peer/tokens (module tokens)
