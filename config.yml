@@ -187,7 +187,8 @@ server:
 
 # --- Custom module switches -------------------------------------------------
 # Read by the modules themselves through deps.Config, so the framework's loader
-# applies the usual env mapping (lower-case, "_" -> "."): CUSTOM_PARTNERFEED_ENABLED.
+# applies the usual env mapping (lower-case, "_" -> "."): CUSTOM_PARTNERFEED_ENABLED,
+# CUSTOM_LOGPROOF_ENABLED.
 # YAML allows ONE top-level custom: key per file (a second one is a duplicate
 # key and fails config load), so every custom.* example sits under the single
 # commented root below: uncomment the root and only the children you need.
@@ -197,9 +198,19 @@ server:
 # partner service runs locally: switched on with the exchange absent, startup
 # fails on the broker's 404 (or waits, with messaging.declare.externalwait above).
 # make external-exchange-demo turns it on for its own run and plays the partner.
+#
+# logproof (internal/modules/logproof): registers three unauthenticated
+# /__sim/observability routes, one of which panics on every call. Off by
+# default, and registered only when this switch is on AND app.env is
+# development: development is the framework default, so the environment alone
+# would expose them in a deploy that kept it. make log-correlation-demo turns it
+# on for its own run.
+#
 # The demo-only custom.products.report.hold lives in config.development.yaml.
 # custom:
 #   partnerfeed:
+#     enabled: true
+#   logproof:
 #     enabled: true
 
 # --- Logging ----------------------------------------------------------------

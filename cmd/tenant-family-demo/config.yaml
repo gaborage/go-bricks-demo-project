@@ -1,0 +1,96 @@
+# Standalone config for cmd/tenant-family-demo, the demo's multi-tenant binary.
+#
+# This is a WHOLE config, not an overlay. cmd/tenant-family-demo reads this one
+# file through its own ConfigLoader and never reads config.yml or
+# config.development.yaml. It lives beside the binary, not at the repository
+# root, so its name can never match the framework's config.<APP_ENV>.yaml overlay
+# pattern for cmd/api.
+#
+# Environment variables do NOT override this file wholesale. The loader honors
+# exactly four, so the demo script can pick a port and force JSON logs, and a
+# deploy can leave development:
+#   SERVER_PORT, LOG_LEVEL, LOG_OUTPUT_FORMAT, APP_ENV
+# See cmd/tenant-family-demo/main.go.
+
+app:
+  name: go-bricks-tenant-family-demo
+  # development registers the tenant-owned family and its token simulator, which
+  # trust an in-process test issuer. Any other APP_ENV serves only the seat's
+  # header and path routes.
+  env: development
+
+server:
+  host: 127.0.0.1
+  port: 18091
+  path:
+    base: /api/v1
+
+log:
+  level: info
+  output:
+    format: json
+
+# --- Multi-tenant mode -------------------------------------------------------
+# Static tenants. With static tenants the framework refuses a root database or
+# messaging block, so every connection is per tenant.
+#
+# The tenant seat (the app-wide tenant middleware) resolves each request's
+# tenant with the composite resolver below, in order:
+#   1. path: segment 4 of the RAW request path, base path included, and only
+#      under /api/v1/t: /api/v1/t/<tenant>/whoami -> <tenant>. A path tenant is
+#      written only when this store holds it (ADR-170); otherwise 400.
+#   2. header: X-Tenant-ID. Checked for FORM only (the tenant-ID grammar
+#      ^[a-z0-9-]{1,64}$), not for existence: an unknown id in the header is
+#      written as is.
+# Path first means a path route ignores X-Tenant-ID. Header routes sit outside
+# /api/v1/t, so the path resolver passes and the header decides.
+#
+# The tenant-owned route family under /api/v1/partner/v2 skips the seat and
+# takes its tenant from a JWT claim instead (internal/modules/partnerportal).
+multitenant:
+  enabled: true
+  resolver:
+    type: composite
+    order: [path, header]
+    path:
+      segment: 4
+      prefix: /api/v1/t
+  # Each tenant's database block is mandatory, but this binary never dials it:
+  # no handler touches a database, and the pools open on first use. They point
+  # at the local demo Postgres (make docker-up) with the development
+  # credentials, so the block is real; the demo runs with or without it up.
+  tenants:
+    acme:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: postgres
+        password: postgres
+    globex:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: postgres
+        password: postgres
+    initech:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: postgres
+        username: postgres
+        password: postgres
+
+# --- JWT verification for the tenant-owned family ----------------------------
+# The verifier trusts only the in-process issuer's public key (go-bricks
+# auth/testing, a fresh RSA key per process). These three values are that
+# issuer's defaults; a token from any other issuer or audience is refused 401.
+auth:
+  jwt:
+    issuer: https://issuer.test/
+    audience: [go-bricks-test]
+    algorithms: [RS256]

@@ -41,6 +41,10 @@
 # Multi-tenant migration demo fleet config
 !config.multitenant.yaml
 
+# Standalone config of the multi-tenant binary, beside it rather than at the root
+# so its name can never match cmd/api's config.<APP_ENV>.yaml overlay pattern
+!cmd/tenant-family-demo/config.yaml
+
 # Migration SQL files: the default database, the `analytics` named database
 # (bind-mounted by the compose flyway-analytics service) and the schema-per-tenant
 # fleet. The `migrations/` pattern is anchored to that one directory, so each
